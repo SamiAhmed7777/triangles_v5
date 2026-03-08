@@ -28,6 +28,7 @@ class CNode;
 
 static const int CUTOFF_POW_BLOCK = 9000;
 static const int CRAPCHAIN_CUTOFF_BLOCK = 17691; // pre-Pharao (version 4) blockchain until block 17691
+static const int FORK_HEIGHT_V5 = 17651; // v5 hard fork: decentralization + Tor v3 (next block after last checkpoint)
 
 static const unsigned int MAX_BLOCK_SIZE = 1000000;
 static const unsigned int MAX_BLOCK_SIZE_GEN = MAX_BLOCK_SIZE/2;

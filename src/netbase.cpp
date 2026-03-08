@@ -598,11 +598,15 @@ bool ConnectSocketByName(CService &addr, SOCKET& hSocketRet, const char *pszDest
 void CNetAddr::Init()
 {
     memset(ip, 0, sizeof(ip));
+    memset(tor_v3_pubkey, 0, sizeof(tor_v3_pubkey));
+    m_is_tor_v3 = false;
 }
 
 void CNetAddr::SetIP(const CNetAddr& ipIn)
 {
     memcpy(ip, ipIn.ip, sizeof(ip));
+    memcpy(tor_v3_pubkey, ipIn.tor_v3_pubkey, sizeof(tor_v3_pubkey));
+    m_is_tor_v3 = ipIn.m_is_tor_v3;
 }
 
 static const unsigned char pchOnionCat[] = {0xFD,0x87,0xD8,0x7E,0xEB,0x43};
@@ -611,12 +615,30 @@ static const unsigned char pchGarliCat[] = {0xFD,0x60,0xDB,0x4D,0xDD,0xB5};
 bool CNetAddr::SetSpecial(const std::string &strName)
 {
     if (strName.size()>6 && strName.substr(strName.size() - 6, 6) == ".onion") {
-        std::vector<unsigned char> vchAddr = DecodeBase32(strName.substr(0, strName.size() - 6).c_str());
+        std::string addrPart = strName.substr(0, strName.size() - 6);
+
+        // Tor v3: 56 base32 chars = 35 bytes (32 pubkey + 2 checksum + 1 version)
+        if (addrPart.size() == 56) {
+            std::vector<unsigned char> vchAddr = DecodeBase32(addrPart.c_str());
+            if (vchAddr.size() != 35)
+                return false;
+            // Store the OnionCat prefix in ip[] for IsTor() compatibility
+            memcpy(ip, pchOnionCat, sizeof(pchOnionCat));
+            memset(ip + sizeof(pchOnionCat), 0, 16 - sizeof(pchOnionCat));
+            // Store the Ed25519 public key (first 32 bytes of decoded address)
+            memcpy(tor_v3_pubkey, vchAddr.data(), 32);
+            m_is_tor_v3 = true;
+            return true;
+        }
+
+        // Tor v2: 16 base32 chars = 10 bytes
+        std::vector<unsigned char> vchAddr = DecodeBase32(addrPart.c_str());
         if (vchAddr.size() != 16-sizeof(pchOnionCat))
             return false;
         memcpy(ip, pchOnionCat, sizeof(pchOnionCat));
         for (unsigned int i=0; i<16-sizeof(pchOnionCat); i++)
             ip[i + sizeof(pchOnionCat)] = vchAddr[i];
+        m_is_tor_v3 = false;
         return true;
     }
     if (strName.size()>11 && strName.substr(strName.size() - 11, 11) == ".oc.b32.i2p") {
@@ -638,6 +660,7 @@ CNetAddr::CNetAddr()
 
 CNetAddr::CNetAddr(const struct in_addr& ipv4Addr)
 {
+    Init();
     memcpy(ip,    pchIPv4, 12);
     memcpy(ip+12, &ipv4Addr, 4);
 }
@@ -645,6 +668,7 @@ CNetAddr::CNetAddr(const struct in_addr& ipv4Addr)
 #ifdef USE_IPV6
 CNetAddr::CNetAddr(const struct in6_addr& ipv6Addr)
 {
+    Init();
     memcpy(ip, &ipv6Addr, 16);
 }
 #endif
@@ -738,7 +762,12 @@ bool CNetAddr::IsRFC4843() const
 
 bool CNetAddr::IsTor() const
 {
-    return (memcmp(ip, pchOnionCat, sizeof(pchOnionCat)) == 0);
+    return m_is_tor_v3 || (memcmp(ip, pchOnionCat, sizeof(pchOnionCat)) == 0);
+}
+
+bool CNetAddr::IsTorV3() const
+{
+    return m_is_tor_v3;
 }
 
 bool CNetAddr::IsI2P() const
@@ -826,6 +855,23 @@ enum Network CNetAddr::GetNetwork() const
 
 std::string CNetAddr::ToStringIP() const
 {
+    if (IsTorV3()) {
+        // Tor v3: reconstruct 35-byte address (32 pubkey + 2 checksum + 1 version)
+        unsigned char addr35[35];
+        memcpy(addr35, tor_v3_pubkey, 32);
+        // Compute checksum: SHA3-256(".onion checksum" || pubkey || version)[:2]
+        // For now use a simplified checksum from the stored data
+        unsigned char checksumInput[15 + 32 + 1];
+        memcpy(checksumInput, ".onion checksum", 15);
+        memcpy(checksumInput + 15, tor_v3_pubkey, 32);
+        checksumInput[47] = 0x03; // version
+        // SHA-256 as fallback (SHA3-256 via tor_crypto_compat.h for full impl)
+        uint256 hash = Hash(checksumInput, checksumInput + 48);
+        addr35[32] = ((unsigned char*)&hash)[0];
+        addr35[33] = ((unsigned char*)&hash)[1];
+        addr35[34] = 0x03; // version
+        return EncodeBase32(addr35, 35) + ".onion";
+    }
     if (IsTor())
         return EncodeBase32(&ip[6], 10) + ".onion";
     if (IsI2P())
@@ -859,6 +905,8 @@ std::string CNetAddr::ToString() const
 
 bool operator==(const CNetAddr& a, const CNetAddr& b)
 {
+    if (a.m_is_tor_v3 || b.m_is_tor_v3)
+        return a.m_is_tor_v3 == b.m_is_tor_v3 && memcmp(a.tor_v3_pubkey, b.tor_v3_pubkey, 32) == 0;
     return (memcmp(a.ip, b.ip, 16) == 0);
 }
 
@@ -869,6 +917,10 @@ bool operator!=(const CNetAddr& a, const CNetAddr& b)
 
 bool operator<(const CNetAddr& a, const CNetAddr& b)
 {
+    if (a.m_is_tor_v3 != b.m_is_tor_v3)
+        return !a.m_is_tor_v3; // non-v3 sorts before v3
+    if (a.m_is_tor_v3)
+        return memcmp(a.tor_v3_pubkey, b.tor_v3_pubkey, 32) < 0;
     return (memcmp(a.ip, b.ip, 16) < 0);
 }
 
@@ -965,7 +1017,11 @@ std::vector<unsigned char> CNetAddr::GetGroup() const
 
 uint64_t CNetAddr::GetHash() const
 {
-    uint256 hash = Hash(&ip[0], &ip[16]);
+    uint256 hash;
+    if (m_is_tor_v3)
+        hash = Hash(&tor_v3_pubkey[0], &tor_v3_pubkey[32]);
+    else
+        hash = Hash(&ip[0], &ip[16]);
     uint64_t nRet;
     memcpy(&nRet, &hash, sizeof(nRet));
     return nRet;

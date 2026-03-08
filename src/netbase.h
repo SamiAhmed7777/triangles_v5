@@ -36,6 +36,8 @@ class CNetAddr
 {
     protected:
         unsigned char ip[16]; // in network byte order
+        unsigned char tor_v3_pubkey[32]; // Ed25519 public key for Tor v3 onion addresses
+        bool m_is_tor_v3;
 
     public:
         CNetAddr();
@@ -58,6 +60,7 @@ class CNetAddr
         bool IsRFC6052() const; // IPv6 well-known prefix (64:FF9B::/96)
         bool IsRFC6145() const; // IPv6 IPv4-translated address (::FFFF:0:0:0/96)
         bool IsTor() const;
+        bool IsTorV3() const;
         bool IsI2P() const;
         bool IsLocal() const;
         bool IsRoutable() const;
@@ -85,6 +88,8 @@ class CNetAddr
         IMPLEMENT_SERIALIZE
             (
              READWRITE(FLATDATA(ip));
+             READWRITE(FLATDATA(tor_v3_pubkey));
+             READWRITE(m_is_tor_v3);
             )
 };
 
@@ -126,6 +131,8 @@ class CService : public CNetAddr
             (
              CService* pthis = const_cast<CService*>(this);
              READWRITE(FLATDATA(ip));
+             READWRITE(FLATDATA(tor_v3_pubkey));
+             READWRITE(m_is_tor_v3);
              unsigned short portN = htons(port);
              READWRITE(portN);
              if (fRead)

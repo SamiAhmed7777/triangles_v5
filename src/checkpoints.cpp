@@ -36,8 +36,6 @@ namespace Checkpoints
     (  9002, uint256("0xa1e20fb1d44688b763690cf74d6aefe859e4cc32981f9e3f2b2ae9702bbcf249"))
     ( 10881, uint256("0x4b6554c45e1e6764a6f3c309c47baf53c9edd81f624e52b072518cd15da237e6"))
 	  ( 17650, uint256("0x224940e1f986a202209b8e762728d1452ab45870c308abf84905674acf326a47"))
-    (100000, uint256("0x2f737bded65284d70cdf8992f83ecd8bd1ee00cf24e527b6763465cdd43017b1"))
-    (200000, uint256("0xd94347d8c21034c0b3fe2a7a0ea9d63127a0d9ed4dd3c063c38a3b06125f38e4"))
             ;
 
     static MapCheckpoints mapCheckpointsTestnet =
@@ -54,8 +52,6 @@ namespace Checkpoints
     (  9002, uint256("0xa1e20fb1d44688b763690cf74d6aefe859e4cc32981f9e3f2b2ae9702bbcf249"))
     ( 10881, uint256("0x4b6554c45e1e6764a6f3c309c47baf53c9edd81f624e52b072518cd15da237e6"))
 	  ( 17650, uint256("0x224940e1f986a202209b8e762728d1452ab45870c308abf84905674acf326a47"))
-    (100000, uint256("0x2f737bded65284d70cdf8992f83ecd8bd1ee00cf24e527b6763465cdd43017b1"))
-    (200000, uint256("0xd94347d8c21034c0b3fe2a7a0ea9d63127a0d9ed4dd3c063c38a3b06125f38e4"))
             ;
 
     bool CheckHardened(int nHeight, const uint256& hash)
@@ -371,21 +367,16 @@ namespace Checkpoints
     }
 }
 
-// triangles: sync-checkpoint master key
-const std::string CSyncCheckpoint::strMasterPubKey = "404330cf0c0e76bb8591011dcb61ad4f28c48940a09db1f3588e35827c89c09aa68b432b54018c4b1f653c2dbe0d3507b6b3939af8e97fdbee543dee3fd64bf590";
+// triangles: sync-checkpoint master key (DISABLED for decentralization - v5 hard fork)
+const std::string CSyncCheckpoint::strMasterPubKey = "";
 
 std::string CSyncCheckpoint::strMasterPrivKey = "";
 
 // triangles: verify signature of sync-checkpoint message
+// Master key system disabled - checkpoint signatures are no longer required
 bool CSyncCheckpoint::CheckSignature()
 {
-    CKey key;
-    if (!key.SetPubKey(ParseHex(CSyncCheckpoint::strMasterPubKey)))
-        return error("CSyncCheckpoint::CheckSignature() : SetPubKey failed");
-    if (!key.Verify(Hash(vchMsg.begin(), vchMsg.end()), vchSig))
-        return error("CSyncCheckpoint::CheckSignature() : verify signature failed");
-
-    // Now unserialize the data
+    // Deserialize the checkpoint data without signature verification
     CDataStream sMsg(vchMsg, SER_NETWORK, PROTOCOL_VERSION);
     sMsg >> *(CUnsignedSyncCheckpoint*)this;
     return true;

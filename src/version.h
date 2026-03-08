@@ -30,10 +30,10 @@ static const int DATABASE_VERSION = 70509;
 // network protocol versioning
 //
 
-static const int PROTOCOL_VERSION = 70204;
+static const int PROTOCOL_VERSION = 70205;
 
-// earlier versions not supported as of Aug 2014, and are disconnected
-static const int MIN_PROTO_VERSION = 70204;
+// v5 hard fork: require new protocol version (disconnects old nodes)
+static const int MIN_PROTO_VERSION = 70205;
 
 static const int INIT_PROTO_VERSION = 209;
 
@@ -51,9 +51,9 @@ static const int BIP0031_VERSION = 60000;
 // "mempool" command, enhanced "getdata" behavior starts with this version:
 static const int MEMPOOL_GD_VERSION = 60002;
 
-#define DISPLAY_VERSION_MAJOR       4
-#define DISPLAY_VERSION_MINOR       2
-#define DISPLAY_VERSION_REVISION    1
+#define DISPLAY_VERSION_MAJOR       5
+#define DISPLAY_VERSION_MINOR       0
+#define DISPLAY_VERSION_REVISION    0
 #define DISPLAY_VERSION_BUILD       0
 
 #endif

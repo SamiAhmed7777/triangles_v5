@@ -19,10 +19,11 @@ using namespace std;
 map<uint256, CAlert> mapAlerts;
 CCriticalSection cs_mapAlerts;
 
-static const char* pszMainKey = "a68b432b54018c4b1f653c2dbe0d3507b6b3939af8e97fdbee543dee3fd64bf590404330cf0c0e76bb8591011dcb61ad4f28c48940a09db1f3588e35827c89c09a";
+// Alert keys disabled for decentralization - v5 hard fork
+static const char* pszMainKey = "";
 
 // TestNet alerts pubKey
-static const char* pszTestKey = "a68b432b54018c4b1f653c2dbe0d3507b6b3939af8e97fdbee543dee3fd64bf590404330cf0c0e76bb8591011dcb61ad4f28c48940a09db1f3588e35827c89c09a";
+static const char* pszTestKey = "";
 
 void CUnsignedAlert::SetNull()
 {
@@ -146,8 +147,13 @@ bool CAlert::RelayTo(CNode* pnode) const
 
 bool CAlert::CheckSignature() const
 {
+    // Alert key system disabled for decentralization - v5 hard fork
+    const char* pszKey = fTestNet ? pszTestKey : pszMainKey;
+    if (pszKey[0] == '\0')
+        return false; // No alerts accepted without a valid key
+
     CKey key;
-    if (!key.SetPubKey(ParseHex(fTestNet ? pszTestKey : pszMainKey)))
+    if (!key.SetPubKey(ParseHex(pszKey)))
         return error("CAlert::CheckSignature() : SetPubKey failed");
     if (!key.Verify(Hash(vchMsg.begin(), vchMsg.end()), vchSig))
         return error("CAlert::CheckSignature() : verify signature failed");

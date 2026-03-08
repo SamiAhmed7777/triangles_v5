@@ -1099,6 +1099,10 @@ static unsigned int GetNextTargetRequired_(const CBlockIndex* pindexLast, bool f
 
 unsigned int GetNextTargetRequired(const CBlockIndex* pindexLast, bool fProofOfStake)
 {
+    // At fork height, reset PoS difficulty to minimum so staking can restart
+    if (pindexLast != NULL && pindexLast->nHeight + 1 == FORK_HEIGHT_V5 && fProofOfStake)
+        return bnProofOfStakeLimit.GetCompact();
+
     return GetNextTargetRequired_(pindexLast, fProofOfStake);
 }
 
@@ -2176,14 +2180,18 @@ bool CBlock::AcceptBlock()
         }
     }
 
-      bool cpSatisfies = Checkpoints::CheckSync(hash, pindexPrev);
+    // Before fork: enforce sync checkpoints for historical chain integrity
+    // After fork: no sync checkpoint enforcement (decentralized)
+    if (nHeight < FORK_HEIGHT_V5)
+    {
+        bool cpSatisfies = Checkpoints::CheckSync(hash, pindexPrev);
 
-    // Check that the block satisfies synchronized checkpoint
-    if (CheckpointsMode == Checkpoints::STRICT && !cpSatisfies)
-        return error("AcceptBlock() : rejected by synchronized checkpoint");
+        if (CheckpointsMode == Checkpoints::STRICT && !cpSatisfies)
+            return error("AcceptBlock() : rejected by synchronized checkpoint");
 
-    if (CheckpointsMode == Checkpoints::ADVISORY && !cpSatisfies)
-        strMiscWarning = _("WARNING: syncronized checkpoint violation detected, but skipped!");
+        if (CheckpointsMode == Checkpoints::ADVISORY && !cpSatisfies)
+            strMiscWarning = _("WARNING: syncronized checkpoint violation detected, but skipped!");
+    }
 
     // Enforce rule that the coinbase starts with serialized block height
     CScript expect = CScript() << nHeight;

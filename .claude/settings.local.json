@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git clone:*)",
+      "Bash(git init:*)",
+      "Bash(git remote add:*)",
+      "Bash(git fetch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git config:*)",
+      "Bash(git -C \"E:\\\\repos\\\\triangles_old\" log --oneline --all)",
+      "Bash(git -C \"E:\\\\repos\\\\triangles_old\" branch -a)",
+      "Bash(git -C \"E:\\\\repos\\\\triangles_old\" log --oneline --all --graph)",
+      "Bash(git -C \"E:\\\\repos\\\\triangles_old\" show 7676e66 --stat)",
+      "Bash(python:*)",
+      "Bash(where:*)",
+      "Bash(powershell:*)",
+      "Bash(C:/msys64/usr/bin/bash.exe -lc \"pacman -Syu --noconfirm\")",
+      "Bash(C:/msys64/usr/bin/bash.exe -lc \"pacman -S --needed --noconfirm mingw-w64-x86_64-toolchain make\")",
+      "Bash(C:/msys64/msys2_shell.cmd -mingw64 -defterm -no-start -here -c \"ls /mingw64/lib/libboost_system*.a 2>/dev/null; ls /mingw64/lib/cmake/boost_system* 2>/dev/null; ls /mingw64/lib/libboost*.a 2>/dev/null | head -10\")"
+    ]
+  }
+}

@@ -619,13 +619,13 @@ QWidget {
              <widget class="QLabel" name="lbLogo">
               <property name="minimumSize">
                <size>
-                <width>32</width>
+                <width>152</width>
                 <height>32</height>
                </size>
               </property>
               <property name="maximumSize">
                <size>
-                <width>32</width>
+                <width>152</width>
                 <height>32</height>
                </size>
               </property>
@@ -633,22 +633,10 @@ QWidget {
                <string notr="true"/>
               </property>
               <property name="pixmap">
-               <pixmap resource="../triangles.qrc">:/icons/toolbar</pixmap>
+               <pixmap resource="../triangles.qrc">:/images/header_logo</pixmap>
               </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QLabel" name="label_Triangles">
-              <property name="font">
-               <font>
-                <pointsize>14</pointsize>
-                <weight>75</weight>
-                <bold>true</bold>
-                <stylestrategy>PreferAntialias</stylestrategy>
-               </font>
-              </property>
-              <property name="text">
-               <string>Triangles</string>
+              <property name="scaledContents">
+               <bool>true</bool>
               </property>
              </widget>
             </item>

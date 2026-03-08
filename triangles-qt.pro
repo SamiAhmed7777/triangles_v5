@@ -1,7 +1,7 @@
 TEMPLATE = app
 TARGET = triangles-qt
 
-VERSION = 4.2.1.0
+VERSION = 5.0.0.0
 INCLUDEPATH += src src/json src/qt src/qt/plugins/mrichtexteditor
 DEFINES += QT_GUI BOOST_THREAD_USE_LIB BOOST_SPIRIT_THREADSAFE BOOST_THREAD_PROVIDES_GENERIC_SHARED_MUTEX_ON_WIN __NO_SYSTEM_INCLUDES
 CONFIG += no_include_pwd
@@ -15,21 +15,21 @@ greaterThan(QT_MAJOR_VERSION, 4) {
 }
 
 # UNCOMMENT THIS SECTION TO BUILD ON WINDOWS
-#win32 {
-#    BOOST_LIB_SUFFIX=-mgw48-mt-s-1_55
-#    BOOST_INCLUDE_PATH=C:/Qt/deps/boost_1_55_0
-#    BOOST_LIB_PATH=C:/Qt/deps/boost_1_55_0/stage/lib
-#    BDB_INCLUDE_PATH=C:/Qt/deps/db-4.8.30.NC/build_unix
-#    BDB_LIB_PATH=C:/Qt/deps/db-4.8.30.NC/build_unix
-#    OPENSSL_INCLUDE_PATH=C:/Qt/deps/openssl-1.0.1i/dist/include
-#    OPENSSL_LIB_PATH=C:/Qt/deps/openssl-1.0.1i/dist/lib
-#    MINIUPNPC_INCLUDE_PATH=C:/Qt/deps/miniupnpc
-#    MINIUPNPC_LIB_PATH=C:/Qt/deps/miniupnpc/miniupnpc
-#    #QRENCODE_INCLUDE_PATH=C:/Qt/deps/mingw_482/qrencode-3.4.3
-#    #QRENCODE_LIB_PATH=C:Qt/deps/mingw_482/qrencode-3.4.3/.libs
-#    EVENT_INCLUDE_PATH=C:/Qt/deps/libevent-2.0.21-stable/include
-#    EVENT_LIB_PATH=C:/Qt/deps/libevent-2.0.21-stable/.libs
-#}
+# MSYS2 MinGW64 paths
+win32 {
+    BOOST_LIB_SUFFIX=-mt
+    BOOST_THREAD_LIB_SUFFIX=-mt
+    BOOST_INCLUDE_PATH=C:/msys64/mingw64/include
+    BOOST_LIB_PATH=C:/msys64/mingw64/lib
+    BDB_INCLUDE_PATH=C:/msys64/mingw64/include
+    BDB_LIB_PATH=C:/msys64/mingw64/lib
+    OPENSSL_INCLUDE_PATH=C:/msys64/mingw64/include
+    OPENSSL_LIB_PATH=C:/msys64/mingw64/lib
+    MINIUPNPC_INCLUDE_PATH=C:/msys64/mingw64/include
+    MINIUPNPC_LIB_PATH=C:/msys64/mingw64/lib
+    EVENT_INCLUDE_PATH=C:/msys64/mingw64/include
+    EVENT_LIB_PATH=C:/msys64/mingw64/lib
+}
 
 # for boost 1.37, add -mt to the boost libraries
 # use: qmake BOOST_LIB_SUFFIX=-mt
@@ -214,6 +214,9 @@ HEADERS += src/qt/trianglesgui.h \
     src/util.h \
     src/uint256.h \
     src/kernel.h \
+    src/net_bootstrap.h \
+    src/tor/onion_v3.h \
+    src/tor/tor_crypto_compat.h \
     src/scrypt.h \
     src/pbkdf2.h \
     src/serialize.h \
@@ -448,6 +451,8 @@ SOURCES += src/qt/triangles.cpp src/qt/trianglesgui.cpp \
     src/qt/plugins/mrichtexteditor/mrichtextedit.cpp \
     src/noui.cpp \
     src/kernel.cpp \
+    src/net_bootstrap.cpp \
+    src/tor/onion_v3.cpp \
     src/scrypt-arm.S \
     src/scrypt-x86.S \
     src/scrypt-x86_64.S \

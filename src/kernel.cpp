@@ -30,8 +30,15 @@ int64_t GetWeight(int64_t nIntervalBeginning, int64_t nIntervalEnd)
     // Kernel hash weight starts from 0 at the min age
     // this change increases active coins participating the hash and helps
     // to secure the network when proof-of-stake difficulty is low
+    int64_t nAge = nIntervalEnd - nIntervalBeginning - nStakeMinAge;
+    if (nAge < 0)
+        return 0;
 
-    return min(nIntervalEnd - nIntervalBeginning - nStakeMinAge, (int64_t)nStakeMaxAge);
+    // After v5 fork: remove max age cap so coins aged during the freeze can stake
+    if (pindexBest && pindexBest->nHeight >= FORK_HEIGHT_V5)
+        return nAge;
+
+    return min(nAge, (int64_t)nStakeMaxAge);
 }
 
 // Get the last stake modifier and its generation time from a given block
