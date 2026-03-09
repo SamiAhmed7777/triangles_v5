@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(C:/msys64/msys2_shell.cmd -mingw64 -defterm -no-start -here -c \"ls /mingw64/lib/libboost_system* 2>/dev/null\")"
+    ],
+    "additionalDirectories": [
+      "C:\\msys64\\mingw64\\bin"
+    ]
+  }
+}

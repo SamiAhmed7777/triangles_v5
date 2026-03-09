@@ -1359,7 +1359,9 @@ void ThreadOnionSeed(void* parg)
 
 
 
-unsigned int pnSeed[] = {};
+unsigned int pnSeed[] = {
+    0xCE58E9C2, // DNS2-OpenClaw: 194.233.88.206
+};
 
 void DumpAddresses()
 {

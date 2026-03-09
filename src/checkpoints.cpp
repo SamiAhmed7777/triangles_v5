@@ -36,6 +36,7 @@ namespace Checkpoints
     (  9002, uint256("0xa1e20fb1d44688b763690cf74d6aefe859e4cc32981f9e3f2b2ae9702bbcf249"))
     ( 10881, uint256("0x4b6554c45e1e6764a6f3c309c47baf53c9edd81f624e52b072518cd15da237e6"))
 	  ( 17650, uint256("0x224940e1f986a202209b8e762728d1452ab45870c308abf84905674acf326a47"))
+    (2186940, uint256("0xbd952e8d4a612e336d840ad924a7e09395e36bcd9d929b302e47e60b5c3098c0"))
             ;
 
     static MapCheckpoints mapCheckpointsTestnet =
@@ -52,6 +53,7 @@ namespace Checkpoints
     (  9002, uint256("0xa1e20fb1d44688b763690cf74d6aefe859e4cc32981f9e3f2b2ae9702bbcf249"))
     ( 10881, uint256("0x4b6554c45e1e6764a6f3c309c47baf53c9edd81f624e52b072518cd15da237e6"))
 	  ( 17650, uint256("0x224940e1f986a202209b8e762728d1452ab45870c308abf84905674acf326a47"))
+    (2186940, uint256("0xbd952e8d4a612e336d840ad924a7e09395e36bcd9d929b302e47e60b5c3098c0"))
             ;
 
     bool CheckHardened(int nHeight, const uint256& hash)
@@ -85,8 +87,8 @@ namespace Checkpoints
     }
 
     // triangles: synchronized checkpoint (centrally broadcasted)
-    uint256 hashSyncCheckpoint = uint256("0x224940e1f986a202209b8e762728d1452ab45870c308abf84905674acf326a47");
-    uint256 hashPendingCheckpoint = uint256("0x224940e1f986a202209b8e762728d1452ab45870c308abf84905674acf326a47");
+    uint256 hashSyncCheckpoint = uint256("0xbd952e8d4a612e336d840ad924a7e09395e36bcd9d929b302e47e60b5c3098c0");
+    uint256 hashPendingCheckpoint = uint256("0xbd952e8d4a612e336d840ad924a7e09395e36bcd9d929b302e47e60b5c3098c0");
     CSyncCheckpoint checkpointMessage;
     CSyncCheckpoint checkpointMessagePending;
     uint256 hashInvalidCheckpoint = 0;

@@ -113,83 +113,12 @@ xCXXFLAGS=-O2 $(EXT_OPTIONS) -pthread -Wall -Wextra -Wno-ignored-qualifiers -Wfo
 # adds some defaults in front. Unfortunately, LDFLAGS=... $(LDFLAGS) does not work.
 xLDFLAGS=$(LDHARDENING) $(LDFLAGS)
 
+# Old embedded Tor v2 client removed - incompatible with OpenSSL 3.x
+# Tor v3 onion services handled by onion_v3.cpp via external Tor/SOCKS5
 OBJS= \
-    obj/address.o \
-    obj/addressmap.o \
-    obj/aes.o \
-    obj/backtrace.o \
-    obj/buffers.o \
-    obj/channel.o \
-    obj/channeltls.o \
-    obj/circpathbias.o \
-    obj/circuitbuild.o \
-    obj/circuitlist.o \
-    obj/circuitmux.o \
-    obj/circuitmux_ewma.o \
-    obj/circuitstats.o \
-    obj/circuituse.o \
-    obj/command.o \
-    obj/compat.o \
-    obj/compat_libevent.o \
-    obj/config.o \
-    obj/config_codedigest.o \
-    obj/confparse.o \
-    obj/connection.o \
-    obj/connection_edge.o \
-    obj/connection_or.o \
-    obj/container.o \
-    obj/control.o \
-    obj/cpuworker.o \
-    obj/crypto.o \
-    obj/crypto_curve25519.o \
-    obj/crypto_format.o \
-    obj/curve25519-donna.o \
-    obj/di_ops.o \
-    obj/directory.o \
-    obj/dirserv.o \
-    obj/dirvote.o \
-    obj/dns.o \
-    obj/dnsserv.o \
-    obj/entrynodes.o \
-    obj/ext_orport.o \
-    obj/fp_pair.o \
-    obj/geoip.o \
-    obj/hibernate.o \
-    obj/log.o \
-    obj/memarea.o \
-    obj/mempool.o \
-    obj/microdesc.o \
-    obj/networkstatus.o \
-    obj/nodelist.o \
-    obj/onion.o \
-    obj/onion_fast.o \
-    obj/onion_main.o \
-    obj/onion_ntor.o \
-    obj/onion_tap.o \
-    obj/policies.o \
-    obj/procmon.o \
-    obj/reasons.o \
-    obj/relay.o \
-    obj/rendclient.o \
-    obj/rendcommon.o \
-    obj/rendmid.o \
-    obj/rendservice.o \
-    obj/rephist.o \
-    obj/replaycache.o \
-    obj/router.o \
-    obj/routerlist.o \
-    obj/routerparse.o \
-    obj/routerset.o \
-    obj/sandbox.o \
-    obj/statefile.o \
-    obj/status.o \
-    obj/tor_util.o \
-    obj/torgzip.o \
-    obj/tortls.o \
-    obj/transports.o \
-    obj/util_codedigest.o \
     obj/fugue.o \
     obj/hamsi.o \
+    obj/hamsi_helper.o \
     obj/groestl.o \
     obj/blake.o \
     obj/bmw.o \
@@ -201,6 +130,7 @@ OBJS= \
     obj/cubehash.o \
     obj/echo.o \
     obj/simd.o \
+    obj/aes_helper.o \
     obj/alert.o \
     obj/version.o \
     obj/checkpoints.o \
@@ -215,6 +145,7 @@ OBJS= \
     obj/miner.o \
     obj/main.o \
     obj/net.o \
+    obj/net_bootstrap.o \
     obj/protocol.o \
     obj/trianglesrpc.o \
     obj/rpcdump.o \
@@ -236,7 +167,8 @@ OBJS= \
     obj/scrypt-arm.o \
     obj/scrypt-x86.o \
     obj/scrypt-x86_64.o \
-    obj/smessage.o 
+    obj/smessage.o \
+    obj/onion_v3.o
     
 all: trianglesd
 
@@ -291,6 +223,20 @@ obj/%.o: tor/%.c
 	rm -f $(@:%.o=%.d)
 
 obj/anonymize.o: tor/anonymize.cpp
+	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
+	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
+	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+            -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
+	rm -f $(@:%.o=%.d)
+
+obj/onion_v3.o: tor/onion_v3.cpp
+	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
+	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
+	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+            -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
+	rm -f $(@:%.o=%.d)
+
+obj/net_bootstrap.o: net_bootstrap.cpp
 	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
 	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
 	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \

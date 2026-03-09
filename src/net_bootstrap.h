@@ -17,20 +17,19 @@ namespace NetBootstrap {
     // DNS seed nodes for initial bootstrap (clearnet fallback)
     // Unused attribute prevents warnings
     static const char* strDNSSeed[] __attribute__((unused)) = {
-        "seed1.triangles.network",
-        "seed2.triangles.network",
-        "seed3.triangles.network",
-        "backup-seed.triangles.network",
+        "seed1.cryptographic-triangles.org",
+        "seed2.cryptographic-triangles.org",
+        "seed3.cryptographic-triangles.org",
+        "backup-seed.cryptographic-triangles.org",
         NULL
     };
 
     // Legacy IP seed nodes for old wallet compatibility
     // These should be actual IP addresses of stable nodes
     static const unsigned int pnSeed[] __attribute__((unused)) = {
-        // Format: IP addresses in network byte order
-        // Example: 0x12345678 represents 120.69.52.18
-        // Add actual seed node IPs here when deploying
-        0x00000000, // Placeholder - replace with actual IPs
+        // Format: IP addresses in network byte order (little-endian)
+        // For IP a.b.c.d: (d << 24) | (c << 16) | (b << 8) | a
+        0xCE58E9C2, // DNS2-OpenClaw: 194.233.88.206
     };
 
     // Network protocol compatibility settings
