@@ -33,6 +33,11 @@ bool static ApplyProxySettings()
 #endif
         SetNameProxy(addrProxy, nSocksVersion);
     }
+
+    // Keep Tor transport aligned with proxy settings for one-click Tor mode.
+    SoftSetArg("-tor", addrProxy.ToStringIPPort());
+    SoftSetArg("-torproxy", addrProxy.ToStringIPPort());
+
     return true;
 }
 
@@ -58,6 +63,11 @@ void OptionsModel::Init()
         SoftSetArg("-proxy", settings.value("addrProxy").toString().toStdString());
     if (settings.contains("nSocksVersion") && settings.value("fUseProxy").toBool())
         SoftSetArg("-socks", settings.value("nSocksVersion").toString().toStdString());
+    if (settings.value("fUseProxy", false).toBool()) {
+        const std::string proxyAddr = settings.value("addrProxy", "127.0.0.1:9050").toString().toStdString();
+        SoftSetArg("-tor", proxyAddr);
+        SoftSetArg("-torproxy", proxyAddr);
+    }
     if (settings.contains("detachDB"))
         SoftSetBoolArg("-detachdb", settings.value("detachDB").toBool());
     if (!language.isEmpty())

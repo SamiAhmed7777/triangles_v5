@@ -12,6 +12,7 @@
 #include <boost/thread/mutex.hpp>
 #include <string>
 #include <cstring>
+#include <memory>
 
 char const* anonymize_tor_data_directory(
 ) {
@@ -43,7 +44,7 @@ int check_interrupted(
 
 static boost::mutex initializing;
 
-static std::auto_ptr<boost::unique_lock<boost::mutex> > uninitialized(
+static std::unique_ptr<boost::unique_lock<boost::mutex> > uninitialized(
     new boost::unique_lock<boost::mutex>(
         initializing
     )

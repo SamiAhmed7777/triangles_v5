@@ -35,6 +35,7 @@ OptionsDialog::OptionsDialog(QWidget *parent) :
     ui->proxyIp->setEnabled(false);
     ui->proxyPort->setEnabled(false);
     ui->proxyPort->setValidator(new QIntValidator(1, 65535, this));
+    ui->connectSocks->setText(tr("&Use Tor (SOCKS5):"));
 
     ui->socksVersion->setEnabled(false);
     ui->socksVersion->addItem("5", 5);
@@ -45,6 +46,7 @@ OptionsDialog::OptionsDialog(QWidget *parent) :
     connect(ui->connectSocks, SIGNAL(toggled(bool)), ui->proxyPort, SLOT(setEnabled(bool)));
     connect(ui->connectSocks, SIGNAL(toggled(bool)), ui->socksVersion, SLOT(setEnabled(bool)));
     connect(ui->connectSocks, SIGNAL(clicked(bool)), this, SLOT(showRestartWarning_Proxy()));
+    connect(ui->connectSocks, SIGNAL(toggled(bool)), this, SLOT(applyTorDefaults(bool)));
 
     ui->proxyIp->installEventFilter(this);
 
@@ -275,6 +277,17 @@ void OptionsDialog::handleProxyIpValid(QValidatedLineEdit *object, bool fState)
         ui->statusLabel->setStyleSheet("QLabel { color: red; }");
         ui->statusLabel->setText(tr("The supplied proxy address is invalid."));
     }
+}
+
+void OptionsDialog::applyTorDefaults(bool enabled)
+{
+    if (!enabled)
+        return;
+
+    // One-click Tor mode: populate standard local Tor SOCKS settings.
+    ui->proxyIp->setText("127.0.0.1");
+    ui->proxyPort->setText("9050");
+    ui->socksVersion->setCurrentIndex(ui->socksVersion->findData(5));
 }
 
 bool OptionsDialog::eventFilter(QObject *object, QEvent *event)

@@ -27,7 +27,8 @@ using namespace std;
 using namespace boost;
 
 extern "C" {
-int tor_main(int argc, char *argv[]);
+// Old embedded Tor v2 removed - using external Tor via SOCKS5 for v3
+// int tor_main(int argc, char *argv[]);
 }
 
 static const int MAX_OUTBOUND_CONNECTIONS = 16;
@@ -1139,16 +1140,17 @@ void ThreadMapPort2(void* parg)
     /* miniupnpc 1.5 */
     devlist = upnpDiscover(2000, multicastif, minissdpdpath, 0);
 #else
-    /* miniupnpc 1.6 */
+    /* miniupnpc 1.6+ */
     int error = 0;
-    devlist = upnpDiscover(2000, multicastif, minissdpdpath, 0, 0, &error);
+    devlist = upnpDiscover(2000, multicastif, minissdpdpath, 0, 0, 2, &error);
 #endif
 
     struct UPNPUrls urls;
     struct IGDdatas data;
     int r;
 
-    r = UPNP_GetValidIGD(devlist, &urls, &data, lanaddr, sizeof(lanaddr));
+    char wanaddr[64] = "";
+    r = UPNP_GetValidIGD(devlist, &urls, &data, lanaddr, sizeof(lanaddr), wanaddr, sizeof(wanaddr));
     if (r == 1)
     {
         //if (fDiscover) {
@@ -1934,19 +1936,10 @@ void static Discover()
 }
 
 static void run_tor() {
-    printf("Onion thread started.\n");
-
-    std::string logDecl = "notice file " + GetDataDir().string() + "/tor/tor.log";
-    char *argvLogDecl = (char*) logDecl.c_str();
-
-    char* argv[] = {
-        "tor",
-        "--hush",
-        "--Log",
-        argvLogDecl
-    };
-
-    tor_main(4, argv);
+    // Old embedded Tor v2 client removed - incompatible with OpenSSL 3.x.
+    // Tor v3 onion services are handled by onion_v3.cpp via external Tor/SOCKS5.
+    printf("Tor v3 mode: using external Tor process via SOCKS5 proxy.\n");
+    set_initialized();
 }
 
 

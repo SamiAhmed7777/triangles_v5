@@ -1427,7 +1427,7 @@ a:active { color:#f26522; text-decoration: underline; }
 &lt;/style&gt;
 &lt;/head&gt;
 &lt;body&gt;
-&lt;a href=&quot;https://bittrex.com/Market/Index?MarketName=BTC-TRI&quot;&gt; &amp;#187; TRI on Bittrex&lt;/a&gt;&lt;/body&gt;</source>
+&lt;a href=&quot;https://313.cash&quot;&gt; &amp;#187; TRI on Pinball&lt;/a&gt;&lt;/body&gt;</source>
         <translation type="unfinished"></translation>
     </message>
     <message>

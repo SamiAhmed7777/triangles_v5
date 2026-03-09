@@ -71,9 +71,9 @@
 #define MAX_DNS_LABEL_SIZE 63
 
 /** Macro: is k a valid RSA public or private key? */
-#define PUBLIC_KEY_OK(k) ((k) && (k)->key && (k)->key->n)
+#define PUBLIC_KEY_OK(k) ((k) && (k)->key && RSA_get0_n((k)->key))
 /** Macro: is k a valid RSA private key? */
-#define PRIVATE_KEY_OK(k) ((k) && (k)->key && (k)->key->p)
+#define PRIVATE_KEY_OK(k) ((k) && (k)->key && RSA_get0_p((k)->key))
 
 #ifdef TOR_IS_MULTITHREADED
 /** A number of preallocated mutexes for use by OpenSSL. */
@@ -311,8 +311,10 @@ crypto_global_init(int useAccel, const char *accelName, const char *accelDir)
          used by Tor and the set of algorithms available in the engine */
       log_engine("RSA", ENGINE_get_default_RSA());
       log_engine("DH", ENGINE_get_default_DH());
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
       log_engine("ECDH", ENGINE_get_default_ECDH());
       log_engine("ECDSA", ENGINE_get_default_ECDSA());
+#endif
       log_engine("RAND", ENGINE_get_default_RAND());
       log_engine("RAND (which we will not use)", ENGINE_get_default_RAND());
       log_engine("SHA1", ENGINE_get_digest_engine(NID_sha1));
@@ -335,12 +337,14 @@ crypto_global_init(int useAccel, const char *accelName, const char *accelDir)
       log_info(LD_CRYPTO, "NOT using OpenSSL engine support.");
     }
 
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
     if (RAND_get_rand_method() != RAND_SSLeay()) {
       log_notice(LD_CRYPTO, "It appears that one of our engines has provided "
                  "a replacement the OpenSSL RNG. Resetting it to the default "
                  "implementation.");
       RAND_set_rand_method(RAND_SSLeay());
     }
+#endif
 
     evaluate_evp_for_aes(-1);
     evaluate_ctr_for_aes();
@@ -769,7 +773,7 @@ crypto_pk_public_exponent_ok(crypto_pk_t *env)
   tor_assert(env);
   tor_assert(env->key);
 
-  return BN_is_word(env->key->e, 65537);
+  return BN_is_word(RSA_get0_e(env->key), 65537);
 }
 
 /** Compare the public-key components of a and b.  Return less than 0
@@ -792,10 +796,10 @@ crypto_pk_cmp_keys(crypto_pk_t *a, crypto_pk_t *b)
 
   tor_assert(PUBLIC_KEY_OK(a));
   tor_assert(PUBLIC_KEY_OK(b));
-  result = BN_cmp((a->key)->n, (b->key)->n);
+  result = BN_cmp(RSA_get0_n(a->key), RSA_get0_n(b->key));
   if (result)
     return result;
-  return BN_cmp((a->key)->e, (b->key)->e);
+  return BN_cmp(RSA_get0_e(a->key), RSA_get0_e(b->key));
 }
 
 /** Compare the public-key components of a and b.  Return non-zero iff
@@ -826,9 +830,9 @@ crypto_pk_num_bits(crypto_pk_t *env)
 {
   tor_assert(env);
   tor_assert(env->key);
-  tor_assert(env->key->n);
+  tor_assert(RSA_get0_n(env->key));
 
-  return BN_num_bits(env->key->n);
+  return BN_num_bits(RSA_get0_n(env->key));
 }
 
 /** Increase the reference count of <b>env</b>, and return it.
@@ -921,7 +925,7 @@ crypto_pk_private_decrypt(crypto_pk_t *env, char *to,
   tor_assert(env->key);
   tor_assert(fromlen<INT_MAX);
   tor_assert(tolen >= crypto_pk_keysize(env));
-  if (!env->key->p)
+  if (!RSA_get0_p(env->key))
     /* Not a private key */
     return -1;
 
@@ -1027,7 +1031,7 @@ crypto_pk_private_sign(crypto_pk_t *env, char *to, size_t tolen,
   tor_assert(to);
   tor_assert(fromlen < INT_MAX);
   tor_assert(tolen >= crypto_pk_keysize(env));
-  if (!env->key->p)
+  if (!RSA_get0_p(env->key))
     /* Not a private key */
     return -1;
 
@@ -1713,7 +1717,7 @@ crypto_generate_dynamic_dh_modulus(void)
   r = DH_check(dh_parameters, &dh_codes);
   tor_assert(r && !dh_codes);
 
-  BN_copy(dynamic_dh_modulus, dh_parameters->p);
+  BN_copy(dynamic_dh_modulus, DH_get0_p(dh_parameters));
   tor_assert(dynamic_dh_modulus);
 
   DH_free(dh_parameters);
@@ -1752,12 +1756,17 @@ crypto_store_dynamic_dh_modulus(const char *fname)
 
   if (!(dh = DH_new()))
     goto done;
-  if (!(dh->p = BN_dup(dh_param_p_tls)))
-    goto done;
-  if (!(dh->g = BN_new()))
-    goto done;
-  if (!BN_set_word(dh->g, DH_GENERATOR))
-    goto done;
+  {
+    BIGNUM *p_bn = BN_dup(dh_param_p_tls);
+    BIGNUM *g_bn = BN_new();
+    if (!p_bn || !g_bn || !BN_set_word(g_bn, DH_GENERATOR) ||
+        !DH_set0_pqg(dh, p_bn, NULL, g_bn)) {
+      if (p_bn) BN_free(p_bn);
+      if (g_bn) BN_free(g_bn);
+      goto done;
+    }
+    /* DH_set0_pqg takes ownership of p_bn and g_bn, do not free them */
+  }
 
   len = i2d_DHparams(dh, &dh_string_repr);
   if ((len < 0) || (dh_string_repr == NULL)) {
@@ -1860,7 +1869,7 @@ crypto_get_stored_dynamic_dh_modulus(const char *fname)
       goto err;
     }
 
-    if (!BN_is_word(stored_dh->g, 2)) {
+    if (!BN_is_word(DH_get0_g(stored_dh), 2)) {
       log_warn(LD_CRYPTO, "Stored dynamic DH parameters do not use '2' "
                "as the group generator.");
       goto err;
@@ -1868,7 +1877,7 @@ crypto_get_stored_dynamic_dh_modulus(const char *fname)
   }
 
   { /* log the dynamic DH modulus: */
-    char *s = BN_bn2hex(stored_dh->p);
+    char *s = BN_bn2hex(DH_get0_p(stored_dh));
     tor_assert(s);
     log_info(LD_OR, "Found stored dynamic DH modulus: [%s]", s);
     OPENSSL_free(s);
@@ -1902,7 +1911,7 @@ crypto_get_stored_dynamic_dh_modulus(const char *fname)
   tor_free(base64_decoded_dh);
 
   if (stored_dh) {
-    dynamic_dh_modulus = BN_dup(stored_dh->p);
+    dynamic_dh_modulus = BN_dup(DH_get0_p(stored_dh));
     DH_free(stored_dh);
   }
 
@@ -2031,18 +2040,23 @@ crypto_dh_new(int dh_type)
   if (!(res->dh = DH_new()))
     goto err;
 
-  if (dh_type == DH_TYPE_TLS) {
-    if (!(res->dh->p = BN_dup(dh_param_p_tls)))
+  {
+    BIGNUM *p_bn, *g_bn;
+    if (dh_type == DH_TYPE_TLS) {
+      p_bn = BN_dup(dh_param_p_tls);
+    } else {
+      p_bn = BN_dup(dh_param_p);
+    }
+    g_bn = BN_dup(dh_param_g);
+    if (!p_bn || !g_bn || !DH_set0_pqg(res->dh, p_bn, NULL, g_bn)) {
+      if (p_bn) BN_free(p_bn);
+      if (g_bn) BN_free(g_bn);
       goto err;
-  } else {
-    if (!(res->dh->p = BN_dup(dh_param_p)))
-      goto err;
+    }
+    /* DH_set0_pqg takes ownership of p_bn and g_bn, do not free them */
   }
 
-  if (!(res->dh->g = BN_dup(dh_param_g)))
-    goto err;
-
-  res->dh->length = DH_PRIVATE_KEY_BITS;
+  DH_set_length(res->dh, DH_PRIVATE_KEY_BITS);
 
   return res;
  err:
@@ -2082,13 +2096,11 @@ crypto_dh_generate_public(crypto_dh_t *dh)
     crypto_log_errors(LOG_WARN, "generating DH key");
     return -1;
   }
-  if (tor_check_dh_key(LOG_WARN, dh->dh->pub_key)<0) {
+  if (tor_check_dh_key(LOG_WARN, (BIGNUM*)DH_get0_pub_key(dh->dh))<0) {
     log_warn(LD_CRYPTO, "Weird! Our own DH key was invalid.  I guess once-in-"
              "the-universe chances really do happen.  Trying again.");
     /* Free and clear the keys, so OpenSSL will actually try again. */
-    BN_clear_free(dh->dh->pub_key);
-    BN_clear_free(dh->dh->priv_key);
-    dh->dh->pub_key = dh->dh->priv_key = NULL;
+    DH_set0_key(dh->dh, NULL, NULL);
     goto again;
   }
   return 0;
@@ -2103,13 +2115,13 @@ crypto_dh_get_public(crypto_dh_t *dh, char *pubkey, size_t pubkey_len)
 {
   int bytes;
   tor_assert(dh);
-  if (!dh->dh->pub_key) {
+  if (!DH_get0_pub_key(dh->dh)) {
     if (crypto_dh_generate_public(dh)<0)
       return -1;
   }
 
-  tor_assert(dh->dh->pub_key);
-  bytes = BN_num_bytes(dh->dh->pub_key);
+  tor_assert(DH_get0_pub_key(dh->dh));
+  bytes = BN_num_bytes(DH_get0_pub_key(dh->dh));
   tor_assert(bytes >= 0);
   if (pubkey_len < (size_t)bytes) {
     log_warn(LD_CRYPTO,
@@ -2119,7 +2131,7 @@ crypto_dh_get_public(crypto_dh_t *dh, char *pubkey, size_t pubkey_len)
   }
 
   memset(pubkey, 0, pubkey_len);
-  BN_bn2bin(dh->dh->pub_key, (unsigned char*)(pubkey+(pubkey_len-bytes)));
+  BN_bn2bin(DH_get0_pub_key(dh->dh), (unsigned char*)(pubkey+(pubkey_len-bytes)));
 
   return 0;
 }
@@ -2605,23 +2617,28 @@ base64_encode(char *dest, size_t destlen, const char *src, size_t srclen)
 {
   /* FFFF we might want to rewrite this along the lines of base64_decode, if
    * it ever shows up in the profile. */
-  EVP_ENCODE_CTX ctx;
+  EVP_ENCODE_CTX *ctx = EVP_ENCODE_CTX_new();
   int len, ret;
   tor_assert(srclen < INT_MAX);
 
   /* 48 bytes of input -> 64 bytes of output plus newline.
      Plus one more byte, in case I'm wrong.
   */
-  if (destlen < ((srclen/48)+1)*66)
+  if (destlen < ((srclen/48)+1)*66) {
+    EVP_ENCODE_CTX_free(ctx);
     return -1;
-  if (destlen > SIZE_T_CEILING)
+  }
+  if (destlen > SIZE_T_CEILING) {
+    EVP_ENCODE_CTX_free(ctx);
     return -1;
+  }
 
-  EVP_EncodeInit(&ctx);
-  EVP_EncodeUpdate(&ctx, (unsigned char*)dest, &len,
+  EVP_EncodeInit(ctx);
+  EVP_EncodeUpdate(ctx, (unsigned char*)dest, &len,
                    (unsigned char*)src, (int)srclen);
-  EVP_EncodeFinal(&ctx, (unsigned char*)(dest+len), &ret);
+  EVP_EncodeFinal(ctx, (unsigned char*)(dest+len), &ret);
   ret += len;
+  EVP_ENCODE_CTX_free(ctx);
   return ret;
 }
 
@@ -2670,21 +2687,26 @@ int
 base64_decode(char *dest, size_t destlen, const char *src, size_t srclen)
 {
 #ifdef USE_OPENSSL_BASE64
-  EVP_ENCODE_CTX ctx;
+  EVP_ENCODE_CTX *ctx = EVP_ENCODE_CTX_new();
   int len, ret;
   /* 64 bytes of input -> *up to* 48 bytes of output.
      Plus one more byte, in case I'm wrong.
   */
-  if (destlen < ((srclen/64)+1)*49)
+  if (destlen < ((srclen/64)+1)*49) {
+    EVP_ENCODE_CTX_free(ctx);
     return -1;
-  if (destlen > SIZE_T_CEILING)
+  }
+  if (destlen > SIZE_T_CEILING) {
+    EVP_ENCODE_CTX_free(ctx);
     return -1;
+  }
 
-  EVP_DecodeInit(&ctx);
-  EVP_DecodeUpdate(&ctx, (unsigned char*)dest, &len,
+  EVP_DecodeInit(ctx);
+  EVP_DecodeUpdate(ctx, (unsigned char*)dest, &len,
                    (unsigned char*)src, srclen);
-  EVP_DecodeFinal(&ctx, (unsigned char*)dest, &ret);
+  EVP_DecodeFinal(ctx, (unsigned char*)dest, &ret);
   ret += len;
+  EVP_ENCODE_CTX_free(ctx);
   return ret;
 #else
   const char *eos = src+srclen;

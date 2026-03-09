@@ -8,6 +8,8 @@
 
 #include <boost/signals2/last_value.hpp>
 #include <boost/signals2/signal.hpp>
+#include <boost/bind/bind.hpp>
+using namespace boost::placeholders;
 
 #include <string>
 

@@ -8,6 +8,13 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+// Ensure inet_pton is available
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#elif _WIN32_WINNT < 0x0600
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
 #endif
 
 #include "onion_v3.h"
@@ -114,12 +121,6 @@ bool DecodeBase32(const std::string& encoded, std::vector<unsigned char>& decode
     }
     
     return true;
-}
-
-// Legacy function for backward compatibility
-std::string EncodeBase32(const unsigned char* data, size_t len)
-{
-    return EncodeBase32Proper(data, len);
 }
 
 // CTorV3Service Implementation
@@ -1722,7 +1723,8 @@ bool CTorV3Manager::ConnectThroughSocks5Proxy(const std::string& onionAddr, int 
         proxyAddr.sin_family = AF_INET;
         proxyAddr.sin_port = htons(proxyPort);
         
-        if (inet_pton(AF_INET, proxyHost.c_str(), &proxyAddr.sin_addr) <= 0) {
+        proxyAddr.sin_addr.s_addr = inet_addr(proxyHost.c_str());
+        if (proxyAddr.sin_addr.s_addr == INADDR_NONE) {
             printf("ERROR: Invalid SOCKS5 proxy IP address: %s\n", proxyHost.c_str());
             closesocket(hSocket);
             return false;
@@ -2004,54 +2006,6 @@ void CTorV3Manager::RequestSeederListFromPeers()
     }
 }
 
-void CTorV3Manager::HandleSeederListMessage(CNode* pfrom, const std::vector<std::string>& seederList)
-{
-    printf("Received seeder list from %s with %d entries\n", 
-           pfrom->addr.ToString().c_str(), (int)seederList.size());
-    
-    // Add new seeders to our known list
-    std::set<std::string> newSeeders;
-    
-    if (pwalletMain) {
-        CWalletDB walletdb(pwalletMain->strWalletFile);
-        
-        // Get existing seeders
-        std::string existingList;
-        walletdb.ReadSetting("known_seeders", existingList);
-        
-        std::set<std::string> existing;
-        std::stringstream ss(existingList);
-        std::string seeder;
-        while (std::getline(ss, seeder, ',')) {
-            if (!seeder.empty()) {
-                existing.insert(seeder);
-            }
-        }
-        
-        // Add new seeders
-        for (const std::string& newSeeder : seederList) {
-            if (existing.find(newSeeder) == existing.end()) {
-                existing.insert(newSeeder);
-                newSeeders.insert(newSeeder);
-                printf("Added new seeder: %s\n", newSeeder.c_str());
-            }
-        }
-        
-        // Save updated list
-        std::string updatedList;
-        for (const std::string& s : existing) {
-            if (!updatedList.empty()) updatedList += ",";
-            updatedList += s;
-        }
-        walletdb.WriteSetting("known_seeders", updatedList);
-    }
-    
-    // Auto-connect to new seeders
-    for (const std::string& newSeeder : newSeeders) {
-        ConnectToSeederNode(newSeeder);
-    }
-}
-
 void CTorV3Manager::BroadcastSeederList()
 {
     if (!torV3Config.enableSeederMode) return;
@@ -2153,9 +2107,4 @@ bool InitTorV3()
 void ShutdownTorV3()
 {
     CTorV3Manager::GetInstance()->ShutdownTor();
-}
-
-TorV3Config& GetTorV3Config()
-{
-    return torV3Config;
 }

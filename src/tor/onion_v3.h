@@ -60,7 +60,7 @@ public:
     // Ed25519 key management functions
     bool ValidateEd25519Keys(const unsigned char* privateKey, const unsigned char* publicKey);
     bool GenerateV3OnionAddress(const unsigned char* publicKey, std::string& address);
-    bool ValidateOnionAddress(const std::string& address);
+    static bool ValidateOnionAddress(const std::string& address);
     
     // Key extraction and validation
     bool ExtractKeysFromHex(const std::string& privKeyHex, unsigned char* privKey, unsigned char* pubKey);

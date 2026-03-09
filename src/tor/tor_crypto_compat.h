@@ -326,10 +326,8 @@ static inline const void* RAND_get_rand_method_compat(void) {
 
 #endif // USING_LIBRESSL || USING_LIBRESSL_3X
 
-// SHA compatibility for Tor v3 operations
-#if defined(USING_LIBRESSL) || defined(USING_LIBRESSL_3X)
+// SHA3-256 compatibility for Tor v3 operations (needed for all OpenSSL versions)
 
-// Ensure SHA3 functions are available for v3 onion address generation
 #include <openssl/sha.h>
 
 // SHA3-256 wrapper for onion address checksum calculation
@@ -337,34 +335,34 @@ static inline int SHA3_256_compat(const unsigned char *data, size_t len, unsigne
     if (!data || !md) {
         return 0;
     }
-    
+
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     if (!ctx) {
         return 0;
     }
-    
+
     const EVP_MD *sha3_256 = EVP_sha3_256();
     if (!sha3_256) {
         EVP_MD_CTX_free(ctx);
         return 0;
     }
-    
+
     if (EVP_DigestInit_ex(ctx, sha3_256, NULL) != 1) {
         EVP_MD_CTX_free(ctx);
         return 0;
     }
-    
+
     if (EVP_DigestUpdate(ctx, data, len) != 1) {
         EVP_MD_CTX_free(ctx);
         return 0;
     }
-    
+
     unsigned int md_len;
     if (EVP_DigestFinal_ex(ctx, md, &md_len) != 1) {
         EVP_MD_CTX_free(ctx);
         return 0;
     }
-    
+
     EVP_MD_CTX_free(ctx);
     return (md_len == 32) ? 1 : 0; // SHA3-256 should produce 32 bytes
 }
@@ -372,8 +370,6 @@ static inline int SHA3_256_compat(const unsigned char *data, size_t len, unsigne
 #ifndef SHA3_256
 #define SHA3_256(data, len, md) SHA3_256_compat(data, len, md)
 #endif
-
-#endif // USING_LIBRESSL || USING_LIBRESSL_3X
 
 // Ed25519 compatibility for Tor v3 key generation
 #if defined(USING_LIBRESSL) || defined(USING_LIBRESSL_3X)

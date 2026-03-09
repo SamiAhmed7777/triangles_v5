@@ -74,7 +74,7 @@
 #undef HAVE_SOCKETPAIR
 
 /* Define to 1 if you have the <stdint.h> header file. */
-#undef HAVE_STDINT_H
+#define HAVE_STDINT_H
 
 /* Define to 1 if you have the <stdlib.h> header file. */
 #define HAVE_STDLIB_H
@@ -179,25 +179,25 @@
 #define SIZEOF_INT 4
 
 /* The size of a `int16_t', as computed by sizeof. */
-#undef SIZEOF_INT16_T
+#define SIZEOF_INT16_T 2
 
 /* The size of a `int32_t', as computed by sizeof. */
-#undef SIZEOF_INT32_T
+#define SIZEOF_INT32_T 4
 
 /* The size of a `int64_t', as computed by sizeof. */
-#undef SIZEOF_INT64_T
+#define SIZEOF_INT64_T 8
 
 /* The size of a `int8_t', as computed by sizeof. */
-#undef SIZEOF_INT8_T
+#define SIZEOF_INT8_T 1
 
 /* The size of a `long', as computed by sizeof. */
 #define SIZEOF_LONG 4
 
 /* The size of a `long long', as computed by sizeof. */
-#undef SIZEOF_LONG_LONG
+#define SIZEOF_LONG_LONG 8
 
 /* The size of `pid_t', as computed by sizeof. */
-#define SIZEOF_PID_T 0
+#define SIZEOF_PID_T 4
 
 /* The size of a `short', as computed by sizeof. */
 #define SIZEOF_SHORT 2
@@ -206,25 +206,33 @@
 #define SIZEOF_TIME_T 4
 
 /* The size of a `uint16_t', as computed by sizeof. */
-#undef SIZEOF_UINT16_T
+#define SIZEOF_UINT16_T 2
 
 /* The size of a `uint32_t', as computed by sizeof. */
-#undef SIZEOF_UINT32_T
+#define SIZEOF_UINT32_T 4
 
 /* The size of a `uint64_t', as computed by sizeof. */
-#undef SIZEOF_UINT64_T
+#define SIZEOF_UINT64_T 8
 
 /* The size of a `uint8_t', as computed by sizeof. */
-#undef SIZEOF_UINT8_T
+#define SIZEOF_UINT8_T 1
 
 /* The size of a `void *', as computed by sizeof. */
+#ifdef _WIN64
+#define SIZEOF_VOID_P 8
+#else
 #define SIZEOF_VOID_P 4
+#endif
 
 /* The size of a `__int64', as computed by sizeof. */
 #define SIZEOF___INT64 8
 
 /* The sizeof a size_t, as computed by sizeof. */
+#ifdef _WIN64
+#define SIZEOF_SIZE_T 8
+#else
 #define SIZEOF_SIZE_T 4
+#endif
 
 /* Define to 1 if you have the ANSI C header files. */
 #define STDC_HEADERS
