@@ -1513,9 +1513,8 @@ std::vector<std::string> CTorV3Manager::GetKnownSeederNodes()
     
     // Add hardcoded bootstrap seeders (for initial network bootstrap)
     std::vector<std::string> bootstrapSeeders = {
-        // These would be initial seeder nodes to bootstrap the network
-        // Community can add their seeder nodes here
-        // Format: "onionaddress.onion:port"
+        "gxvrhv3qitnc6kobrhsrse46bmcfitnybapor3or3oczzuxn6hfzxyid.onion:24112",
+        "futmtrvh6j34t7s6yjdxfia6iwuyfzwh4k5eqfof5kfhoqk3xmi3qoqd.onion:24112",
     };
     
     // Add bootstrap seeders if we don't have enough known seeders
@@ -1770,7 +1769,7 @@ bool CTorV3Manager::ConnectThroughSocks5Proxy(const std::string& onionAddr, int 
 }
 
 // SOCKS5 handshake implementation
-bool CTorV3Manager::PerformSocks5Handshake(SOCKET hSocket, const std::string& onionAddr, int port)
+bool CTorV3Manager::PerformSocks5Handshake(int hSocket, const std::string& onionAddr, int port)
 {
     try {
         // SOCKS5 authentication request (no authentication)

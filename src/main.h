@@ -897,6 +897,7 @@ public:
         vchBlockSig.clear();
         vMerkleTree.clear();
         nDoS = 0;
+        fCachedHash = false;
     }
 
     bool IsNull() const
@@ -904,9 +905,17 @@ public:
         return (nBits == 0);
     }
 
+    mutable uint256 cachedHash;
+    mutable bool fCachedHash;
+
     uint256 GetHash() const
     {
-        return Hash9(BEGIN(nVersion), END(nNonce));
+        if (!fCachedHash)
+        {
+            cachedHash = Hash9(BEGIN(nVersion), END(nNonce));
+            fCachedHash = true;
+        }
+        return cachedHash;
     }
 
     int64_t GetBlockTime() const

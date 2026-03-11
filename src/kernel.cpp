@@ -352,7 +352,8 @@ bool CheckStakeKernelHash(unsigned int nBits, const CBlock& blockFrom, unsigned 
         else
         {
             //accept hash
-            printf(">>>> pindexBest->nHeight %d, Pharao release - hash accepted\n", pindexBest->nHeight);
+            if (pindexBest->nHeight % 10000 == 0 || pindexBest->nHeight > 2186900)
+                printf(">>>> pindexBest->nHeight %d, Pharao release - hash accepted\n", pindexBest->nHeight);
         }
     }
 

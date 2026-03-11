@@ -122,7 +122,7 @@ public:
     
     // SOCKS5 proxy support methods
     bool ConnectThroughSocks5Proxy(const std::string& onionAddr, int port);
-    bool PerformSocks5Handshake(SOCKET hSocket, const std::string& onionAddr, int port);
+    bool PerformSocks5Handshake(int hSocket, const std::string& onionAddr, int port);
     
     // Enhanced peer connection methods
     bool ConnectToSeederNodeWithRetry(const std::string& seederAddress, int maxRetries);

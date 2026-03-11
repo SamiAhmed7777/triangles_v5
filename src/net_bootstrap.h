@@ -30,6 +30,7 @@ namespace NetBootstrap {
         // Format: IP addresses in network byte order (little-endian)
         // For IP a.b.c.d: (d << 24) | (c << 16) | (b << 8) | a
         0xCE58E9C2, // DNS2-OpenClaw: 194.233.88.206
+        0x13A7D04A, // DNS3-Sami:     74.208.167.19
     };
 
     // Network protocol compatibility settings
@@ -51,7 +52,7 @@ namespace NetBootstrap {
         
         // Tor-specific configuration
         static const int TOR_HIDDEN_SERVICE_PORT = 24112;
-        static const char* TOR_PROXY_DEFAULT = "127.0.0.1:9050";
+        static constexpr const char* TOR_PROXY_DEFAULT = "127.0.0.1:9050";
         
         // Network timeouts and retry settings
         static const int CONNECTION_TIMEOUT_SECONDS = 30;

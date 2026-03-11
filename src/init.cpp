@@ -661,9 +661,10 @@ bool AppInit2()
     if (true) {
         if (true) {
             do {
+                // Bind to all interfaces so external peers can connect
                 CService addrBind;
-                if (!Lookup("127.0.0.1", addrBind, GetListenPort(), false))
-                    return InitError(strprintf(_("Cannot resolve binding address: '%s'"),  "127.0.0.1"));
+                if (!Lookup("0.0.0.0", addrBind, GetListenPort(), false))
+                    return InitError(strprintf(_("Cannot resolve binding address: '%s'"),  "0.0.0.0"));
                 fBound |= Bind(addrBind);
             } while (false);
         }

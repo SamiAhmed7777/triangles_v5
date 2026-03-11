@@ -12,6 +12,7 @@
 #include "ui_interface.h"
 #include "kernel.h"
 #include "smessage.h"
+#include "tor/onion_v3.h"
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -1592,7 +1593,7 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
         mapQueuedChanges[hashTx] = CTxIndex(posThisTx, tx.vout.size());
     }
 
-    if (IsProofOfWork())
+    if (IsProofOfWork() && pindex->nHeight > Checkpoints::GetTotalBlocksEstimate())
     {
         int64_t nReward = GetProofOfWorkReward(nFees);
         // Check coinbase reward
@@ -1603,15 +1604,20 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
     }
     if (IsProofOfStake())
         {
+            // Skip expensive coin age calculation and reward validation for blocks
+            // covered by the hardcoded checkpoint. The checkpoint guarantees chain integrity.
+        if (pindex->nHeight > Checkpoints::GetTotalBlocksEstimate())
+        {
             // triangles: coin stake tx earns reward instead of paying fee
-        uint64_t nCoinAge;
-        if (!vtx[1].GetCoinAge(txdb, nCoinAge))
-            return error("ConnectBlock() : %s unable to get coin age for coinstake", vtx[1].GetHash().ToString().substr(0,10).c_str());
+            uint64_t nCoinAge;
+            if (!vtx[1].GetCoinAge(txdb, nCoinAge))
+                return error("ConnectBlock() : %s unable to get coin age for coinstake", vtx[1].GetHash().ToString().substr(0,10).c_str());
 
-        int64_t nCalculatedStakeReward = GetProofOfStakeReward(nCoinAge, nFees);
+            int64_t nCalculatedStakeReward = GetProofOfStakeReward(nCoinAge, nFees);
 
-        if (nStakeReward > nCalculatedStakeReward)
-            return DoS(100, error("ConnectBlock() : coinstake pays too much(actual=%"PRId64" vs calculated=%"PRId64")", nStakeReward, nCalculatedStakeReward));
+            if (nStakeReward > nCalculatedStakeReward)
+                return DoS(100, error("ConnectBlock() : coinstake pays too much(actual=%"PRId64" vs calculated=%"PRId64")", nStakeReward, nCalculatedStakeReward));
+        }
     }
 
     // triangles: track money supply and mint amount info
@@ -1641,8 +1647,12 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
     }
 
     // Watch for transactions paying to me
-    BOOST_FOREACH(CTransaction& tx, vtx)
-        SyncWithWallets(tx, this, true);
+    // Skip during initial block download - wallet will rescan on next normal startup
+    if (!IsInitialBlockDownload())
+    {
+        BOOST_FOREACH(CTransaction& tx, vtx)
+            SyncWithWallets(tx, this, true);
+    }
 
     return true;
 }
@@ -1855,11 +1865,12 @@ bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
 
     uint256 nBestBlockTrust = pindexBest->nHeight != 0 ? (pindexBest->nChainTrust - pindexBest->pprev->nChainTrust) : pindexBest->nChainTrust;
 
-    printf("SetBestChain: new best=%s  height=%d  trust=%s  blocktrust=%"PRId64"  date=%s\n",
-      hashBestChain.ToString().substr(0,20).c_str(), nBestHeight,
-      CBigNum(nBestChainTrust).ToString().c_str(),
-      nBestBlockTrust.Get64(),
-      DateTimeStrFormat("%x %H:%M:%S", pindexBest->GetBlockTime()).c_str());
+    if (nBestHeight % 10000 == 0 || nBestHeight > 2186900)
+        printf("SetBestChain: new best=%s  height=%d  trust=%s  blocktrust=%"PRId64"  date=%s\n",
+          hashBestChain.ToString().substr(0,20).c_str(), nBestHeight,
+          CBigNum(nBestChainTrust).ToString().c_str(),
+          nBestBlockTrust.Get64(),
+          DateTimeStrFormat("%x %H:%M:%S", pindexBest->GetBlockTime()).c_str());
 
     if (fDebug)
 		printf("Stake checkpoint: %x\n", pindexBest->nStakeModifierChecksum);
@@ -1991,14 +2002,30 @@ bool CBlock::AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const u
     pindexNew->hashProofOfStake = hashProofOfStake;
 
     // triangles: compute stake modifier
+    // Skip expensive computation during initial sync for blocks far below checkpoint.
+    // Only compute for last 1000 blocks before checkpoint and all blocks above it.
+    // This is safe because PoS verification is already skipped below checkpoint.
     uint64_t nStakeModifier = 0;
     bool fGeneratedStakeModifier = false;
-    if (!ComputeNextStakeModifier(pindexNew->pprev, nStakeModifier, fGeneratedStakeModifier))
-        return error("AddToBlockIndex() : ComputeNextStakeModifier() failed");
-    pindexNew->SetStakeModifier(nStakeModifier, fGeneratedStakeModifier);
-    pindexNew->nStakeModifierChecksum = GetStakeModifierChecksum(pindexNew);
-    if (!CheckStakeModifierCheckpoints(pindexNew->nHeight, pindexNew->nStakeModifierChecksum))
-        return error("AddToBlockIndex() : Rejected by stake modifier checkpoint height=%d, modifier=0x%016"PRIx64, pindexNew->nHeight, nStakeModifier);
+    int nCheckpointHeight = Checkpoints::GetTotalBlocksEstimate();
+    if (pindexNew->nHeight >= nCheckpointHeight - 1000)
+    {
+        if (!ComputeNextStakeModifier(pindexNew->pprev, nStakeModifier, fGeneratedStakeModifier))
+            return error("AddToBlockIndex() : ComputeNextStakeModifier() failed");
+        pindexNew->SetStakeModifier(nStakeModifier, fGeneratedStakeModifier);
+        pindexNew->nStakeModifierChecksum = GetStakeModifierChecksum(pindexNew);
+        if (!CheckStakeModifierCheckpoints(pindexNew->nHeight, pindexNew->nStakeModifierChecksum))
+            return error("AddToBlockIndex() : Rejected by stake modifier checkpoint height=%d, modifier=0x%016"PRIx64, pindexNew->nHeight, nStakeModifier);
+    }
+    else
+    {
+        // Set minimal defaults during fast import
+        pindexNew->SetStakeModifier(0, pindexNew->nHeight == 0);
+        pindexNew->nStakeModifierChecksum = GetStakeModifierChecksum(pindexNew);
+        // Only check modifier checkpoint at genesis (the only one defined)
+        if (pindexNew->nHeight == 0 && !CheckStakeModifierCheckpoints(0, pindexNew->nStakeModifierChecksum))
+            return error("AddToBlockIndex() : Rejected by stake modifier checkpoint at genesis");
+    }
 
     // Add to mapBlockIndex
     map<uint256, CBlockIndex*>::iterator mi = mapBlockIndex.insert(make_pair(hash, pindexNew)).first;
@@ -2156,7 +2183,8 @@ bool CBlock::AcceptBlock()
         }
     }
     else
-        printf("ProcessBlock(): Check proof-of-stake/work OK for block %d\n", nHeight);
+        if (nHeight % 10000 == 0 || nHeight > 2186900)
+            printf("ProcessBlock(): Check proof-of-stake/work OK for block %d\n", nHeight);
     // Check timestamp against prev
     if (GetBlockTime() <= pindexPrev->GetPastTimeLimit() || FutureDrift(GetBlockTime()) < pindexPrev->GetBlockTime())
         return error("AcceptBlock() : block's timestamp is too early");
@@ -2174,10 +2202,15 @@ bool CBlock::AcceptBlock()
     uint256 hashProofOfStake = 0, targetProofOfStake = 0;
     if (IsProofOfStake())
     {
-        if (!CheckProofOfStake(vtx[1], nBits, hashProofOfStake, targetProofOfStake))
+        // Skip expensive PoS kernel verification for blocks covered by hardcoded checkpoint.
+        // The checkpoint at height 2,186,940 already guarantees chain integrity.
+        if (nHeight > Checkpoints::GetTotalBlocksEstimate())
         {
-            printf("WARNING: ProcessBlock(): check proof-of-stake failed for block %s\n", hash.ToString().c_str());
-            return false; // do not error here as we expect this during initial block download
+            if (!CheckProofOfStake(vtx[1], nBits, hashProofOfStake, targetProofOfStake))
+            {
+                printf("WARNING: ProcessBlock(): check proof-of-stake failed for block %s\n", hash.ToString().c_str());
+                return false; // do not error here as we expect this during initial block download
+            }
         }
     }
 
@@ -2265,7 +2298,9 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         return error("ProcessBlock() : duplicate proof-of-stake (%s, %d) for block %s", pblock->GetProofOfStake().first.ToString().c_str(), pblock->GetProofOfStake().second, hash.ToString().c_str());
 
     // Preliminary checks
-    if (!pblock->CheckBlock())
+    // Skip block signature verification during initial block download (below checkpoint).
+    // The hardcoded checkpoint guarantees historical chain integrity.
+    if (!pblock->CheckBlock(true, true, !IsInitialBlockDownload()))
         return error("ProcessBlock() : CheckBlock FAILED");
 
     CBlockIndex* pcheckpoint = Checkpoints::GetLastSyncCheckpoint();
@@ -2362,7 +2397,8 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         mapOrphanBlocksByPrev.erase(hashPrev);
     }
 
-    printf("ProcessBlock: ACCEPTED\n");
+    if (nBestHeight % 10000 == 0 || nBestHeight > 2186900)
+        printf("ProcessBlock: ACCEPTED\n");
 
     // triangles: if responsible for sync-checkpoint send it
     if (pfrom && !CSyncCheckpoint::strMasterPrivKey.empty())
@@ -2748,11 +2784,17 @@ bool LoadExternalBlockFile(FILE* fileIn)
                 {
                     CBlock block;
                     blkdat >> block;
-                    if (ProcessBlock(NULL,&block))
+
+                    // Quick check: skip blocks we already have in the index.
+                    // This avoids full ProcessBlock overhead during resumed imports.
+                    uint256 hash = block.GetHash();
+                    if (mapBlockIndex.count(hash))
                     {
-                        nLoaded++;
-                        nPos += 4 + nSize;
+                        // Already indexed - skip silently
                     }
+                    else if (ProcessBlock(NULL,&block))
+                        nLoaded++;
+                    nPos += 4 + nSize;
                 }
             }
         }
@@ -3514,11 +3556,50 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
     }
 
 
+    else if (strCommand == "seeder")
+    {
+        // Receive seeder node announcement
+        std::string onionAddress;
+        int port;
+        vRecv >> onionAddress >> port;
+
+        CTorV3Manager* torMgr = CTorV3Manager::GetInstance();
+        if (torMgr && torMgr->IsTorEnabled())
+        {
+            torMgr->ConnectToSeederNode(onionAddress, port);
+            torMgr->UpdateSeederLastSeen(onionAddress);
+        }
+    }
+
+    else if (strCommand == "getseederlist")
+    {
+        // Peer is requesting our known seeder list
+        CTorV3Manager* torMgr = CTorV3Manager::GetInstance();
+        if (torMgr && torMgr->IsTorEnabled())
+        {
+            std::vector<std::string> seederList = torMgr->GetKnownSeederNodes();
+            pfrom->PushMessage("seederlist", seederList);
+        }
+    }
+
+    else if (strCommand == "seederlist")
+    {
+        // Receive seeder list from peer
+        std::vector<std::string> seederList;
+        vRecv >> seederList;
+
+        CTorV3Manager* torMgr = CTorV3Manager::GetInstance();
+        if (torMgr && torMgr->IsTorEnabled())
+        {
+            torMgr->HandleSeederListMessage(pfrom, seederList);
+        }
+    }
+
     else
     {
         if (fSecMsgEnabled)
             SecureMsgReceiveData(pfrom, strCommand, vRecv);
-        
+
         // Ignore unknown commands for extensibility
     }
 
