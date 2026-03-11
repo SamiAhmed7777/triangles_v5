@@ -3563,11 +3563,12 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         int port;
         vRecv >> onionAddress >> port;
 
+        std::string seederAddr = onionAddress + ":" + std::to_string(port);
         CTorV3Manager* torMgr = CTorV3Manager::GetInstance();
         if (torMgr && torMgr->IsTorEnabled())
         {
-            torMgr->ConnectToSeederNode(onionAddress, port);
-            torMgr->UpdateSeederLastSeen(onionAddress);
+            torMgr->ConnectToSeederNode(seederAddr);
+            torMgr->UpdateSeederLastSeen(seederAddr);
         }
     }
 
