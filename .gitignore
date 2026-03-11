@@ -1,0 +1,54 @@
+# Build artifacts
+*.o
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+build/
+release/
+debug/
+Makefile.Debug
+Makefile.Release
+.qmake.stash
+
+# Qt
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+*.pro.user
+*.pro.user.*
+
+# Blockchain data
+*.dat
+*.log
+peers.dat
+wallet.dat
+*.lock
+database/
+txleveldb/
+blktree/
+chainstate/
+blocks/
+*.bak
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temp files
+*.json
+.*.json
+temp/
+tmp/
+
+# Private/Local
+triangles.conf
+*.pem
+*.key
+*.cert
+*.gpg
