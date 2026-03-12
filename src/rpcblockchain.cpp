@@ -4,7 +4,11 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include "main.h"
+#include "net.h"
 #include "trianglesrpc.h"
+#include "addressindex.h"
+#include "txdb.h"
+#include "base58.h"
 
 using namespace json_spirit;
 using namespace std;
@@ -274,6 +278,88 @@ Value getblockbynumber(const Array& params, bool fHelp)
     return blockToJSON(block, pblockindex, params.size() > 1 ? params[1].get_bool() : false);
 }
 
+Value getblockheader(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 1 || params.size() > 2)
+        throw runtime_error(
+            "getblockheader <hash> [verbose=true]\n"
+            "If verbose is false, returns hex-encoded block header.\n"
+            "If verbose is true, returns an Object with block header information.");
+
+    std::string strHash = params[0].get_str();
+    uint256 hash(strHash);
+
+    if (mapBlockIndex.count(hash) == 0)
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
+
+    CBlockIndex* pblockindex = mapBlockIndex[hash];
+
+    bool fVerbose = true;
+    if (params.size() > 1)
+        fVerbose = params[1].get_bool();
+
+    if (!fVerbose)
+    {
+        CBlock blockHeader = pblockindex->GetBlockHeader();
+        CDataStream ssBlock(SER_NETWORK, PROTOCOL_VERSION);
+        ssBlock << blockHeader;
+        return HexStr(ssBlock.begin(), ssBlock.end());
+    }
+
+    Object result;
+    result.push_back(Pair("hash", pblockindex->GetBlockHash().GetHex()));
+    result.push_back(Pair("confirmations", pindexBest->nHeight - pblockindex->nHeight + 1));
+    result.push_back(Pair("height", pblockindex->nHeight));
+    result.push_back(Pair("version", pblockindex->nVersion));
+    result.push_back(Pair("merkleroot", pblockindex->hashMerkleRoot.GetHex()));
+    result.push_back(Pair("mint", ValueFromAmount(pblockindex->nMint)));
+    result.push_back(Pair("time", (boost::int64_t)pblockindex->GetBlockTime()));
+    result.push_back(Pair("nonce", (boost::uint64_t)pblockindex->nNonce));
+    result.push_back(Pair("bits", HexBits(pblockindex->nBits)));
+    result.push_back(Pair("difficulty", GetDifficulty(pblockindex)));
+    result.push_back(Pair("blocktrust", leftTrim(pblockindex->GetBlockTrust().GetHex(), '0')));
+    result.push_back(Pair("chaintrust", leftTrim(pblockindex->nChainTrust.GetHex(), '0')));
+    result.push_back(Pair("flags", strprintf("%s%s",
+        pblockindex->IsProofOfStake() ? "proof-of-stake" : "proof-of-work",
+        pblockindex->GeneratedStakeModifier() ? " stake-modifier" : "")));
+    result.push_back(Pair("proofhash", pblockindex->IsProofOfStake() ? pblockindex->hashProofOfStake.GetHex() : pblockindex->GetBlockHash().GetHex()));
+    result.push_back(Pair("entropybit", (int)pblockindex->GetStakeEntropyBit()));
+    result.push_back(Pair("modifier", strprintf("%016"PRIx64, pblockindex->nStakeModifier)));
+    result.push_back(Pair("modifierchecksum", strprintf("%08x", pblockindex->nStakeModifierChecksum)));
+    if (pblockindex->pprev)
+        result.push_back(Pair("previousblockhash", pblockindex->pprev->GetBlockHash().GetHex()));
+    if (pblockindex->pnext)
+        result.push_back(Pair("nextblockhash", pblockindex->pnext->GetBlockHash().GetHex()));
+
+    return result;
+}
+
+Value estimatefee(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "estimatefee <nblocks>\n"
+            "Returns an estimated fee per kilobyte for a transaction to be\n"
+            "confirmed within nblocks blocks.\n"
+            "Triangles uses a static minimum fee structure.");
+
+    return ValueFromAmount(nTransactionFee > 0 ? nTransactionFee : MIN_TX_FEE);
+}
+
+Value gettxoutsetinfo(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error(
+            "gettxoutsetinfo\n"
+            "Returns statistics about the unspent transaction output set.");
+
+    Object obj;
+    obj.push_back(Pair("height", (int)nBestHeight));
+    obj.push_back(Pair("bestblock", hashBestChain.GetHex()));
+    obj.push_back(Pair("total_amount", ValueFromAmount(pindexBest->nMoneySupply)));
+    return obj;
+}
+
 // triangles: get information of sync-checkpoint
 Value getcheckpoint(const Array& params, bool fHelp)
 {
@@ -306,4 +392,209 @@ Value getcheckpoint(const Array& params, bool fHelp)
     return result;
 }
 
+Value getblockchaininfo(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error(
+            "getblockchaininfo\n"
+            "Returns an object containing various state info regarding block chain processing.");
 
+    Object obj, diff;
+    obj.push_back(Pair("chain", fTestNet ? string("test") : string("main")));
+    obj.push_back(Pair("blocks", (int)nBestHeight));
+    obj.push_back(Pair("headers", (int)nBestHeight));
+    obj.push_back(Pair("bestblockhash", hashBestChain.GetHex()));
+
+    diff.push_back(Pair("proof-of-work", GetDifficulty()));
+    diff.push_back(Pair("proof-of-stake", GetDifficulty(GetLastBlockIndex(pindexBest, true))));
+    obj.push_back(Pair("difficulty", diff));
+
+    obj.push_back(Pair("moneysupply", ValueFromAmount(pindexBest->nMoneySupply)));
+    obj.push_back(Pair("timeoffset", (boost::int64_t)GetTimeOffset()));
+    obj.push_back(Pair("connections", (int)vNodes.size()));
+    obj.push_back(Pair("errors", GetWarnings("statusbar")));
+    return obj;
+}
+
+// ============================================================================
+// Address index RPC commands
+// ============================================================================
+
+/**
+ * Helper: parse an address string and return (nType, hashBytes).
+ * Throws JSONRPCError on invalid address.
+ */
+static bool ParseAddress(const std::string& strAddr, int& nType, uint160& hashBytes)
+{
+    CTrianglesAddress addr(strAddr);
+    if (!addr.IsValid())
+        return false;
+
+    CTxDestination dest = addr.Get();
+    const CKeyID* keyId = boost::get<CKeyID>(&dest);
+    if (keyId) {
+        nType = ADDR_TYPE_P2PKH;
+        hashBytes = *keyId;
+        return true;
+    }
+    const CScriptID* scriptId = boost::get<CScriptID>(&dest);
+    if (scriptId) {
+        nType = ADDR_TYPE_P2SH;
+        hashBytes = *scriptId;
+        return true;
+    }
+    return false;
+}
+
+Value getaddressbalance(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "getaddressbalance {\"addresses\":[\"addr\",...]}\n"
+            "Returns the balance for address(es).\n"
+            "Requires -addressindex=1.\n"
+            "\nArguments:\n"
+            "1. {\"addresses\":[\"addr\",...]}  (object) JSON object with address array\n"
+            "\nResult:\n"
+            "{\n"
+            "  \"balance\"   : n,      (numeric) The current balance in satoshis\n"
+            "  \"received\"  : n       (numeric) The total received in satoshis\n"
+            "}");
+
+    if (!fAddressIndex)
+        throw JSONRPCError(RPC_MISC_ERROR, "Address index not enabled. Start with -addressindex=1");
+
+    Object addrObj = params[0].get_obj();
+    Array addrArray = find_value(addrObj, "addresses").get_array();
+
+    int64_t nTotalBalance = 0;
+
+    for (unsigned int i = 0; i < addrArray.size(); i++)
+    {
+        std::string strAddr = addrArray[i].get_str();
+        int nType;
+        uint160 hashBytes;
+        if (!ParseAddress(strAddr, nType, hashBytes))
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address: " + strAddr);
+
+        int64_t nBalance = 0;
+        CTxDB txdb("r");
+        txdb.ReadAddressBalance(nType, hashBytes, nBalance);
+        nTotalBalance += nBalance;
+    }
+
+    Object result;
+    result.push_back(Pair("balance", nTotalBalance));
+    return result;
+}
+
+Value getaddressutxos(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "getaddressutxos {\"addresses\":[\"addr\",...]}\n"
+            "Returns all unspent outputs for address(es).\n"
+            "Requires -addressindex=1.\n"
+            "\nArguments:\n"
+            "1. {\"addresses\":[\"addr\",...]}  (object) JSON object with address array\n"
+            "\nResult:\n"
+            "[{\n"
+            "  \"address\"  : \"addr\",  (string) The address\n"
+            "  \"txid\"     : \"hash\",  (string) The transaction id\n"
+            "  \"outputIndex\" : n,      (numeric) The output index\n"
+            "  \"satoshis\" : n,         (numeric) The amount in satoshis\n"
+            "  \"height\"   : n          (numeric) The block height\n"
+            "},...]");
+
+    if (!fAddressIndex)
+        throw JSONRPCError(RPC_MISC_ERROR, "Address index not enabled. Start with -addressindex=1");
+
+    Object addrObj = params[0].get_obj();
+    Array addrArray = find_value(addrObj, "addresses").get_array();
+
+    Array result;
+    CTxDB txdb("r");
+
+    for (unsigned int i = 0; i < addrArray.size(); i++)
+    {
+        std::string strAddr = addrArray[i].get_str();
+        int nType;
+        uint160 hashBytes;
+        if (!ParseAddress(strAddr, nType, hashBytes))
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address: " + strAddr);
+
+        std::vector<std::pair<COutPoint, std::pair<int64_t, int> > > vUtxos;
+        txdb.GetAddressUtxos(nType, hashBytes, vUtxos);
+
+        for (unsigned int j = 0; j < vUtxos.size(); j++)
+        {
+            Object utxo;
+            utxo.push_back(Pair("address", strAddr));
+            utxo.push_back(Pair("txid", vUtxos[j].first.hash.GetHex()));
+            utxo.push_back(Pair("outputIndex", (int)vUtxos[j].first.n));
+            utxo.push_back(Pair("satoshis", vUtxos[j].second.first));
+            utxo.push_back(Pair("height", vUtxos[j].second.second));
+            result.push_back(utxo);
+        }
+    }
+
+    return result;
+}
+
+Value getaddresstxids(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "getaddresstxids {\"addresses\":[\"addr\",...],\"start\":n,\"end\":n}\n"
+            "Returns the transaction ids for address(es).\n"
+            "Requires -addressindex=1.\n"
+            "\nArguments:\n"
+            "1. {\"addresses\":[\"addr\",...],  (object) JSON object\n"
+            "    \"start\":n,                   (numeric, optional) Start block height (default 0)\n"
+            "    \"end\":n}                     (numeric, optional) End block height (default current)\n"
+            "\nResult:\n"
+            "[\"txid\",...]  (array of strings) Transaction ids");
+
+    if (!fAddressIndex)
+        throw JSONRPCError(RPC_MISC_ERROR, "Address index not enabled. Start with -addressindex=1");
+
+    Object addrObj = params[0].get_obj();
+    Array addrArray = find_value(addrObj, "addresses").get_array();
+
+    int nStartHeight = 0;
+    int nEndHeight = nBestHeight;
+
+    Value startVal = find_value(addrObj, "start");
+    if (startVal.type() == int_type)
+        nStartHeight = startVal.get_int();
+
+    Value endVal = find_value(addrObj, "end");
+    if (endVal.type() == int_type)
+        nEndHeight = endVal.get_int();
+
+    Array result;
+    CTxDB txdb("r");
+
+    // Use a set to deduplicate txids across multiple addresses
+    std::set<uint256> setTxIds;
+
+    for (unsigned int i = 0; i < addrArray.size(); i++)
+    {
+        std::string strAddr = addrArray[i].get_str();
+        int nType;
+        uint160 hashBytes;
+        if (!ParseAddress(strAddr, nType, hashBytes))
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address: " + strAddr);
+
+        std::vector<uint256> vTxIds;
+        txdb.GetAddressTxIds(nType, hashBytes, nStartHeight, nEndHeight, vTxIds);
+
+        for (unsigned int j = 0; j < vTxIds.size(); j++)
+        {
+            if (setTxIds.insert(vTxIds[j]).second)
+                result.push_back(vTxIds[j].GetHex());
+        }
+    }
+
+    return result;
+}

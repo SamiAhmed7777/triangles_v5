@@ -170,7 +170,15 @@ OBJS= \
     obj/scrypt-x86_64.o \
     obj/smessage.o \
     obj/onion_v3.o
-    
+
+# ZMQ support (optional)
+# Build with: make -f makefile.unix USE_ZMQ=1
+ifdef USE_ZMQ
+    DEFS += -DENABLE_ZMQ
+    LIBS += -lzmq
+    OBJS += obj/zmqpublishnotifier.o
+endif
+
 all: trianglesd
 
 test check: test_triangles FORCE

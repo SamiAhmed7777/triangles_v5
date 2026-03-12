@@ -12,6 +12,28 @@
 using namespace json_spirit;
 using namespace std;
 
+Value getnetworkinfo(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error(
+            "getnetworkinfo\n"
+            "Returns an object containing various state info regarding P2P networking.");
+
+    proxyType proxy;
+    GetProxy(NET_IPV4, proxy);
+
+    Object obj;
+    obj.push_back(Pair("version",         FormatFullVersion()));
+    obj.push_back(Pair("protocolversion", (int)PROTOCOL_VERSION));
+    obj.push_back(Pair("connections",     (int)vNodes.size()));
+    obj.push_back(Pair("proxy",           (proxy.first.IsValid() ? proxy.first.ToStringIPPort() : string())));
+    obj.push_back(Pair("ip",             addrSeenByPeer.ToStringIP()));
+    obj.push_back(Pair("localservices",  strprintf("%016"PRIx64, nLocalServices)));
+    obj.push_back(Pair("testnet",        fTestNet));
+    obj.push_back(Pair("errors",         GetWarnings("statusbar")));
+    return obj;
+}
+
 Value getconnectioncount(const Array& params, bool fHelp)
 {
     if (fHelp || params.size() != 0)

@@ -12,12 +12,14 @@
 #include <leveldb/env.h>
 #include <leveldb/cache.h>
 #include <leveldb/filter_policy.h>
+#include <leveldb/iterator.h>
 #include <memenv/memenv.h>
 
 #include "kernel.h"
 #include "checkpoints.h"
 #include "txdb.h"
 #include "util.h"
+#include "addressindex.h"
 #include "main.h"
 
 using namespace std;
@@ -570,6 +572,116 @@ bool CTxDB::LoadBlockIndex()
         block.SetBestChain(txdb, pindexFork);
     }
 
+    return true;
+}
+
+// ============================================================================
+// Address index methods
+// ============================================================================
+
+bool CTxDB::ReadAddressBalance(int nType, const uint160& hashBytes, int64_t& nBalance)
+{
+    return Read(make_pair(string("addrbal"), CAddressBalanceKey(nType, hashBytes)), nBalance);
+}
+
+bool CTxDB::WriteAddressBalance(int nType, const uint160& hashBytes, int64_t nBalance)
+{
+    return Write(make_pair(string("addrbal"), CAddressBalanceKey(nType, hashBytes)), nBalance);
+}
+
+bool CTxDB::ReadAddressUtxo(int nType, const uint160& hashBytes, const uint256& txhash, int nIndex, int64_t& nValue, int& nHeight)
+{
+    CAddressUtxoValue val;
+    if (!Read(make_pair(string("addrutxo"), CAddressUtxoKey(nType, hashBytes, txhash, nIndex)), val))
+        return false;
+    nValue = val.nValue;
+    nHeight = val.nHeight;
+    return true;
+}
+
+bool CTxDB::WriteAddressUtxo(int nType, const uint160& hashBytes, const uint256& txhash, int nIndex, int64_t nValue, int nHeight, const CScript& script)
+{
+    return Write(make_pair(string("addrutxo"), CAddressUtxoKey(nType, hashBytes, txhash, nIndex)),
+                 CAddressUtxoValue(nValue, nHeight, script));
+}
+
+bool CTxDB::EraseAddressUtxo(int nType, const uint160& hashBytes, const uint256& txhash, int nIndex)
+{
+    return Erase(make_pair(string("addrutxo"), CAddressUtxoKey(nType, hashBytes, txhash, nIndex)));
+}
+
+bool CTxDB::WriteAddressTxId(int nType, const uint160& hashBytes, int nHeight, int nTxIndex, const uint256& txhash)
+{
+    return Write(make_pair(string("addrtxid"), CAddressTxIdKey(nType, hashBytes, nHeight, nTxIndex, txhash)), (char)0);
+}
+
+bool CTxDB::EraseAddressTxId(int nType, const uint160& hashBytes, int nHeight, int nTxIndex, const uint256& txhash)
+{
+    return Erase(make_pair(string("addrtxid"), CAddressTxIdKey(nType, hashBytes, nHeight, nTxIndex, txhash)));
+}
+
+bool CTxDB::GetAddressUtxos(int nType, const uint160& hashBytes, std::vector<std::pair<COutPoint, std::pair<int64_t, int> > >& vUtxos)
+{
+    vUtxos.clear();
+
+    // Build the key prefix to seek to
+    CDataStream ssKeyPrefix(SER_DISK, CLIENT_VERSION);
+    ssKeyPrefix << make_pair(string("addrutxo"), CAddressUtxoKey(nType, hashBytes, uint256(0), 0));
+    std::string strPrefixBegin = ssKeyPrefix.str();
+
+    leveldb::Iterator* it = pdb->NewIterator(leveldb::ReadOptions());
+    for (it->Seek(strPrefixBegin); it->Valid(); it->Next())
+    {
+        // Deserialize the key
+        CDataStream ssKey(it->key().data(), it->key().data() + it->key().size(), SER_DISK, CLIENT_VERSION);
+        std::string strKeyType;
+        CAddressUtxoKey utxoKey;
+        ssKey >> strKeyType;
+        if (strKeyType != "addrutxo")
+            break;
+        ssKey >> utxoKey;
+        if (utxoKey.nType != nType || utxoKey.hashBytes != hashBytes)
+            break;
+
+        // Deserialize the value
+        CDataStream ssValue(it->value().data(), it->value().data() + it->value().size(), SER_DISK, CLIENT_VERSION);
+        CAddressUtxoValue utxoValue;
+        ssValue >> utxoValue;
+
+        COutPoint outpoint(utxoKey.txhash, utxoKey.nIndex);
+        vUtxos.push_back(make_pair(outpoint, make_pair(utxoValue.nValue, utxoValue.nHeight)));
+    }
+    delete it;
+    return true;
+}
+
+bool CTxDB::GetAddressTxIds(int nType, const uint160& hashBytes, int nStartHeight, int nEndHeight, std::vector<uint256>& vTxIds)
+{
+    vTxIds.clear();
+
+    // Build the key prefix to seek to
+    CDataStream ssKeyPrefix(SER_DISK, CLIENT_VERSION);
+    ssKeyPrefix << make_pair(string("addrtxid"), CAddressTxIdKey(nType, hashBytes, nStartHeight, 0, uint256(0)));
+    std::string strPrefixBegin = ssKeyPrefix.str();
+
+    leveldb::Iterator* it = pdb->NewIterator(leveldb::ReadOptions());
+    for (it->Seek(strPrefixBegin); it->Valid(); it->Next())
+    {
+        CDataStream ssKey(it->key().data(), it->key().data() + it->key().size(), SER_DISK, CLIENT_VERSION);
+        std::string strKeyType;
+        CAddressTxIdKey txIdKey;
+        ssKey >> strKeyType;
+        if (strKeyType != "addrtxid")
+            break;
+        ssKey >> txIdKey;
+        if (txIdKey.nType != nType || txIdKey.hashBytes != hashBytes)
+            break;
+        if (txIdKey.nHeight > nEndHeight)
+            break;
+
+        vTxIds.push_back(txIdKey.txhash);
+    }
+    delete it;
     return true;
 }
 

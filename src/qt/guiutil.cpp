@@ -17,6 +17,7 @@
 #include <QClipboard>
 #include <QFileDialog>
 #include <QStandardPaths>
+#include <QDesktopServices>
 #include <QThread>
 
 #include <boost/filesystem.hpp>

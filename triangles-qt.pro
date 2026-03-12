@@ -222,6 +222,9 @@ HEADERS += src/qt/trianglesgui.h \
     src/serialize.h \
     src/strlcpy.h \
     src/smessage.h \
+    src/zmqpublishnotifier.h \
+    src/notificationqueue.h \
+    src/addressindex.h \
     src/main.h \
     src/miner.h \
     src/net.h \
@@ -354,6 +357,7 @@ SOURCES += src/qt/triangles.cpp src/qt/trianglesgui.cpp \
     src/rpcblockchain.cpp \
     src/rpcrawtransaction.cpp \
     src/rpcsmessage.cpp \
+    src/zmqpublishnotifier.cpp \
     src/qt/overviewpage.cpp \
     src/qt/csvmodelwriter.cpp \
     src/crypter.cpp \
@@ -529,6 +533,14 @@ contains(RELEASE, 1) {
         # Linux: turn dynamic linking back on for c/c++ runtime libraries
         LIBS += -Wl,-Bdynamic
     }
+}
+
+# ZMQ support (optional)
+# Build with: qmake "USE_ZMQ=1"
+contains(USE_ZMQ, 1) {
+    message(Building with ZMQ support)
+    DEFINES += ENABLE_ZMQ
+    LIBS += -lzmq
 }
 
 system($$QMAKE_LRELEASE -silent $$_PRO_FILE_)

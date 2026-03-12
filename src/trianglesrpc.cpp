@@ -10,6 +10,9 @@
 #include "base58.h"
 #include "trianglesrpc.h"
 #include "db.h"
+#include "main.h"
+#include "net.h"
+#include "notificationqueue.h"
 
 #undef printf
 #include <boost/asio.hpp>
@@ -39,6 +42,8 @@ void ThreadRPCServer2(void* parg);
 static std::string strRPCUserColonPass;
 
 const Object emptyobj;
+
+CNotificationQueue* pNotificationQueue = NULL;
 
 void ThreadRPCServer3(void* parg);
 
@@ -245,6 +250,15 @@ static const CRPCCommand vRPCCommands[] =
     { "getconnectioncount",     &getconnectioncount,     true,   false },
     { "getpeerinfo",            &getpeerinfo,            true,   false },
     { "getdifficulty",          &getdifficulty,          true,   false },
+    { "getblockheader",         &getblockheader,         true,   false },
+    { "getblockchaininfo",      &getblockchaininfo,      true,   false },
+    { "getwalletinfo",          &getwalletinfo,          true,   false },
+    { "getnetworkinfo",         &getnetworkinfo,         true,   false },
+    { "gettxoutsetinfo",        &gettxoutsetinfo,        true,   false },
+    { "estimatefee",            &estimatefee,            true,   false },
+    { "getaddressbalance",      &getaddressbalance,      true,   false },
+    { "getaddressutxos",        &getaddressutxos,        true,   false },
+    { "getaddresstxids",        &getaddresstxids,        true,   false },
     { "getinfo",                &getinfo,                true,   false },
     { "getsubsidy",             &getsubsidy,             true,   false },
     { "getmininginfo",          &getmininginfo,          true,   false },
@@ -430,10 +444,14 @@ static string HTTPReply(int nStatus, const string& strMsg, bool keepalive)
         strMsg.c_str());
 }
 
-int ReadHTTPStatus(std::basic_istream<char>& stream, int &proto)
+int ReadHTTPStatus(std::basic_istream<char>& stream, int &proto,
+                   string& strMethodHTTP, string& strURI)
 {
     string str;
     getline(stream, str);
+    // Trim trailing \r
+    if (!str.empty() && str[str.size()-1] == '\r')
+        str.resize(str.size()-1);
     vector<string> vWords;
     boost::split(vWords, str, boost::is_any_of(" "));
     if (vWords.size() < 2)
@@ -442,6 +460,15 @@ int ReadHTTPStatus(std::basic_istream<char>& stream, int &proto)
     const char *ver = strstr(str.c_str(), "HTTP/1.");
     if (ver != NULL)
         proto = atoi(ver+7);
+
+    // Detect request line (GET/POST/...) vs response line (HTTP/1.x ...)
+    if (vWords[0] == "GET" || vWords[0] == "POST" || vWords[0] == "HEAD" ||
+        vWords[0] == "PUT" || vWords[0] == "DELETE" || vWords[0] == "OPTIONS") {
+        strMethodHTTP = vWords[0];
+        strURI = vWords[1];
+        return 0; // request line, no status code
+    }
+
     return atoi(vWords[1].c_str());
 }
 
@@ -475,9 +502,14 @@ int ReadHTTP(std::basic_istream<char>& stream, map<string, string>& mapHeadersRe
     mapHeadersRet.clear();
     strMessageRet = "";
 
-    // Read status
+    // Read status/request line
     int nProto = 0;
-    int nStatus = ReadHTTPStatus(stream, nProto);
+    string strMethodHTTP, strURI;
+    int nStatus = ReadHTTPStatus(stream, nProto, strMethodHTTP, strURI);
+    if (!strMethodHTTP.empty())
+        mapHeadersRet["_method"] = strMethodHTTP;
+    if (!strURI.empty())
+        mapHeadersRet["_uri"] = strURI;
 
     // Read header
     int nLen = ReadHTTPHeader(stream, mapHeadersRet);
@@ -987,6 +1019,249 @@ static string JSONRPCExecBatch(const Array& vReq)
     return write_string(Value(ret), false) + "\n";
 }
 
+// REST API support
+extern Object blockToJSON(const CBlock& block, const CBlockIndex* blockindex, bool fPrintTransactionDetail);
+extern void TxToJSON(const CTransaction& tx, const uint256 hashBlock, json_spirit::Object& entry);
+
+static string HTTPReplyREST(int nStatus, const string& strMsg, const string& contentType = "application/json")
+{
+    const char *cStatus;
+         if (nStatus == HTTP_OK) cStatus = "OK";
+    else if (nStatus == HTTP_BAD_REQUEST) cStatus = "Bad Request";
+    else if (nStatus == HTTP_NOT_FOUND) cStatus = "Not Found";
+    else if (nStatus == HTTP_INTERNAL_SERVER_ERROR) cStatus = "Internal Server Error";
+    else cStatus = "";
+    return strprintf(
+            "HTTP/1.1 %d %s\r\n"
+            "Date: %s\r\n"
+            "Connection: close\r\n"
+            "Content-Length: %"PRIszu"\r\n"
+            "Content-Type: %s\r\n"
+            "Access-Control-Allow-Origin: *\r\n"
+            "Server: Triangles-json-rpc/%s\r\n"
+            "\r\n"
+            "%s",
+        nStatus,
+        cStatus,
+        rfc1123Time().c_str(),
+        strMsg.size(),
+        contentType.c_str(),
+        FormatFullVersion().c_str(),
+        strMsg.c_str());
+}
+
+static bool HandleRESTRequest(const string& strURI, string& strReply, string& strContentType, int& nStatus)
+{
+    // Parse: /rest/<resource>[/<param>][.format]
+    vector<string> parts;
+    string uri = strURI;
+    // Remove query string if present
+    size_t qpos = uri.find('?');
+    if (qpos != string::npos) uri = uri.substr(0, qpos);
+
+    boost::split(parts, uri, boost::is_any_of("/"));
+    // parts[0]="" parts[1]="rest" parts[2]="resource" parts[3]="param.format"
+    if (parts.size() < 3) {
+        nStatus = HTTP_NOT_FOUND;
+        strReply = "{\"error\":\"Not found\"}";
+        return true;
+    }
+
+    string resource = parts[2];
+
+    // Get param and format from last path component
+    string lastPart = parts.size() > 3 ? parts[parts.size()-1] : "";
+    string param, format = "json";
+    size_t dotPos = lastPart.rfind('.');
+    if (dotPos != string::npos) {
+        param = lastPart.substr(0, dotPos);
+        format = lastPart.substr(dotPos+1);
+    } else {
+        param = lastPart;
+    }
+
+    strContentType = (format == "hex") ? "text/plain" : "application/json";
+    nStatus = HTTP_OK;
+
+    try {
+        LOCK(cs_main);
+
+        if (resource == "chaininfo") {
+            Object obj, diff;
+            obj.push_back(Pair("chain", fTestNet ? string("test") : string("main")));
+            obj.push_back(Pair("blocks", (int)nBestHeight));
+            obj.push_back(Pair("bestblockhash", hashBestChain.GetHex()));
+            diff.push_back(Pair("proof-of-work", GetDifficulty()));
+            diff.push_back(Pair("proof-of-stake", GetDifficulty(GetLastBlockIndex(pindexBest, true))));
+            obj.push_back(Pair("difficulty", diff));
+            obj.push_back(Pair("moneysupply", ValueFromAmount(pindexBest->nMoneySupply)));
+            strReply = write_string(Value(obj), false) + "\n";
+        }
+        else if (resource == "block" && !param.empty()) {
+            uint256 hash(param);
+            if (mapBlockIndex.count(hash) == 0) {
+                nStatus = HTTP_NOT_FOUND;
+                strReply = "{\"error\":\"Block not found\"}";
+                return true;
+            }
+            CBlock block;
+            CBlockIndex* pblockindex = mapBlockIndex[hash];
+            block.ReadFromDisk(pblockindex, true);
+
+            if (format == "hex") {
+                CDataStream ssBlock(SER_NETWORK, PROTOCOL_VERSION);
+                ssBlock << block;
+                strReply = HexStr(ssBlock.begin(), ssBlock.end()) + "\n";
+            } else {
+                Object obj = blockToJSON(block, pblockindex, false);
+                strReply = write_string(Value(obj), false) + "\n";
+            }
+        }
+        else if (resource == "blockheader" && !param.empty()) {
+            uint256 hash(param);
+            if (mapBlockIndex.count(hash) == 0) {
+                nStatus = HTTP_NOT_FOUND;
+                strReply = "{\"error\":\"Block not found\"}";
+                return true;
+            }
+            CBlockIndex* pblockindex = mapBlockIndex[hash];
+            Object result;
+            result.push_back(Pair("hash", pblockindex->GetBlockHash().GetHex()));
+            result.push_back(Pair("confirmations", pindexBest->nHeight - pblockindex->nHeight + 1));
+            result.push_back(Pair("height", pblockindex->nHeight));
+            result.push_back(Pair("version", pblockindex->nVersion));
+            result.push_back(Pair("merkleroot", pblockindex->hashMerkleRoot.GetHex()));
+            result.push_back(Pair("time", (boost::int64_t)pblockindex->GetBlockTime()));
+            result.push_back(Pair("nonce", (boost::uint64_t)pblockindex->nNonce));
+            result.push_back(Pair("bits", HexBits(pblockindex->nBits)));
+            result.push_back(Pair("difficulty", GetDifficulty(pblockindex)));
+            result.push_back(Pair("flags", strprintf("%s%s",
+                pblockindex->IsProofOfStake() ? "proof-of-stake" : "proof-of-work",
+                pblockindex->GeneratedStakeModifier() ? " stake-modifier" : "")));
+            if (pblockindex->pprev)
+                result.push_back(Pair("previousblockhash", pblockindex->pprev->GetBlockHash().GetHex()));
+            if (pblockindex->pnext)
+                result.push_back(Pair("nextblockhash", pblockindex->pnext->GetBlockHash().GetHex()));
+            strReply = write_string(Value(result), false) + "\n";
+        }
+        else if (resource == "tx" && !param.empty()) {
+            uint256 hash(param);
+            CTransaction tx;
+            uint256 hashBlock = 0;
+            if (!GetTransaction(hash, tx, hashBlock))
+            {
+                nStatus = HTTP_NOT_FOUND;
+                strReply = "{\"error\":\"Transaction not found\"}";
+                return true;
+            }
+            if (format == "hex") {
+                CDataStream ssTx(SER_NETWORK, PROTOCOL_VERSION);
+                ssTx << tx;
+                strReply = HexStr(ssTx.begin(), ssTx.end()) + "\n";
+            } else {
+                Object obj;
+                obj.push_back(Pair("txid", tx.GetHash().GetHex()));
+                TxToJSON(tx, hashBlock, obj);
+                strReply = write_string(Value(obj), false) + "\n";
+            }
+        }
+        else if (resource == "blockhashbyheight" && !param.empty()) {
+            int nHeight = atoi(param.c_str());
+            if (nHeight < 0 || nHeight > nBestHeight) {
+                nStatus = HTTP_NOT_FOUND;
+                strReply = "{\"error\":\"Block height out of range\"}";
+                return true;
+            }
+            CBlockIndex* pblockindex = FindBlockByHeight(nHeight);
+            Object obj;
+            obj.push_back(Pair("blockhash", pblockindex->phashBlock->GetHex()));
+            strReply = write_string(Value(obj), false) + "\n";
+        }
+        else if (resource == "mempool") {
+            vector<uint256> vtxid;
+            mempool.queryHashes(vtxid);
+            Array a;
+            BOOST_FOREACH(const uint256& hash, vtxid)
+                a.push_back(hash.ToString());
+            strReply = write_string(Value(a), false) + "\n";
+        }
+        else {
+            nStatus = HTTP_NOT_FOUND;
+            strReply = "{\"error\":\"Unknown REST endpoint\"}";
+        }
+    }
+    catch (std::exception& e) {
+        nStatus = HTTP_INTERNAL_SERVER_ERROR;
+        strReply = strprintf("{\"error\":\"%s\"}", e.what());
+    }
+    catch (...) {
+        nStatus = HTTP_INTERNAL_SERVER_ERROR;
+        strReply = "{\"error\":\"Internal server error\"}";
+    }
+    return true;
+}
+
+/**
+ * Handle SSE (Server-Sent Events) stream connection.
+ * Keeps the HTTP connection open and streams block/tx events as they arrive.
+ * Requires authentication. Enabled with -ssenotify=1.
+ */
+static void HandleSSEConnection(AcceptedConnection* conn)
+{
+    // Send SSE headers
+    std::string strHeaders = strprintf(
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/event-stream\r\n"
+        "Cache-Control: no-cache\r\n"
+        "Connection: keep-alive\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Server: Triangles-json-rpc/%s\r\n"
+        "\r\n",
+        FormatFullVersion().c_str());
+
+    conn->stream() << strHeaders << std::flush;
+
+    // Send initial comment to confirm connection
+    conn->stream() << ": connected to Triangles SSE stream\n\n" << std::flush;
+
+    if (!pNotificationQueue)
+        return;
+
+    // Start from current position (don't replay old events)
+    uint64_t nLastId = pNotificationQueue->GetLatestId();
+
+    while (!fShutdown)
+    {
+        std::vector<std::string> vEvents;
+        pNotificationQueue->WaitForEvents(nLastId, vEvents, 15000, fShutdown);
+
+        if (fShutdown)
+            break;
+
+        // Send events
+        for (size_t i = 0; i < vEvents.size(); i++)
+        {
+            std::string strSSE = strprintf("id: %"PRIu64"\ndata: %s\n\n", nLastId - vEvents.size() + i + 1, vEvents[i].c_str());
+            try {
+                conn->stream() << strSSE << std::flush;
+            } catch (...) {
+                // Client disconnected
+                return;
+            }
+        }
+
+        // Send keepalive comment if no events (prevents proxy timeouts)
+        if (vEvents.empty())
+        {
+            try {
+                conn->stream() << ": keepalive\n\n" << std::flush;
+            } catch (...) {
+                return;
+            }
+        }
+    }
+}
+
 static CCriticalSection cs_THREAD_RPCHANDLER;
 
 void ThreadRPCServer3(void* parg)
@@ -1018,6 +1293,24 @@ void ThreadRPCServer3(void* parg)
 
         ReadHTTP(conn->stream(), mapHeaders, strRequest);
 
+        // Handle REST API requests (unauthenticated, read-only)
+        string strHTTPMethod = mapHeaders.count("_method") ? mapHeaders["_method"] : "POST";
+        string strURI = mapHeaders.count("_uri") ? mapHeaders["_uri"] : "/";
+
+        if (strHTTPMethod == "GET" && strURI.substr(0, 6) == "/rest/")
+        {
+            if (!GetBoolArg("-rest", false))
+            {
+                conn->stream() << HTTPReplyREST(HTTP_FORBIDDEN, "{\"error\":\"REST API not enabled. Start with -rest=1\"}") << std::flush;
+                break;
+            }
+            string strReply, strContentType;
+            int nRESTStatus;
+            HandleRESTRequest(strURI, strReply, strContentType, nRESTStatus);
+            conn->stream() << HTTPReplyREST(nRESTStatus, strReply, strContentType) << std::flush;
+            break;
+        }
+
         // Check authorization
         if (mapHeaders.count("authorization") == 0)
         {
@@ -1038,6 +1331,18 @@ void ThreadRPCServer3(void* parg)
         }
         if (mapHeaders["connection"] == "close")
             fRun = false;
+
+        // Handle SSE stream (authenticated, long-lived connection)
+        if (strHTTPMethod == "GET" && (strURI == "/events" || strURI == "/events/"))
+        {
+            if (!GetBoolArg("-ssenotify", false))
+            {
+                conn->stream() << HTTPReply(HTTP_FORBIDDEN, "{\"error\":\"SSE not enabled. Start with -ssenotify=1\"}", false) << std::flush;
+                break;
+            }
+            HandleSSEConnection(conn);
+            break;
+        }
 
         JSONRequest jreq;
         try
@@ -1253,6 +1558,11 @@ Array RPCConvertValues(const std::string &strMethod, const std::vector<std::stri
     if (strMethod == "signrawtransaction"     && n > 1) ConvertTo<Array>(params[1], true);
     if (strMethod == "signrawtransaction"     && n > 2) ConvertTo<Array>(params[2], true);
     if (strMethod == "keypoolrefill"          && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "getblockheader"         && n > 1) ConvertTo<bool>(params[1]);
+    if (strMethod == "estimatefee"            && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "getaddressbalance"     && n > 0) ConvertTo<Object>(params[0]);
+    if (strMethod == "getaddressutxos"       && n > 0) ConvertTo<Object>(params[0]);
+    if (strMethod == "getaddresstxids"       && n > 0) ConvertTo<Object>(params[0]);
 
     return params;
 }

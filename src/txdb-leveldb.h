@@ -202,6 +202,20 @@ public:
     bool ReadCheckpointPubKey(std::string& strPubKey);
     bool WriteCheckpointPubKey(const std::string& strPubKey);
     bool LoadBlockIndex();
+
+    // Address index methods
+    bool ReadAddressBalance(int nType, const uint160& hashBytes, int64_t& nBalance);
+    bool WriteAddressBalance(int nType, const uint160& hashBytes, int64_t nBalance);
+    bool ReadAddressUtxo(int nType, const uint160& hashBytes, const uint256& txhash, int nIndex, int64_t& nValue, int& nHeight);
+    bool WriteAddressUtxo(int nType, const uint160& hashBytes, const uint256& txhash, int nIndex, int64_t nValue, int nHeight, const CScript& script);
+    bool EraseAddressUtxo(int nType, const uint160& hashBytes, const uint256& txhash, int nIndex);
+    bool WriteAddressTxId(int nType, const uint160& hashBytes, int nHeight, int nTxIndex, const uint256& txhash);
+    bool EraseAddressTxId(int nType, const uint160& hashBytes, int nHeight, int nTxIndex, const uint256& txhash);
+
+    // Address index iteration (for RPC queries)
+    bool GetAddressUtxos(int nType, const uint160& hashBytes, std::vector<std::pair<COutPoint, std::pair<int64_t, int> > >& vUtxos);
+    bool GetAddressTxIds(int nType, const uint160& hashBytes, int nStartHeight, int nEndHeight, std::vector<uint256>& vTxIds);
+
 private:
     bool LoadBlockIndexGuts();
 };

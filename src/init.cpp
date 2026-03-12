@@ -11,6 +11,11 @@
 #include "ui_interface.h"
 #include "checkpoints.h"
 #include "smessage.h"
+#ifdef ENABLE_ZMQ
+#include "zmqpublishnotifier.h"
+#endif
+#include "notificationqueue.h"
+#include "addressindex.h"
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
 // boost/filesystem/convenience.hpp removed in modern Boost; functionality is in filesystem.hpp
@@ -147,7 +152,22 @@ void Shutdown(void* parg)
         }
 
         SecureMsgShutdown();
-        
+
+#ifdef ENABLE_ZMQ
+        if (pzmqNotifier)
+        {
+            pzmqNotifier->Shutdown();
+            delete pzmqNotifier;
+            pzmqNotifier = NULL;
+        }
+#endif
+
+        if (pNotificationQueue)
+        {
+            delete pNotificationQueue;
+            pNotificationQueue = NULL;
+        }
+
         nTransactionsUpdated++;
 //        CTxDB().Close();
         bitdb.Flush(false);
@@ -1004,6 +1024,39 @@ bool AppInit2()
     {
         printf("Warning: deferred startup thread could not be started, running inline\n");
         ThreadDeferredStartup(NULL);
+    }
+
+    // ********************************************************* Step 11.5: ZMQ notifications
+#ifdef ENABLE_ZMQ
+    {
+        std::string zmqAddr = GetArg("-zmqpubhashblock", "");
+        if (zmqAddr.empty())
+            zmqAddr = GetArg("-zmqpubhashtx", "");
+        if (zmqAddr.empty())
+            zmqAddr = GetArg("-zmqpub", "");
+        if (!zmqAddr.empty())
+        {
+            pzmqNotifier = new CZMQPublishNotifier();
+            if (!pzmqNotifier->Initialize(zmqAddr))
+            {
+                printf("ZMQ: Failed to initialize publisher on %s\n", zmqAddr.c_str());
+                delete pzmqNotifier;
+                pzmqNotifier = NULL;
+            }
+        }
+    }
+#endif
+
+    // ********************************************************* Step 11.6: Address index
+    fAddressIndex = GetBoolArg("-addressindex", false);
+    if (fAddressIndex)
+        printf("Address index enabled\n");
+
+    // ********************************************************* Step 11.7: SSE notification queue
+    if (GetBoolArg("-ssenotify", false))
+    {
+        pNotificationQueue = new CNotificationQueue();
+        printf("SSE: Notification queue initialized (connect to /events on RPC port)\n");
     }
 
     // ********************************************************* Step 12: finished
