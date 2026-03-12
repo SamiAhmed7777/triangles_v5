@@ -33,6 +33,36 @@ struct CompareValueOnly
     }
 };
 
+static CBlockIndex* GetWalletRescanStart(const CWallet& wallet)
+{
+    CBlockIndex* pindexStart = pindexGenesisBlock;
+
+    if (wallet.fFileBacked)
+    {
+        CWalletDB walletdb(wallet.strWalletFile);
+        CBlockLocator locator;
+        if (walletdb.ReadBestBlock(locator))
+        {
+            CBlockIndex* pindexLocator = locator.GetBlockIndex();
+            if (pindexLocator)
+                pindexStart = pindexLocator;
+        }
+    }
+
+    if (wallet.nTimeFirstKey > 1 && pindexBest)
+    {
+        int64_t nTimeWindowStart = wallet.nTimeFirstKey - 7200;
+        CBlockIndex* pindexBirthday = pindexBest;
+        while (pindexBirthday->pprev && pindexBirthday->GetBlockTime() > nTimeWindowStart)
+            pindexBirthday = pindexBirthday->pprev;
+
+        if (!pindexStart || pindexBirthday->nHeight < pindexStart->nHeight)
+            pindexStart = pindexBirthday;
+    }
+
+    return pindexStart ? pindexStart : pindexGenesisBlock;
+}
+
 CPubKey CWallet::GenerateNewKey()
 {
     bool fCompressed = CanSupportFeature(FEATURE_COMPRPUBKEY); // default to compressed public keys if we want 0.6.0 wallets
@@ -875,6 +905,9 @@ int CWallet::ScanForWalletTransactions(CBlockIndex* pindexStart, bool fUpdate)
         LOCK(cs_wallet);
         while (pindex)
         {
+            if (fShutdown)
+                break;
+
             // no need to read and scan block, if block was created before
             // our wallet birthday (as adjusted for block time variability)
             if (nTimeFirstKey && (pindex->nTime < (nTimeFirstKey - 7200))) {
@@ -910,54 +943,67 @@ void CWallet::ReacceptWalletTransactions()
     bool fRepeat = true;
     while (fRepeat)
     {
-        LOCK(cs_wallet);
+        if (fShutdown)
+            break;
+
         fRepeat = false;
         vector<CDiskTxPos> vMissingTx;
-        BOOST_FOREACH(PAIRTYPE(const uint256, CWalletTx)& item, mapWallet)
         {
-            CWalletTx& wtx = item.second;
-            if ((wtx.IsCoinBase() && wtx.IsSpent(0)) || (wtx.IsCoinStake() && wtx.IsSpent(1)))
-                continue;
-
-            CTxIndex txindex;
-            bool fUpdated = false;
-            if (txdb.ReadTxIndex(wtx.GetHash(), txindex))
+            LOCK(cs_wallet);
+            BOOST_FOREACH(PAIRTYPE(const uint256, CWalletTx)& item, mapWallet)
             {
-                // Update fSpent if a tx got spent somewhere else by a copy of wallet.dat
-                if (txindex.vSpent.size() != wtx.vout.size())
-                {
-                    printf("ERROR: ReacceptWalletTransactions() : txindex.vSpent.size() %"PRIszu" != wtx.vout.size() %"PRIszu"\n", txindex.vSpent.size(), wtx.vout.size());
+                if (fShutdown)
+                    break;
+
+                CWalletTx& wtx = item.second;
+                if ((wtx.IsCoinBase() && wtx.IsSpent(0)) || (wtx.IsCoinStake() && wtx.IsSpent(1)))
                     continue;
-                }
-                for (unsigned int i = 0; i < txindex.vSpent.size(); i++)
+
+                CTxIndex txindex;
+                bool fUpdated = false;
+                if (txdb.ReadTxIndex(wtx.GetHash(), txindex))
                 {
-                    if (wtx.IsSpent(i))
-                        continue;
-                    if (!txindex.vSpent[i].IsNull() && IsMine(wtx.vout[i]))
+                    // Update fSpent if a tx got spent somewhere else by a copy of wallet.dat
+                    if (txindex.vSpent.size() != wtx.vout.size())
                     {
-                        wtx.MarkSpent(i);
-                        fUpdated = true;
-                        vMissingTx.push_back(txindex.vSpent[i]);
+                        printf("ERROR: ReacceptWalletTransactions() : txindex.vSpent.size() %"PRIszu" != wtx.vout.size() %"PRIszu"\n", txindex.vSpent.size(), wtx.vout.size());
+                        continue;
+                    }
+                    for (unsigned int i = 0; i < txindex.vSpent.size(); i++)
+                    {
+                        if (wtx.IsSpent(i))
+                            continue;
+                        if (!txindex.vSpent[i].IsNull() && IsMine(wtx.vout[i]))
+                        {
+                            wtx.MarkSpent(i);
+                            fUpdated = true;
+                            vMissingTx.push_back(txindex.vSpent[i]);
+                        }
+                    }
+                    if (fUpdated)
+                    {
+                        printf("ReacceptWalletTransactions found spent coin %s SUM %s\n", FormatMoney(wtx.GetCredit()).c_str(), wtx.GetHash().ToString().c_str());
+                        wtx.MarkDirty();
+                        wtx.WriteToDisk();
                     }
                 }
-                if (fUpdated)
+                else
                 {
-                    printf("ReacceptWalletTransactions found spent coin %s SUM %s\n", FormatMoney(wtx.GetCredit()).c_str(), wtx.GetHash().ToString().c_str());
-                    wtx.MarkDirty();
-                    wtx.WriteToDisk();
+                    // Re-accept any txes of ours that aren't already in a block
+                    if (!(wtx.IsCoinBase() || wtx.IsCoinStake()))
+                        wtx.AcceptWalletTransaction(txdb);
                 }
-            }
-            else
-            {
-                // Re-accept any txes of ours that aren't already in a block
-                if (!(wtx.IsCoinBase() || wtx.IsCoinStake()))
-                    wtx.AcceptWalletTransaction(txdb);
             }
         }
         if (!vMissingTx.empty())
         {
-            // TODO: optimize this to scan just part of the block chain?
-            if (ScanForWalletTransactions(pindexGenesisBlock))
+            if (fShutdown)
+                break;
+
+            CBlockIndex* pindexStart = GetWalletRescanStart(*this);
+            if (pindexStart)
+                printf("ReacceptWalletTransactions rescanning from block %d\n", pindexStart->nHeight);
+            if (ScanForWalletTransactions(pindexStart))
                 fRepeat = true;  // Found missing transactions: re-do re-accept.
         }
     }

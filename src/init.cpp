@@ -38,6 +38,9 @@ unsigned int nDerivationMethodIndex;
 bool fUseFastIndex;
 enum Checkpoints::CPMode CheckpointsMode;
 
+static CCriticalSection cs_DeferredStartup;
+static bool fDeferredStartupRunning = false;
+
 //////////////////////////////////////////////////////////////////////////////
 //
 // Shutdown
@@ -69,6 +72,46 @@ bool ShutdownRequested()
     return fRequestShutdown;
 }
 
+void ThreadDeferredStartup(void* parg)
+{
+    // Make this thread recognisable as the deferred startup worker.
+    RenameThread("Triangles-postinit");
+
+    int64_t nTotalStart = GetTimeMillis();
+    printf("Starting deferred startup tasks...\n");
+    try
+    {
+        if (!fShutdown)
+        {
+            int64_t nStart = GetTimeMillis();
+            SecureMsgStart(fNoSmsg, GetBoolArg("-smsgscanchain"));
+            printf(" securemsg   %15"PRId64"ms\n", GetTimeMillis() - nStart);
+        }
+
+        if (!fShutdown && pwalletMain)
+        {
+            int64_t nStart = GetTimeMillis();
+            pwalletMain->ReacceptWalletTransactions();
+            printf(" reaccept    %15"PRId64"ms\n", GetTimeMillis() - nStart);
+        }
+
+        printf("Deferred startup tasks finished %"PRId64"ms\n", GetTimeMillis() - nTotalStart);
+    }
+    catch (std::exception& e)
+    {
+        PrintExceptionContinue(&e, "ThreadDeferredStartup()");
+    }
+    catch (...)
+    {
+        PrintExceptionContinue(NULL, "ThreadDeferredStartup()");
+    }
+
+    {
+        LOCK(cs_DeferredStartup);
+        fDeferredStartupRunning = false;
+    }
+}
+
 void Shutdown(void* parg)
 {
     static CCriticalSection cs_Shutdown;
@@ -90,7 +133,19 @@ void Shutdown(void* parg)
     if (fFirstThread)
     {
         fShutdown = true;
-        
+        int64_t nDeferredWaitStart = GetTimeMillis();
+        while (true)
+        {
+            bool fDeferredRunning;
+            {
+                LOCK(cs_DeferredStartup);
+                fDeferredRunning = fDeferredStartupRunning;
+            }
+            if (!fDeferredRunning || GetTimeMillis() - nDeferredWaitStart > 5000)
+                break;
+            MilliSleep(50);
+        }
+
         SecureMsgShutdown();
         
         nTransactionsUpdated++;
@@ -921,10 +976,6 @@ bool AppInit2()
            addrman.size(), GetTimeMillis() - nStart);
     
     
-    // ********************************************************* Step 10.1: startup secure messaging
-    
-    SecureMsgStart(fNoSmsg, GetBoolArg("-smsgscanchain"));
-    
     // ********************************************************* Step 11: start node
 
     if (!CheckDiskSpace())
@@ -945,6 +996,16 @@ bool AppInit2()
     if (fServer)
         NewThread(ThreadRPCServer, NULL);
 
+    {
+        LOCK(cs_DeferredStartup);
+        fDeferredStartupRunning = true;
+    }
+    if (!NewThread(ThreadDeferredStartup, NULL))
+    {
+        printf("Warning: deferred startup thread could not be started, running inline\n");
+        ThreadDeferredStartup(NULL);
+    }
+
     // ********************************************************* Step 12: finished
 
     uiInterface.InitMessage(_("Done loading"));
@@ -952,9 +1013,6 @@ bool AppInit2()
 
     if (!strErrors.str().empty())
         return InitError(strErrors.str());
-
-     // Add wallet transactions that aren't already in a block to mapTransactions
-    pwalletMain->ReacceptWalletTransactions();
 
 #if !defined(QT_GUI)
     // Loop until process is exit()ed from shutdown() function,
@@ -965,5 +1023,3 @@ bool AppInit2()
 
     return true;
 }
-
-

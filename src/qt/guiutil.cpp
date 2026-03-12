@@ -16,7 +16,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QFileDialog>
-#include <QDesktopServices>
+#include <QStandardPaths>
 #include <QThread>
 
 #include <boost/filesystem.hpp>
@@ -172,7 +172,7 @@ QString getSaveFileName(QWidget *parent, const QString &caption,
     QString myDir;
     if(dir.isEmpty()) // Default to user documents location
     {
-        myDir = QDesktopServices::storageLocation(QDesktopServices::DocumentsLocation);
+        myDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
     }
     else
     {
