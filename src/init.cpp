@@ -949,7 +949,31 @@ bool AppInit2()
         uiInterface.InitMessage(_("Rescanning..."));
         printf("Rescanning last %i blocks (from block %i)...\n", pindexBest->nHeight - pindexRescan->nHeight, pindexRescan->nHeight);
         nStart = GetTimeMillis();
-        pwalletMain->ScanForWalletTransactions(pindexRescan, true);
+        bool fScannedWithIndex = false;
+        if (GetBoolArg("-addressindex", false) && !GetBoolArg("-rescan"))
+        {
+            CTxDB txdb("r");
+            int nAddressIndexStartHeight = 0;
+            uint256 hashAddressIndexBestChain = 0;
+            if (txdb.ReadAddressIndexStartHeight(nAddressIndexStartHeight) &&
+                txdb.ReadAddressIndexBestChain(hashAddressIndexBestChain) &&
+                hashAddressIndexBestChain == hashBestChain &&
+                pindexRescan->nHeight >= nAddressIndexStartHeight)
+            {
+                int nFound = 0;
+                fScannedWithIndex = pwalletMain->ScanForWalletTransactionsFromIndex(pindexRescan, true, &nFound);
+                if (!fScannedWithIndex)
+                    printf("Indexed wallet rescan failed, falling back to full rescan.\n");
+            }
+            else
+            {
+                printf("Address index wallet rescan unavailable from block %i.\n", pindexRescan->nHeight);
+            }
+        }
+
+        if (!fScannedWithIndex)
+            pwalletMain->ScanForWalletTransactions(pindexRescan, true);
+
         printf(" rescan      %15"PRId64"ms\n", GetTimeMillis() - nStart);
     }
 

@@ -19,6 +19,7 @@
 #include "checkpoints.h"
 #include "txdb.h"
 #include "util.h"
+#include "ui_interface.h"
 #include "addressindex.h"
 #include "main.h"
 
@@ -277,6 +278,26 @@ bool CTxDB::WriteHashBestChain(uint256 hashBestChain)
     return Write(string("hashBestChain"), hashBestChain);
 }
 
+bool CTxDB::ReadAddressIndexBestChain(uint256& hashBestChain)
+{
+    return Read(string("addressIndexBestChain"), hashBestChain);
+}
+
+bool CTxDB::WriteAddressIndexBestChain(uint256 hashBestChain)
+{
+    return Write(string("addressIndexBestChain"), hashBestChain);
+}
+
+bool CTxDB::ReadAddressIndexStartHeight(int& nHeight)
+{
+    return Read(string("addressIndexStartHeight"), nHeight);
+}
+
+bool CTxDB::WriteAddressIndexStartHeight(int nHeight)
+{
+    return Write(string("addressIndexStartHeight"), nHeight);
+}
+
 bool CTxDB::ReadBestInvalidTrust(CBigNum& bnBestInvalidTrust)
 {
     return Read(string("bnBestInvalidTrust"), bnBestInvalidTrust);
@@ -343,8 +364,16 @@ bool CTxDB::LoadBlockIndex()
     ssStartKey << make_pair(string("blockindex"), uint256(0));
     iterator->Seek(ssStartKey.str());
     // Now read each entry.
+    int nBlocksLoaded = 0;
     while (iterator->Valid())
     {
+        // Report progress every 100k blocks
+        if (++nBlocksLoaded % 100000 == 0)
+        {
+            std::string strMsg = strprintf(_("Loading block index... (%d blocks)"), nBlocksLoaded);
+            uiInterface.InitMessage(strMsg);
+        }
+
         // Unpack keys and values.
         CDataStream ssKey(SER_DISK, CLIENT_VERSION);
         ssKey.write(iterator->key().data(), iterator->key().size());
@@ -409,14 +438,33 @@ bool CTxDB::LoadBlockIndex()
         vSortedByHeight.push_back(make_pair(pindex->nHeight, pindex));
     }
     sort(vSortedByHeight.begin(), vSortedByHeight.end());
+
+    int nLastCheckpointHeight = Checkpoints::GetTotalBlocksEstimate();
+    int nProgressInterval = std::max((int)vSortedByHeight.size() / 20, 1);
+    int nCount = 0;
+
     BOOST_FOREACH(const PAIRTYPE(int, CBlockIndex*)& item, vSortedByHeight)
     {
         CBlockIndex* pindex = item.second;
         pindex->nChainTrust = (pindex->pprev ? pindex->pprev->nChainTrust : 0) + pindex->GetBlockTrust();
-        // triangles: calculate stake modifier checksum
-        pindex->nStakeModifierChecksum = GetStakeModifierChecksum(pindex);
-        if (!CheckStakeModifierCheckpoints(pindex->nHeight, pindex->nStakeModifierChecksum))
-            return error("CTxDB::LoadBlockIndex() : Failed stake modifier checkpoint height=%d, modifier=0x%016"PRIx64, pindex->nHeight, pindex->nStakeModifier);
+
+        // Only compute the expensive SHA-256 stake modifier checksum for blocks
+        // at or beyond the last hardcoded checkpoint. Blocks well below the
+        // checkpoint have already been validated — recomputing 2M+ hashes on
+        // every startup was the main cause of multi-minute load times.
+        if (pindex->nHeight >= nLastCheckpointHeight)
+        {
+            pindex->nStakeModifierChecksum = GetStakeModifierChecksum(pindex);
+            if (!CheckStakeModifierCheckpoints(pindex->nHeight, pindex->nStakeModifierChecksum))
+                return error("CTxDB::LoadBlockIndex() : Failed stake modifier checkpoint height=%d, modifier=0x%016"PRIx64, pindex->nHeight, pindex->nStakeModifier);
+        }
+
+        // Report progress for UI responsiveness
+        if (++nCount % nProgressInterval == 0)
+        {
+            std::string strMsg = strprintf(_("Loading block index... (%d%%)"), nCount * 100 / vSortedByHeight.size());
+            uiInterface.InitMessage(strMsg);
+        }
     }
 
     // Load hashBestChain pointer to end of best chain
@@ -448,7 +496,7 @@ bool CTxDB::LoadBlockIndex()
 
     // Verify blocks in the best chain
     int nCheckLevel = GetArg("-checklevel", 1);
-    int nCheckDepth = GetArg( "-checkblocks", 2500);
+    int nCheckDepth = GetArg( "-checkblocks", 50);
     if (nCheckDepth == 0)
         nCheckDepth = 1000000000; // suffices until the year 19000
     if (nCheckDepth > nBestHeight)

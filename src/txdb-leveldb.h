@@ -195,6 +195,10 @@ public:
     bool WriteBlockIndex(const CDiskBlockIndex& blockindex);
     bool ReadHashBestChain(uint256& hashBestChain);
     bool WriteHashBestChain(uint256 hashBestChain);
+    bool ReadAddressIndexBestChain(uint256& hashBestChain);
+    bool WriteAddressIndexBestChain(uint256 hashBestChain);
+    bool ReadAddressIndexStartHeight(int& nHeight);
+    bool WriteAddressIndexStartHeight(int nHeight);
     bool ReadBestInvalidTrust(CBigNum& bnBestInvalidTrust);
     bool WriteBestInvalidTrust(CBigNum bnBestInvalidTrust);
     bool ReadSyncCheckpoint(uint256& hashCheckpoint);

@@ -168,6 +168,21 @@ void static SetBestChain(const CBlockLocator& loc)
         pwallet->SetBestChain(loc);
 }
 
+static bool UpdateAddressIndexSyncState(CTxDB& txdb, const CBlockIndex* pindexNew)
+{
+    if (!fAddressIndex || pindexNew == NULL)
+        return true;
+
+    int nStartHeight = 0;
+    if (!txdb.ReadAddressIndexStartHeight(nStartHeight))
+    {
+        if (!txdb.WriteAddressIndexStartHeight(pindexNew->nHeight))
+            return false;
+    }
+
+    return txdb.WriteAddressIndexBestChain(pindexNew->GetBlockHash());
+}
+
 // notify wallets about an updated transaction
 void static UpdatedTransaction(const uint256& hashTx)
 {
@@ -1898,6 +1913,8 @@ bool static Reorganize(CTxDB& txdb, CBlockIndex* pindexNew)
     }
     if (!txdb.WriteHashBestChain(pindexNew->GetBlockHash()))
         return error("Reorganize() : WriteHashBestChain failed");
+    if (!UpdateAddressIndexSyncState(txdb, pindexNew))
+        return error("Reorganize() : WriteAddressIndexBestChain failed");
 
     // Make sure it's successfully written to disk before changing memory structure
     if (!txdb.TxnCommit())
@@ -1935,7 +1952,7 @@ bool CBlock::SetBestChainInner(CTxDB& txdb, CBlockIndex *pindexNew)
     uint256 hash = GetHash();
 
     // Adding to current best branch
-    if (!ConnectBlock(txdb, pindexNew) || !txdb.WriteHashBestChain(hash))
+    if (!ConnectBlock(txdb, pindexNew) || !txdb.WriteHashBestChain(hash) || !UpdateAddressIndexSyncState(txdb, pindexNew))
     {
         txdb.TxnAbort();
         InvalidChainFound(pindexNew);
@@ -1964,6 +1981,8 @@ bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
     if (pindexGenesisBlock == NULL && hash == (!fTestNet ? hashGenesisBlockOfficial : hashGenesisBlockTestNet))
     {
         txdb.WriteHashBestChain(hash);
+        if (!UpdateAddressIndexSyncState(txdb, pindexNew))
+            return error("SetBestChain() : WriteAddressIndexBestChain failed");
         if (!txdb.TxnCommit())
             return error("SetBestChain() : TxnCommit failed");
         pindexGenesisBlock = pindexNew;
@@ -3207,7 +3226,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
              (nAskedForBlocks < 1 || vNodes.size() <= 1))
         {
             nAskedForBlocks++;
-            pfrom->PushGetBlocks(pindexBest, uint256(0));
+            pfrom->PushGetHeaders(pindexBest, uint256(0));
         }
 
         // Relay alerts
@@ -3523,6 +3542,63 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
                 break;
         }
         pfrom->PushMessage("headers", vHeaders);
+    }
+
+    else if (strCommand == "headers")
+    {
+        vector<CBlock> vHeaders;
+        vRecv >> vHeaders;
+        if (vHeaders.size() > 2000)
+        {
+            pfrom->Misbehaving(20);
+            return error("message headers size() = %"PRIszu"", vHeaders.size());
+        }
+
+        CTxDB txdb("r");
+        uint256 hashChainTip = 0;
+        int nRequested = 0;
+        BOOST_FOREACH(const CBlock& header, vHeaders)
+        {
+            if (!header.vtx.empty())
+            {
+                pfrom->Misbehaving(20);
+                return error("headers message includes transactions");
+            }
+
+            const uint256 hashHeader = header.GetHash();
+            if (mapBlockIndex.count(hashHeader))
+            {
+                hashChainTip = hashHeader;
+                continue;
+            }
+
+            if (hashChainTip != 0)
+            {
+                if (header.hashPrevBlock != hashChainTip)
+                {
+                    pfrom->Misbehaving(20);
+                    return error("non-continuous headers sequence");
+                }
+            }
+            else
+            {
+                map<uint256, CBlockIndex*>::iterator miPrev = mapBlockIndex.find(header.hashPrevBlock);
+                if (miPrev == mapBlockIndex.end())
+                    break;
+                hashChainTip = header.hashPrevBlock;
+            }
+
+            CInv inv(MSG_BLOCK, hashHeader);
+            if (!AlreadyHave(txdb, inv))
+            {
+                pfrom->AskFor(inv);
+                nRequested++;
+            }
+            hashChainTip = hashHeader;
+        }
+
+        if (nRequested > 0 && fDebug)
+            printf("requested %d blocks from headers announcement\n", nRequested);
     }
 
 
@@ -4076,7 +4152,5 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
     }
     return true;
 }
-
-
 
 

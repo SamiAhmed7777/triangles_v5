@@ -11,7 +11,10 @@
 #include "base58.h"
 #include "kernel.h"
 #include "coincontrol.h"
+#include "addressindex.h"
 #include <boost/algorithm/string/replace.hpp>
+#include <algorithm>
+#include <deque>
 
 using namespace std;
 extern unsigned int nStakeMaxAge;
@@ -61,6 +64,57 @@ static CBlockIndex* GetWalletRescanStart(const CWallet& wallet)
     }
 
     return pindexStart ? pindexStart : pindexGenesisBlock;
+}
+
+struct IndexedWalletTx
+{
+    int nHeight;
+    uint256 hashTx;
+
+    IndexedWalletTx(int nHeightIn, const uint256& hashTxIn)
+        : nHeight(nHeightIn), hashTx(hashTxIn)
+    {
+    }
+};
+
+static bool IndexedWalletTxLess(const IndexedWalletTx& a, const IndexedWalletTx& b)
+{
+    if (a.nHeight < b.nHeight)
+        return true;
+    if (a.nHeight > b.nHeight)
+        return false;
+    return a.hashTx < b.hashTx;
+}
+
+static bool GetIndexedWalletTxHeight(const CTxIndex& txindex, int& nHeight)
+{
+    CBlock block;
+    if (!block.ReadFromDisk(txindex.pos.nFile, txindex.pos.nBlockPos, false))
+        return false;
+
+    map<uint256, CBlockIndex*>::iterator mi = mapBlockIndex.find(block.GetHash());
+    if (mi == mapBlockIndex.end())
+        return false;
+
+    nHeight = (*mi).second->nHeight;
+    return true;
+}
+
+static bool ReadIndexedWalletTransaction(CTxDB& txdb, const uint256& hashTx, CTransaction& tx, CTxIndex& txindex, int& nHeight)
+{
+    if (!txdb.ReadDiskTx(hashTx, tx, txindex))
+        return false;
+    return GetIndexedWalletTxHeight(txindex, nHeight);
+}
+
+static bool ReadIndexedWalletTransaction(CTxDB& txdb, const CDiskTxPos& txPos, CTransaction& tx, CTxIndex& txindex, int& nHeight)
+{
+    tx.SetNull();
+    if (!tx.ReadFromDisk(txPos))
+        return false;
+    if (!txdb.ReadTxIndex(tx.GetHash(), txindex))
+        return false;
+    return GetIndexedWalletTxHeight(txindex, nHeight);
 }
 
 CPubKey CWallet::GenerateNewKey()
@@ -926,6 +980,152 @@ int CWallet::ScanForWalletTransactions(CBlockIndex* pindexStart, bool fUpdate)
         }
     }
     return ret;
+}
+
+bool CWallet::ScanForWalletTransactionsFromIndex(CBlockIndex* pindexStart, bool fUpdate, int* pnFound)
+{
+    int nFound = 0;
+    if (pnFound)
+        *pnFound = 0;
+    if (!pindexBest)
+        return false;
+
+    const int nStartHeight = pindexStart ? pindexStart->nHeight : 0;
+
+    set<CKeyID> setKeys;
+    GetKeys(setKeys);
+
+    set<CScriptID> setScripts;
+    {
+        LOCK(cs_KeyStore);
+        for (ScriptMap::const_iterator it = mapScripts.begin(); it != mapScripts.end(); ++it)
+            setScripts.insert((*it).first);
+    }
+
+    CTxDB txdb("r");
+    set<uint256> setSeedTxIds;
+
+    BOOST_FOREACH(const CKeyID& keyId, setKeys)
+    {
+        vector<uint256> vTxIds;
+        if (!txdb.GetAddressTxIds(ADDR_TYPE_P2PKH, keyId, nStartHeight, nBestHeight, vTxIds))
+            return false;
+        setSeedTxIds.insert(vTxIds.begin(), vTxIds.end());
+    }
+
+    BOOST_FOREACH(const CScriptID& scriptId, setScripts)
+    {
+        vector<uint256> vTxIds;
+        if (!txdb.GetAddressTxIds(ADDR_TYPE_P2SH, scriptId, nStartHeight, nBestHeight, vTxIds))
+            return false;
+        setSeedTxIds.insert(vTxIds.begin(), vTxIds.end());
+    }
+
+    vector<IndexedWalletTx> vOrderedSeedTxs;
+    BOOST_FOREACH(const uint256& hashTx, setSeedTxIds)
+    {
+        CTransaction tx;
+        CTxIndex txindex;
+        int nHeight = 0;
+        if (!ReadIndexedWalletTransaction(txdb, hashTx, tx, txindex, nHeight))
+            return false;
+        if (nHeight < nStartHeight)
+            continue;
+        vOrderedSeedTxs.push_back(IndexedWalletTx(nHeight, hashTx));
+    }
+    sort(vOrderedSeedTxs.begin(), vOrderedSeedTxs.end(), IndexedWalletTxLess);
+
+    deque<uint256> vWorkQueue;
+    set<uint256> setQueuedTxs;
+    BOOST_FOREACH(const IndexedWalletTx& indexedTx, vOrderedSeedTxs)
+    {
+        bool fExists = false;
+        {
+            LOCK(cs_wallet);
+            fExists = mapWallet.count(indexedTx.hashTx) > 0;
+        }
+        if (fExists && !fUpdate)
+            continue;
+
+        CTransaction tx;
+        CTxIndex txindex;
+        int nHeight = 0;
+        if (!ReadIndexedWalletTransaction(txdb, indexedTx.hashTx, tx, txindex, nHeight))
+            return false;
+
+        CWalletTx wtx(this, tx);
+        wtx.SetMerkleBranch();
+        if (!AddToWallet(wtx))
+            return false;
+        nFound++;
+
+        if (setQueuedTxs.insert(indexedTx.hashTx).second)
+            vWorkQueue.push_back(indexedTx.hashTx);
+    }
+
+    set<uint256> setProcessedTxs;
+    while (!vWorkQueue.empty())
+    {
+        uint256 hashTx = vWorkQueue.front();
+        vWorkQueue.pop_front();
+
+        if (!setProcessedTxs.insert(hashTx).second)
+            continue;
+
+        CWalletTx wtx;
+        {
+            LOCK(cs_wallet);
+            map<uint256, CWalletTx>::const_iterator mi = mapWallet.find(hashTx);
+            if (mi == mapWallet.end())
+                continue;
+            wtx = (*mi).second;
+        }
+
+        CTxIndex txindex;
+        if (!txdb.ReadTxIndex(hashTx, txindex))
+            continue;
+        if (txindex.vSpent.size() != wtx.vout.size())
+        {
+            printf("ERROR: ScanForWalletTransactionsFromIndex() : txindex.vSpent.size() %"PRIszu" != wtx.vout.size() %"PRIszu" for %s\n",
+                   txindex.vSpent.size(), wtx.vout.size(), hashTx.ToString().c_str());
+            continue;
+        }
+
+        for (unsigned int i = 0; i < txindex.vSpent.size(); i++)
+        {
+            if (txindex.vSpent[i].IsNull() || !IsMine(wtx.vout[i]))
+                continue;
+
+            CTransaction txSpend;
+            CTxIndex txindexSpend;
+            int nSpendHeight = 0;
+            if (!ReadIndexedWalletTransaction(txdb, txindex.vSpent[i], txSpend, txindexSpend, nSpendHeight))
+                return false;
+
+            bool fSpendExists = false;
+            {
+                LOCK(cs_wallet);
+                fSpendExists = mapWallet.count(txSpend.GetHash()) > 0;
+            }
+            if (fSpendExists && !fUpdate)
+                continue;
+
+            CWalletTx wtxSpend(this, txSpend);
+            wtxSpend.SetMerkleBranch();
+            if (!AddToWallet(wtxSpend))
+                return false;
+            nFound++;
+
+            if (setQueuedTxs.insert(txSpend.GetHash()).second)
+                vWorkQueue.push_back(txSpend.GetHash());
+        }
+    }
+
+    SetBestChain(CBlockLocator(pindexBest));
+
+    if (pnFound)
+        *pnFound = nFound;
+    return true;
 }
 
 int CWallet::ScanForWalletTransaction(const uint256& hashTx)
