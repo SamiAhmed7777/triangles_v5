@@ -507,32 +507,34 @@ bool CTorV3Service::StartOnionService()
         printf("ERROR: No onion address generated\n");
         return false;
     }
-    
+
+    // Use data directory for Tor service files
+    boost::filesystem::path serviceDir = GetDataDir() / "tor_data" / "triangles_v3";
+    boost::filesystem::create_directories(serviceDir);
+
     // Create Tor configuration for hidden service
     std::string torrcContent = strprintf(
-        "HiddenServiceDir tor_data/triangles_v3/\n"
+        "HiddenServiceDir %s\n"
         "HiddenServiceVersion 3\n"
         "HiddenServicePort %d 127.0.0.1:%d\n",
-        port, port
+        serviceDir.string().c_str(), port, port
     );
-    
+
     // Write torrc file
-    boost::filesystem::create_directories("tor_data/triangles_v3");
-    
-    std::ofstream torrcFile("tor_data/triangles_v3/torrc");
+    std::ofstream torrcFile((serviceDir / "torrc").string().c_str());
     if (torrcFile.is_open()) {
         torrcFile << torrcContent;
         torrcFile.close();
     }
-    
+
     // Write private key
-    std::ofstream keyFile("tor_data/triangles_v3/hs_ed25519_secret_key");
+    std::ofstream keyFile((serviceDir / "hs_ed25519_secret_key").string().c_str());
     if (keyFile.is_open()) {
         keyFile << "== ed25519v1-secret: type0 ==\n";
         keyFile << privateKey << "\n";
         keyFile.close();
     }
-    
+
     isActive = true;
     printf("Started V3 onion service on %s:%d\n", onionAddress.c_str(), port);
     return true;
@@ -1097,7 +1099,7 @@ CTorV3Manager* CTorV3Manager::GetInstance()
 
 CTorV3Manager::CTorV3Manager() : torEnabled(false), torDataDir("tor_data")
 {
-    LoadTorV3Config();
+    // Config is loaded via LoadTorV3Config() before InitTorV3() is called
 }
 
 CTorV3Manager::~CTorV3Manager()
@@ -1108,16 +1110,19 @@ CTorV3Manager::~CTorV3Manager()
 bool CTorV3Manager::InitializeTor()
 {
     printf("Initializing Tor V3 support...\n");
-    
+
+    // Use configured data directory (set by init.cpp to GetDataDir()/tor_data)
+    torDataDir = torV3Config.torDataDirectory;
+
     // Create tor data directory
     boost::filesystem::create_directories(torDataDir);
-    
+
     torEnabled = true;
-    
+
     if (torV3Config.enableHiddenService) {
         return CreateWalletHiddenService(torV3Config.hiddenServicePort);
     }
-    
+
     return true;
 }
 
@@ -1962,21 +1967,21 @@ void CTorV3Manager::UpdateDiscoveryStats(int connected, int attempted)
 // Load Tor V3 configuration
 bool LoadTorV3Config()
 {
-    // Set default values
-    torV3Config.enableTor = GetBoolArg("-tor", false);
-    torV3Config.enableHiddenService = GetBoolArg("-torhiddenservice", false);
+    // Tor V3 identity is innate to Triangles — enabled by default
+    torV3Config.enableTor = GetBoolArg("-tor", true);
+    torV3Config.enableHiddenService = GetBoolArg("-torhiddenservice", true);
     torV3Config.enableSeederMode = GetBoolArg("-torseeder", false);
-    torV3Config.hiddenServicePort = GetArg("-torhiddenserviceport", 19112);
-    torV3Config.torDataDirectory = GetArg("-tordatadir", "tor_data");
+    torV3Config.hiddenServicePort = GetArg("-torhiddenserviceport", GetDefaultPort());
+    torV3Config.torDataDirectory = GetArg("-tordatadir", (GetDataDir() / "tor_data").string());
     torV3Config.socksProxy = GetArg("-torproxy", "127.0.0.1:9050");
     torV3Config.maxConnections = GetArg("-tormaxconnections", 8);
-    
+
     printf("Loaded Tor V3 configuration: enabled=%s, hidden_service=%s, seeder=%s, proxy=%s\n",
            torV3Config.enableTor ? "true" : "false",
-           torV3Config.enableHiddenService ? "true" : "false", 
+           torV3Config.enableHiddenService ? "true" : "false",
            torV3Config.enableSeederMode ? "true" : "false",
            torV3Config.socksProxy.c_str());
-    
+
     return true;
 }
 

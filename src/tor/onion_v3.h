@@ -149,11 +149,11 @@ struct TorV3Config
     int maxConnections;
     std::vector<std::string> trustedOnionPeers;
     
-    TorV3Config() : 
-        enableTor(false),
-        enableHiddenService(false), 
+    TorV3Config() :
+        enableTor(true),
+        enableHiddenService(true),
         enableSeederMode(false),
-        hiddenServicePort(19112),
+        hiddenServicePort(24112),
         torDataDirectory("tor_data"),
         socksProxy("127.0.0.1:9050"),
         maxConnections(8) {}

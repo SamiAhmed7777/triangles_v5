@@ -11,6 +11,7 @@
 #include "ui_interface.h"
 #include "checkpoints.h"
 #include "smessage.h"
+#include "tor/onion_v3.h"
 #ifdef ENABLE_ZMQ
 #include "zmqpublishnotifier.h"
 #endif
@@ -152,6 +153,7 @@ void Shutdown(void* parg)
         }
 
         SecureMsgShutdown();
+        ShutdownTorV3();
 
 #ifdef ENABLE_ZMQ
         if (pzmqNotifier)
@@ -748,14 +750,8 @@ bool AppInit2()
     }
 
 
-    // start up tor
-    if (!(mapArgs.count("-tor") && mapArgs["-tor"] != "0")) {
-      if (!NewThread(StartTor, NULL))
-        InitError(_("Error: could not start tor"));
-    }
-
-    wait_initialized();
-
+    // Release the old Tor initialization mutex (no longer blocking on embedded Tor)
+    set_initialized();
 
     if (mapArgs.count("-externalip"))
     {
@@ -765,25 +761,8 @@ bool AppInit2()
                 return InitError(strprintf(_("Cannot resolve -externalip address: '%s'"), strAddr.c_str()));
             AddLocal(CService(strAddr, GetListenPort(), fNameLookup), LOCAL_MANUAL);
         }
-    } else { 
-        string automatic_onion;
-        fs::path const hostname_path = GetDataDir(
-        ) / "onion" / "hostname";
-        if (
-            !fs::exists(
-                hostname_path
-            )
-        ) {
-            return InitError(strprintf(_("No external address found. %s"), hostname_path.string().c_str()));
-        }
-        ifstream file(
-            hostname_path.string(
-            ).c_str(
-            )
-        );
-        file >> automatic_onion;
-        AddLocal(CService(automatic_onion, GetListenPort(), fNameLookup), LOCAL_MANUAL);
     }
+    // Tor V3 onion address is registered after wallet loads (Step 8.5)
 
     if (mapArgs.count("-reservebalance")) // triangles: reserve balance amount
     {
@@ -975,6 +954,42 @@ bool AppInit2()
             pwalletMain->ScanForWalletTransactions(pindexRescan, true);
 
         printf(" rescan      %15"PRId64"ms\n", GetTimeMillis() - nStart);
+    }
+
+    // ********************************************************* Step 8.5: initialize Tor V3 identity
+    {
+        uiInterface.InitMessage(_("Initializing Tor V3 identity..."));
+        printf("Initializing Tor V3 onion identity...\n");
+
+        // Tor V3 identity is innate to Triangles — always enabled
+        LoadTorV3Config();
+        TorV3Config& torConfig = GetTorV3Config();
+        torConfig.enableTor = true;
+        torConfig.enableHiddenService = true;
+        torConfig.hiddenServicePort = GetListenPort();
+        torConfig.torDataDirectory = (GetDataDir() / "tor_data").string();
+
+        if (InitTorV3()) {
+            string onionAddr = CTorV3Manager::GetInstance()->GetWalletOnionAddress();
+            if (!onionAddr.empty()) {
+                // Write onion/hostname for compatibility with existing code paths
+                fs::path onionDir = GetDataDir() / "onion";
+                fs::create_directories(onionDir);
+                ofstream hostnameFile((onionDir / "hostname").string().c_str());
+                if (hostnameFile.is_open()) {
+                    hostnameFile << onionAddr << endl;
+                    hostnameFile.close();
+                }
+
+                // Register onion address as local address for peer discovery
+                AddLocal(CService(onionAddr, GetListenPort(), fNameLookup), LOCAL_MANUAL);
+                printf("Tor V3 identity: %s\n", onionAddr.c_str());
+            } else {
+                printf("WARNING: Tor V3 initialized but no onion address available\n");
+            }
+        } else {
+            printf("WARNING: Failed to initialize Tor V3 identity\n");
+        }
     }
 
     // ********************************************************* Step 9: import blocks
