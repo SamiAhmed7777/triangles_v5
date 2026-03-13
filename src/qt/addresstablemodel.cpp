@@ -7,6 +7,7 @@
 
 #include <QFont>
 #include <QColor>
+#include <QTimer>
 
 const QString AddressTableModel::Send = "S";
 const QString AddressTableModel::Receive = "R";
@@ -145,7 +146,7 @@ AddressTableModel::AddressTableModel(CWallet *wallet, WalletModel *parent) :
 {
     columns << tr("Label") << tr("Address");
     priv = new AddressTablePriv(wallet, this);
-    priv->refreshAddressTable();
+    QTimer::singleShot(0, this, SLOT(refreshAddressTable()));
 }
 
 AddressTableModel::~AddressTableModel()
@@ -324,6 +325,12 @@ void AddressTableModel::updateEntry(const QString &address, const QString &label
 {
     // Update address book model from Triangles core
     priv->updateEntry(address, label, isMine, status);
+}
+
+void AddressTableModel::refreshAddressTable()
+{
+    priv->refreshAddressTable();
+    reset();
 }
 
 QString AddressTableModel::addRow(const QString &type, const QString &label, const QString &address, int addressType)

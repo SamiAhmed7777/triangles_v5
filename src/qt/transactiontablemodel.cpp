@@ -225,8 +225,7 @@ TransactionTableModel::TransactionTableModel(CWallet* wallet, WalletModel *paren
         cachedNumBlocks(0)
 {
     columns << QString() << tr("Date") << tr("Type") << tr("Address") << tr("Amount");
-
-    priv->refreshWallet();
+    QTimer::singleShot(0, this, SLOT(refreshWallet()));
 
     QTimer *timer = new QTimer(this);
     connect(timer, SIGNAL(timeout()), this, SLOT(updateConfirmations()));
@@ -248,8 +247,17 @@ void TransactionTableModel::updateTransaction(const QString &hash, int status)
     priv->updateWallet(updated, status);
 }
 
+void TransactionTableModel::refreshWallet()
+{
+    priv->refreshWallet();
+    reset();
+}
+
 void TransactionTableModel::updateConfirmations()
 {
+    if(!priv->size())
+        return;
+
     if(nBestHeight != cachedNumBlocks)
     {
         cachedNumBlocks = nBestHeight;

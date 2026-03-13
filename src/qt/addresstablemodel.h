@@ -89,6 +89,7 @@ signals:
     void defaultAddressChanged(const QString &address);
 
 public slots:
+    void refreshAddressTable();
     /* Update address list from core.
      */
     void updateEntry(const QString &address, const QString &label, bool isMine, int status);

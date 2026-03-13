@@ -180,6 +180,7 @@ public slots:
 
 
 private slots:
+    void ensureMessageModel();
 
     void menuFileRequested();
     void menuOperationsRequested();

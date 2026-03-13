@@ -95,6 +95,7 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     ui(new Ui::MainWindow),
     clientModel(0),
     walletModel(0),
+    messageModel(0),
     encryptWalletAction(0),
     changePassphraseAction(0),
     unlockWalletAction(0),
@@ -594,6 +595,9 @@ void TrianglesGUI::setWalletModel(WalletModel *walletModel)
 
         // Ask for passphrase if needed
         connect(walletModel, SIGNAL(requireUnlock()), this, SLOT(unlockWallet()));
+
+        // Load secure messaging after the main window can render.
+        QTimer::singleShot(1000, this, SLOT(ensureMessageModel()));
     }
 }
 
@@ -612,6 +616,14 @@ void TrianglesGUI::setMessageModel(MessageModel *messageModel)
         connect(messageModel, SIGNAL(rowsInserted(QModelIndex,int,int)),
                 this, SLOT(incomingMessage(QModelIndex,int,int)));
     }
+}
+
+void TrianglesGUI::ensureMessageModel()
+{
+    if(messageModel || !walletModel)
+        return;
+
+    setMessageModel(new MessageModel(pwalletMain, walletModel, this));
 }
 
 void TrianglesGUI::createTrayIcon()
@@ -1025,6 +1037,8 @@ void TrianglesGUI::gotoSendCoinsPage()
 
 void TrianglesGUI::gotoMessagePage()
 {
+    ensureMessageModel();
+
     messageAction->setChecked(true);
     centralWidget->setCurrentWidget(messagePage);
 

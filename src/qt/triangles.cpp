@@ -5,7 +5,6 @@
 #include "clientmodel.h"
 #include "walletmodel.h"
 #include "optionsmodel.h"
-#include "messagemodel.h"
 #include "guiutil.h"
 #include "guiconstants.h"
 
@@ -224,16 +223,11 @@ int main(int argc, char *argv[])
                 // Put this in a block, so that the Model objects are cleaned up before
                 // calling Shutdown().
 
-                if (splashref)
-                    splash.finish(&window);
-
                 ClientModel clientModel(&optionsModel);
                 WalletModel walletModel(pwalletMain, &optionsModel);
-                MessageModel messageModel(pwalletMain, &walletModel);
 
                 window.setClientModel(&clientModel);
                 window.setWalletModel(&walletModel);
-                window.setMessageModel(&messageModel);
 
                 // If -min option passed, start window minimized.
                 if(GetBoolArg("-min"))
@@ -244,6 +238,9 @@ int main(int argc, char *argv[])
                 {
                     window.show();
                 }
+
+                if (splashref)
+                    splash.finish(&window);
 
                 // Place this here as guiref has to be defined if we don't want to lose URIs
                 ipcInit(argc, argv);

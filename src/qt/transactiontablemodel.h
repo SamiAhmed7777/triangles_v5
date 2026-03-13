@@ -77,6 +77,7 @@ private:
     QVariant txAddressDecoration(const TransactionRecord *wtx) const;
 
 public slots:
+    void refreshWallet();
     void updateTransaction(const QString &hash, int status);
     void updateConfirmations();
     void updateDisplayUnit();
