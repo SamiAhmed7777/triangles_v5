@@ -124,16 +124,10 @@ public:
                                                       received_datetime,
                                                       (char*)&msg.vchMessage[0]),
                                     true);
-                } else
-                {
-                    printf("refreshMessageTable: outbox decrypt failed (err %d) for addr %s\n", decryptResult, smsgStored.sAddrOutbox.c_str());
                 }
             };
 
             delete it;
-
-            printf("refreshMessageTable: inbox %u found, %u decrypted; outbox %u found, %u decrypted\n",
-                   nInbox, nInboxDecrypted, nOutbox, nOutboxDecrypted);
         }
     }
 
