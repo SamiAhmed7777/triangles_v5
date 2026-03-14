@@ -889,7 +889,96 @@ Value smsgbuckets(const Array& params, bool fHelp)
         result.push_back(Pair("result", "Unknown Mode."));
         result.push_back(Pair("expected", "[stats|dump]."));
     };
-    
+
+
+    return result;
+};
+
+Value smsgbroadcast(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 2)
+        throw runtime_error(
+            "smsgbroadcast <addrFrom> <message>\n"
+            "Send an encrypted message to all known public keys in the smsgDB.\n"
+            "Returns the number of recipients and any failures.");
+
+    if (!fSecMsgEnabled)
+        throw runtime_error("Secure messaging is disabled.");
+
+    if (pwalletMain->IsLocked())
+        throw runtime_error("Wallet is locked.");
+
+    std::string addrFrom = params[0].get_str();
+    std::string msg      = params[1].get_str();
+
+    // Validate sender address
+    CTrianglesAddress coinAddrFrom(addrFrom);
+    if (!coinAddrFrom.IsValid())
+        throw runtime_error("Invalid from address.");
+
+    Object result;
+    uint32_t nSent = 0;
+    uint32_t nFailed = 0;
+    Array failures;
+
+    {
+        LOCK(cs_smsgDB);
+
+        SecMsgDB dbPub;
+        if (!dbPub.Open("r"))
+            throw runtime_error("Could not open smsgDB.");
+
+        // Iterate all "pk" entries
+        std::string sPrefix("pk");
+        leveldb::Iterator* it = dbPub.pdb->NewIterator(leveldb::ReadOptions());
+        for (it->Seek(sPrefix); it->Valid(); it->Next())
+        {
+            std::string key = it->key().ToString();
+            if (key.size() < 2 || key[0] != 'p' || key[1] != 'k')
+                break;
+
+            // Deserialize the CKeyID from the key (after "pk" prefix)
+            CDataStream ssKey(key.data(), key.data() + key.size(), SER_DISK, CLIENT_VERSION);
+            char prefix[2];
+            ssKey >> prefix[0];
+            ssKey >> prefix[1];
+            CKeyID ckidTo;
+            ssKey >> ckidTo;
+
+            // Convert CKeyID to address string
+            CTrianglesAddress addrTo(ckidTo);
+            if (!addrTo.IsValid())
+                continue;
+
+            std::string sAddrTo = addrTo.ToString();
+
+            // Skip sending to self
+            if (sAddrTo == addrFrom)
+                continue;
+
+            std::string sError;
+            if (SecureMsgSend(addrFrom, sAddrTo, msg, sError) != 0)
+            {
+                nFailed++;
+                Object objFail;
+                objFail.push_back(Pair("address", sAddrTo));
+                objFail.push_back(Pair("error", sError));
+                failures.push_back(objFail);
+            } else
+            {
+                nSent++;
+            }
+        }
+        delete it;
+    }
+
+    char cbuf[256];
+    snprintf(cbuf, sizeof(cbuf), "Broadcast sent to %u recipients, %u failed.", nSent, nFailed);
+    result.push_back(Pair("result", std::string(cbuf)));
+    result.push_back(Pair("sent", (int)nSent));
+    result.push_back(Pair("failed", (int)nFailed));
+    if (nFailed > 0)
+        result.push_back(Pair("failures", failures));
 
     return result;
 };

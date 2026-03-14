@@ -47,7 +47,7 @@ public:
     void refreshMessageTable()
     {
         cachedMessageTable.clear();
-        
+
         if (parent->getWalletModel()->getEncryptionStatus() == WalletModel::Locked)
         {
             // -- messages are stored encrypted, can't load them without the private keys
@@ -84,7 +84,7 @@ public:
 
                     sent_datetime    .setTime_t(msg.timestamp);
                     received_datetime.setTime_t(smsgStored.timeReceived);
-                    
+
                     memcpy(&vchKey[0], chKey, 18);
 
                     addMessageEntry(MessageTableEntry(vchKey,
@@ -112,7 +112,7 @@ public:
 
                     sent_datetime    .setTime_t(msg.timestamp);
                     received_datetime.setTime_t(smsgStored.timeReceived);
-                    
+
                     memcpy(&vchKey[0], chKey, 18);
 
                     addMessageEntry(MessageTableEntry(vchKey,
@@ -124,10 +124,16 @@ public:
                                                       received_datetime,
                                                       (char*)&msg.vchMessage[0]),
                                     true);
+                } else
+                {
+                    printf("refreshMessageTable: outbox decrypt failed (err %d) for addr %s\n", decryptResult, smsgStored.sAddrOutbox.c_str());
                 }
             };
 
             delete it;
+
+            printf("refreshMessageTable: inbox %u found, %u decrypted; outbox %u found, %u decrypted\n",
+                   nInbox, nInboxDecrypted, nOutbox, nOutboxDecrypted);
         }
     }
 

@@ -336,6 +336,7 @@ static const CRPCCommand vRPCCommands[] =
     { "smsginbox",              &smsginbox,              false,  false},
     { "smsgoutbox",             &smsgoutbox,             false,  false},
     { "smsgbuckets",            &smsgbuckets,            false,  false},
+    { "smsgbroadcast",          &smsgbroadcast,          false,  false},
     
     
     
