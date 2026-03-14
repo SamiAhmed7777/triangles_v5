@@ -6,9 +6,9 @@
 //
 
 // These need to be macros, as version.cpp's and triangles-qt.rc's voodoo requires it
-#define CLIENT_VERSION_MAJOR       4
-#define CLIENT_VERSION_MINOR       2
-#define CLIENT_VERSION_REVISION    1
+#define CLIENT_VERSION_MAJOR       5
+#define CLIENT_VERSION_MINOR       1
+#define CLIENT_VERSION_REVISION    3
 #define CLIENT_VERSION_BUILD       0
 
 // Converts the parameter X to a string after macro replacement on X has been performed.
