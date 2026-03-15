@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>triangles</id>
+    <version>5.1.4</version>
+    <title>Cryptographic Triangles</title>
+    <authors>Cryptographic Triangles Team</authors>
+    <owners>SamiAhmed7777</owners>
+    <projectUrl>https://cryptographic-triangles.org</projectUrl>
+    <projectSourceUrl>https://github.com/SamiAhmed7777/triangles_v5</projectSourceUrl>
+    <bugTrackerUrl>https://github.com/SamiAhmed7777/triangles_v5/issues</bugTrackerUrl>
+    <licenseUrl>https://github.com/SamiAhmed7777/triangles_v5/blob/master/COPYING</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <tags>crypto cryptocurrency wallet blockchain staking privacy tor triangles</tags>
+    <summary>Privacy-focused cryptocurrency wallet with PoS staking, Tor v3, and encrypted messaging.</summary>
+    <description>
+Cryptographic Triangles (TRI) is a privacy-focused cryptocurrency featuring
+Proof-of-Stake consensus with 33% annual staking rewards, Tor v3 onion routing,
+and built-in encrypted peer-to-peer messaging. Originally launched in July 2014,
+featuring the unique Hash9 algorithm (13-step hash cascade).
+
+## Features
+- Proof-of-Stake with 33% annual staking rewards
+- Hash9 algorithm (13-step hash cascade)
+- Encrypted peer-to-peer messaging
+- Tor v3 integration for anonymous transactions
+    </description>
+    <releaseNotes>https://github.com/SamiAhmed7777/triangles_v5/releases/tag/v5.1.4</releaseNotes>
+  </metadata>
+</package>
