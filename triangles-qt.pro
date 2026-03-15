@@ -506,6 +506,7 @@ macx:TARGET = "Triangles-Qt"
 macx:QMAKE_CFLAGS_THREAD += -pthread
 macx:QMAKE_LFLAGS_THREAD += -pthread
 macx:QMAKE_CXXFLAGS_THREAD += -pthread
+macx:QMAKE_CXXFLAGS += -Wno-reserved-user-defined-literal -Wno-deprecated-declarations
 
 # Set libraries and includes at end, to use platform-defined defaults if not overridden
 #$$join(ADDITIONAL_LIBS_PATH,,-L,)
