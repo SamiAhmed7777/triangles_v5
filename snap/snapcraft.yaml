@@ -1,0 +1,85 @@
+name: triangles
+base: core22
+version: '5.1.4'
+summary: Cryptographic Triangles (TRI) cryptocurrency wallet
+description: |
+  Privacy-focused cryptocurrency featuring Proof-of-Stake consensus,
+  Tor v3 onion routing, and built-in encrypted messaging.
+
+  Features:
+  - Proof-of-Stake with 33% annual staking rewards
+  - Hash9 algorithm (13-step hash cascade)
+  - Encrypted peer-to-peer messaging
+  - Tor v3 integration for anonymous transactions
+
+  Website: https://cryptographic-triangles.org
+
+grade: stable
+confinement: strict
+license: MIT
+icon: snap/gui/triangles.png
+
+architectures:
+  - build-on: amd64
+
+apps:
+  triangles-qt:
+    command: bin/triangles-qt
+    desktop: share/applications/triangles-qt.desktop
+    plugs:
+      - desktop
+      - desktop-legacy
+      - wayland
+      - x11
+      - opengl
+      - network
+      - network-bind
+      - home
+      - removable-media
+    environment:
+      DISABLE_WAYLAND: 1
+
+  trianglesd:
+    command: bin/trianglesd
+    daemon: simple
+    plugs:
+      - network
+      - network-bind
+      - home
+    install-mode: disable
+
+parts:
+  triangles:
+    plugin: dump
+    source: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.1.4/triangles-qt-linux
+    source-type: file
+    organize:
+      triangles-qt-linux: bin/triangles-qt
+    stage-packages:
+      - libqt5widgets5
+      - libqt5gui5
+      - libqt5core5a
+      - libqt5network5
+      - libssl3
+      - libdb5.3++
+      - libboost-system1.74.0
+      - libboost-filesystem1.74.0
+      - libboost-program-options1.74.0
+      - libboost-thread1.74.0
+      - libboost-chrono1.74.0
+      - libevent-2.1-7
+      - libminiupnpc17
+      - tor
+
+  trianglesd:
+    plugin: dump
+    source: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.1.4/trianglesd-linux
+    source-type: file
+    organize:
+      trianglesd-linux: bin/trianglesd
+
+  desktop-entry:
+    plugin: dump
+    source: snap/gui
+    organize:
+      triangles-qt.desktop: share/applications/triangles-qt.desktop

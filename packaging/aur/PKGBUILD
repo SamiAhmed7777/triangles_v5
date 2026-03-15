@@ -1,0 +1,28 @@
+# Maintainer: Cryptographic Triangles Team
+pkgname=triangles-qt-bin
+pkgver=5.1.4
+pkgrel=1
+pkgdesc="Cryptographic Triangles (TRI) cryptocurrency wallet - Qt GUI"
+arch=('x86_64')
+url="https://cryptographic-triangles.org"
+license=('MIT')
+depends=('qt5-base' 'openssl' 'boost-libs' 'db' 'leveldb' 'libevent' 'miniupnpc' 'tor')
+optdepends=('tor: anonymous networking support')
+provides=('triangles-qt' 'trianglesd')
+conflicts=('triangles-qt' 'trianglesd')
+source=(
+    "triangles-qt-${pkgver}::https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${pkgver}/triangles-qt-linux"
+    "trianglesd-${pkgver}::https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${pkgver}/trianglesd-linux"
+    "triangles-qt.desktop"
+)
+sha256sums=(
+    '19eaadfdf18b899ce8434fe714e690e2db0546597e36037de37a29854fc23aeb'
+    '6f5c19d34a2e1f6cdadee095d9e11b25d18b41a0d1602a163ffca7ec80b3da37'
+    'SKIP'
+)
+
+package() {
+    install -Dm755 "triangles-qt-${pkgver}" "${pkgdir}/usr/bin/triangles-qt"
+    install -Dm755 "trianglesd-${pkgver}" "${pkgdir}/usr/bin/trianglesd"
+    install -Dm644 "triangles-qt.desktop" "${pkgdir}/usr/share/applications/triangles-qt.desktop"
+}

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Cryptographic Triangles
+GenericName=TRI Wallet
+Comment=Cryptographic Triangles cryptocurrency wallet
+Exec=triangles-qt %u
+Terminal=false
+Type=Application
+Icon=${SNAP}/snap/gui/triangles.png
+MimeType=x-scheme-handler/triangles;
+Categories=Finance;Network;P2P;Qt;
+StartupNotify=true
+StartupWMClass=triangles-qt

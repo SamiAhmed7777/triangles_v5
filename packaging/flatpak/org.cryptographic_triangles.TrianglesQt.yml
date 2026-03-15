@@ -1,0 +1,38 @@
+app-id: org.cryptographic_triangles.TrianglesQt
+runtime: org.kde.Platform
+runtime-version: '5.15-23.08'
+sdk: org.kde.Sdk
+command: triangles-qt
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=x11
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --filesystem=home
+  - --device=dri
+  - --talk-name=org.freedesktop.Notifications
+
+modules:
+  - name: triangles-qt
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 triangles-qt-linux /app/bin/triangles-qt
+      - install -Dm644 triangles-qt.desktop /app/share/applications/org.cryptographic_triangles.TrianglesQt.desktop
+    sources:
+      - type: file
+        url: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.1.4/triangles-qt-linux
+        sha256: 19eaadfdf18b899ce8434fe714e690e2db0546597e36037de37a29854fc23aeb
+        dest-filename: triangles-qt-linux
+      - type: file
+        path: triangles-qt.desktop
+
+  - name: trianglesd
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 trianglesd-linux /app/bin/trianglesd
+    sources:
+      - type: file
+        url: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.1.4/trianglesd-linux
+        sha256: 6f5c19d34a2e1f6cdadee095d9e11b25d18b41a0d1602a163ffca7ec80b3da37
+        dest-filename: trianglesd-linux
