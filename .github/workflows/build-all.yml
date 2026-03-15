@@ -109,7 +109,7 @@ jobs:
           set -eo pipefail
           cd src
           mkdir -p obj
-          make -f makefile.mingw DEPSDIR=/mingw64 -j$(nproc) 2>&1
+          make -f makefile.mingw DEPSDIR=/mingw64 all -j$(nproc) 2>&1
           strip --strip-all trianglesd.exe
           cp trianglesd.exe ../trianglesd.exe
 

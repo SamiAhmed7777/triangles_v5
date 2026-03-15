@@ -136,6 +136,8 @@ OBJS= \
     obj/smessage.o \
     obj/onion_v3.o
 
+all: trianglesd.exe
+
 LIBS += $(CURDIR)/leveldb/libleveldb.a $(CURDIR)/leveldb/libmemenv.a
 DEFS += $(addprefix -I,$(CURDIR)/leveldb/include)
 DEFS += $(addprefix -I,$(CURDIR)/leveldb/helpers)
@@ -203,8 +205,6 @@ obj/net_bootstrap.o: net_bootstrap.cpp
 	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
             -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
 	rm -f $(@:%.o=%.d)
-
-all: trianglesd.exe
 
 trianglesd.exe: $(OBJS:obj/%=obj/%) obj/anonymize.o
 	$(LINK) $(xCXXFLAGS) -o $@ $^ $(xLDFLAGS) $(LIBS)
