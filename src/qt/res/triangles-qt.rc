@@ -18,14 +18,14 @@ BEGIN
     BEGIN
         BLOCK "040904E4" // U.S. English - multilingual (hex)
         BEGIN
-            VALUE "CompanyName",        "Triangles"
-            VALUE "FileDescription",    "Triangles-Qt (OSS GUI client for Triangles)"
+            VALUE "CompanyName",        "Cryptographic Triangles"
+            VALUE "FileDescription",    "Cryptographic Triangles Qt Wallet"
             VALUE "FileVersion",        VER_FILEVERSION_STR
-            VALUE "InternalName",       "Triangles-qt"
-            VALUE "LegalCopyright",     "2014-2015 Triangles Team, 2012-2015 PPCoin developers, 2009-2015 The Bitcoin developers"
+            VALUE "InternalName",       "triangles-qt"
+            VALUE "LegalCopyright",     "2014-2026 Cryptographic Triangles Team, 2012-2015 PPCoin developers, 2009-2015 The Bitcoin developers"
             VALUE "LegalTrademarks1",   "Distributed under the MIT/X11 software license, see the accompanying file COPYING or http://www.opensource.org/licenses/mit-license.php."
-            VALUE "OriginalFilename",   "triangled-qt.exe"
-            VALUE "ProductName",        "Triangles-Qt"
+            VALUE "OriginalFilename",   "triangles-qt.exe"
+            VALUE "ProductName",        "Cryptographic Triangles"
             VALUE "ProductVersion",     VER_PRODUCTVERSION_STR
         END
     END

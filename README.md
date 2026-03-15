@@ -1,4 +1,4 @@
-# Triangles (TRI) - v5.0.0.0 "Black Pharao"
+# Cryptographic Triangles (TRI) - v5.1.3
 
 Triangles is a privacy-focused cryptocurrency featuring Proof-of-Stake consensus, Tor v3 onion routing, and built-in encrypted messaging. Originally launched in July 2014, the chain was revived in March 2026 after being frozen since December 2022.
 

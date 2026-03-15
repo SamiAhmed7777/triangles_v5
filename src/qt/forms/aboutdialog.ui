@@ -591,7 +591,7 @@ QDialog {
             <number>2</number>
            </property>
            <property name="text">
-            <string>About Triangles</string>
+            <string>About Cryptographic Triangles</string>
            </property>
           </widget>
          </item>
@@ -808,7 +808,7 @@ QPushButton:hover {
              <cursorShape>IBeamCursor</cursorShape>
             </property>
             <property name="text">
-             <string notr="true">&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Copyright © 2009-2015 The Bitcoin developers&lt;br/&gt;Copyright © 2014-2015 Triangles team&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+             <string notr="true">&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Copyright © 2009-2015 The Bitcoin developers&lt;br/&gt;Copyright © 2014-2026 Cryptographic Triangles team&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
             </property>
             <property name="textFormat">
              <enum>Qt::RichText</enum>
