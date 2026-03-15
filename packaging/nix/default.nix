@@ -14,7 +14,7 @@
 }:
 
 let
-  version = "5.1.4";
+  version = "5.1.5";
 
   desktopItem = makeDesktopItem {
     name = "triangles-qt";
