@@ -675,7 +675,6 @@ void TrianglesGUI::createTrayIconMenu()
 #endif
 }
 
-#ifndef Q_OS_MAC
 void TrianglesGUI::trayIconActivated(QSystemTrayIcon::ActivationReason reason)
 {
     if(reason == QSystemTrayIcon::Trigger)
@@ -684,7 +683,6 @@ void TrianglesGUI::trayIconActivated(QSystemTrayIcon::ActivationReason reason)
         toggleHideAction->trigger();
     }
 }
-#endif
 
 void TrianglesGUI::saveWindowGeometry()
 {
