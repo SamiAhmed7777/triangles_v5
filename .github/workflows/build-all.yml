@@ -27,12 +27,16 @@ jobs:
           install: >-
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-qt5-base
+            mingw-w64-x86_64-qt5-tools
             mingw-w64-x86_64-boost
             mingw-w64-x86_64-openssl
             mingw-w64-x86_64-db
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-miniupnpc
             make
+
+      - name: Clean stale build artifacts
+        run: rm -rf build/*.o build/*.h
 
       - name: Build LevelDB
         run: |
@@ -42,7 +46,7 @@ jobs:
 
       - name: Run qmake
         run: |
-          qmake triangles-qt.pro "RELEASE=1"
+          /mingw64/bin/qmake triangles-qt.pro "RELEASE=1"
 
       - name: Build
         run: |
@@ -88,14 +92,12 @@ jobs:
             mingw-w64-x86_64-miniupnpc
             make
 
-      - name: Build daemon
+      - name: Build and strip daemon
         run: |
           cd src
           mkdir -p obj
           make -f makefile.mingw -j$(nproc)
-
-      - name: Strip binary
-        run: strip --strip-all src/trianglesd.exe
+          strip --strip-all trianglesd.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -118,8 +120,12 @@ jobs:
       - name: Build LevelDB
         run: |
           cd src/leveldb
+          chmod +x build_detect_platform
           make clean || true
           make OPT="-O2" libleveldb.a libmemenv.a
+
+      - name: Clean stale build artifacts
+        run: rm -rf build/*.o
 
       - name: Run qmake
         run: qmake triangles-qt.pro "RELEASE=1"
@@ -150,6 +156,13 @@ jobs:
           sudo apt-get install -y build-essential libboost-all-dev \
             libssl-dev libdb++-dev libleveldb-dev libevent-dev libminiupnpc-dev
 
+      - name: Build LevelDB
+        run: |
+          cd src/leveldb
+          chmod +x build_detect_platform
+          make clean || true
+          make OPT="-O2" libleveldb.a libmemenv.a
+
       - name: Build daemon
         run: |
           cd src
@@ -176,6 +189,9 @@ jobs:
       - name: Install dependencies
         run: |
           brew install qt@5 openssl@3 boost berkeley-db@5 leveldb libevent miniupnpc
+
+      - name: Clean stale build artifacts
+        run: rm -rf build/*.o build/*.h
 
       - name: Build LevelDB
         run: |
