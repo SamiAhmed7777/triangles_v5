@@ -9,7 +9,7 @@
 
 // Define to 1 if you have a definition for fdatasync() in <unistd.h>.
 #if !defined(HAVE_FDATASYNC)
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__APPLE__)
 #define HAVE_FDATASYNC 0
 #else
 #define HAVE_FDATASYNC 1
