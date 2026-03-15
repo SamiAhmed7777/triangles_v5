@@ -1,0 +1,136 @@
+name: Build macOS
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-13  # Intel runner (x86_64)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install qt@5 openssl@3 boost berkeley-db@5 leveldb libevent miniupnpc
+
+      - name: Build LevelDB
+        run: |
+          cd src/leveldb
+          make clean || true
+          CC=clang CXX=clang++ make OPT="-O2" libleveldb.a libmemenv.a
+
+      - name: Run qmake
+        run: |
+          export PATH="/usr/local/opt/qt@5/bin:$PATH"
+          qmake triangles-qt.pro -spec macx-clang \
+            "BOOST_INCLUDE_PATH=/usr/local/opt/boost/include" \
+            "BOOST_LIB_PATH=/usr/local/opt/boost/lib" \
+            "BDB_INCLUDE_PATH=/usr/local/opt/berkeley-db@5/include" \
+            "BDB_LIB_PATH=/usr/local/opt/berkeley-db@5/lib" \
+            "BDB_LIB_SUFFIX=" \
+            "OPENSSL_INCLUDE_PATH=/usr/local/opt/openssl@3/include" \
+            "OPENSSL_LIB_PATH=/usr/local/opt/openssl@3/lib" \
+            "MINIUPNPC_INCLUDE_PATH=/usr/local/opt/miniupnpc/include" \
+            "MINIUPNPC_LIB_PATH=/usr/local/opt/miniupnpc/lib" \
+            "EVENT_INCLUDE_PATH=/usr/local/opt/libevent/include" \
+            "EVENT_LIB_PATH=/usr/local/opt/libevent/lib" \
+            "RELEASE=1"
+
+      - name: Build
+        run: |
+          export PATH="/usr/local/opt/qt@5/bin:$PATH"
+          make -j$(sysctl -n hw.ncpu)
+
+      - name: Create .app bundle
+        run: |
+          export PATH="/usr/local/opt/qt@5/bin:$PATH"
+          macdeployqt Triangles-Qt.app -verbose=1
+
+      - name: Create DMG
+        run: |
+          mkdir -p dmg_contents
+          cp -R Triangles-Qt.app dmg_contents/
+          ln -s /Applications dmg_contents/Applications
+          hdiutil create -volname "Cryptographic Triangles" \
+            -srcfolder dmg_contents \
+            -ov -format UDZO \
+            "Cryptographic-Triangles-v${{ github.ref_name }}-macos-x64.dmg"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: "*.dmg"
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.dmg"
+
+  build-macos-arm:
+    runs-on: macos-14  # Apple Silicon runner (ARM64)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install qt@5 openssl@3 boost berkeley-db@5 leveldb libevent miniupnpc
+
+      - name: Build LevelDB
+        run: |
+          cd src/leveldb
+          make clean || true
+          CC=clang CXX=clang++ make OPT="-O2" libleveldb.a libmemenv.a
+
+      - name: Run qmake
+        run: |
+          export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
+          qmake triangles-qt.pro -spec macx-clang \
+            "BOOST_INCLUDE_PATH=/opt/homebrew/opt/boost/include" \
+            "BOOST_LIB_PATH=/opt/homebrew/opt/boost/lib" \
+            "BDB_INCLUDE_PATH=/opt/homebrew/opt/berkeley-db@5/include" \
+            "BDB_LIB_PATH=/opt/homebrew/opt/berkeley-db@5/lib" \
+            "BDB_LIB_SUFFIX=" \
+            "OPENSSL_INCLUDE_PATH=/opt/homebrew/opt/openssl@3/include" \
+            "OPENSSL_LIB_PATH=/opt/homebrew/opt/openssl@3/lib" \
+            "MINIUPNPC_INCLUDE_PATH=/opt/homebrew/opt/miniupnpc/include" \
+            "MINIUPNPC_LIB_PATH=/opt/homebrew/opt/miniupnpc/lib" \
+            "EVENT_INCLUDE_PATH=/opt/homebrew/opt/libevent/include" \
+            "EVENT_LIB_PATH=/opt/homebrew/opt/libevent/lib" \
+            "RELEASE=1"
+
+      - name: Build
+        run: |
+          export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
+          make -j$(sysctl -n hw.ncpu)
+
+      - name: Create .app bundle
+        run: |
+          export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
+          macdeployqt Triangles-Qt.app -verbose=1
+
+      - name: Create DMG
+        run: |
+          mkdir -p dmg_contents
+          cp -R Triangles-Qt.app dmg_contents/
+          ln -s /Applications dmg_contents/Applications
+          hdiutil create -volname "Cryptographic Triangles" \
+            -srcfolder dmg_contents \
+            -ov -format UDZO \
+            "Cryptographic-Triangles-v${{ github.ref_name }}-macos-arm64.dmg"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-dmg
+          path: "*.dmg"
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.dmg"
