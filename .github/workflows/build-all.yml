@@ -1,0 +1,260 @@
+name: Build All Platforms
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  VERSION: "5.1.4"
+
+jobs:
+  build-windows-qt:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-qt5-base
+            mingw-w64-x86_64-boost
+            mingw-w64-x86_64-openssl
+            mingw-w64-x86_64-db
+            mingw-w64-x86_64-libevent
+            mingw-w64-x86_64-miniupnpc
+            make
+
+      - name: Build LevelDB
+        run: |
+          cd src/leveldb
+          make clean || true
+          CC=gcc CXX=g++ TARGET_OS=OS_WINDOWS_CROSSCOMPILE make OPT="-fno-keep-inline-dllexport -march=nocona -msahf -mtune=generic -Wa,-mbig-obj -O2" libleveldb.a libmemenv.a
+
+      - name: Run qmake
+        run: |
+          qmake triangles-qt.pro "RELEASE=1"
+
+      - name: Build
+        run: |
+          make -j$(nproc)
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp release/triangles-qt.exe dist/
+          windeployqt dist/triangles-qt.exe || true
+          # Copy runtime DLLs
+          for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do
+            cp /mingw64/bin/$dll dist/ 2>/dev/null || true
+          done
+
+      - name: Strip binary
+        run: strip --strip-all dist/triangles-qt.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-qt
+          path: dist/
+
+  build-windows-daemon:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-boost
+            mingw-w64-x86_64-openssl
+            mingw-w64-x86_64-db
+            mingw-w64-x86_64-libevent
+            mingw-w64-x86_64-miniupnpc
+            make
+
+      - name: Build daemon
+        run: |
+          cd src
+          mkdir -p obj
+          make -f makefile.mingw -j$(nproc)
+
+      - name: Strip binary
+        run: strip --strip-all src/trianglesd.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-daemon
+          path: src/trianglesd.exe
+
+  build-linux-qt:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential qt5-qmake qtbase5-dev \
+            libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
+            libevent-dev libminiupnpc-dev
+
+      - name: Build LevelDB
+        run: |
+          cd src/leveldb
+          make clean || true
+          make OPT="-O2" libleveldb.a libmemenv.a
+
+      - name: Run qmake
+        run: qmake triangles-qt.pro "RELEASE=1"
+
+      - name: Build
+        run: make -j$(nproc)
+
+      - name: Strip binary
+        run: strip --strip-all triangles-qt
+
+      - name: Rename
+        run: mv triangles-qt Cryptographic-Triangles-v${VERSION}-linux-x64-qt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-qt
+          path: Cryptographic-Triangles-v*-linux-x64-qt
+
+  build-linux-daemon:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libboost-all-dev \
+            libssl-dev libdb++-dev libleveldb-dev libevent-dev libminiupnpc-dev
+
+      - name: Build daemon
+        run: |
+          cd src
+          mkdir -p obj
+          make -f makefile.unix -j$(nproc)
+
+      - name: Strip binary
+        run: strip --strip-all src/trianglesd
+
+      - name: Rename
+        run: mv src/trianglesd Cryptographic-Triangles-v${VERSION}-linux-x64-daemon
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-daemon
+          path: Cryptographic-Triangles-v*-linux-x64-daemon
+
+  build-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install qt@5 openssl@3 boost berkeley-db@5 leveldb libevent miniupnpc
+
+      - name: Build LevelDB
+        run: |
+          cd src/leveldb
+          chmod +x build_detect_platform
+          make clean || true
+          CC=clang CXX=clang++ make OPT="-O2" libleveldb.a libmemenv.a
+
+      - name: Run qmake
+        run: |
+          export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
+          qmake triangles-qt.pro -spec macx-clang \
+            "BOOST_INCLUDE_PATH=/opt/homebrew/opt/boost/include" \
+            "BOOST_LIB_PATH=/opt/homebrew/opt/boost/lib" \
+            "BDB_INCLUDE_PATH=/opt/homebrew/opt/berkeley-db@5/include" \
+            "BDB_LIB_PATH=/opt/homebrew/opt/berkeley-db@5/lib" \
+            "BDB_LIB_SUFFIX=" \
+            "OPENSSL_INCLUDE_PATH=/opt/homebrew/opt/openssl@3/include" \
+            "OPENSSL_LIB_PATH=/opt/homebrew/opt/openssl@3/lib" \
+            "MINIUPNPC_INCLUDE_PATH=/opt/homebrew/opt/miniupnpc/include" \
+            "MINIUPNPC_LIB_PATH=/opt/homebrew/opt/miniupnpc/lib" \
+            "EVENT_INCLUDE_PATH=/opt/homebrew/opt/libevent/include" \
+            "EVENT_LIB_PATH=/opt/homebrew/opt/libevent/lib" \
+            "RELEASE=1"
+
+      - name: Build
+        run: |
+          export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
+          make -j$(sysctl -n hw.ncpu)
+
+      - name: Create .app bundle
+        run: |
+          export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
+          macdeployqt Triangles-Qt.app -verbose=1
+
+      - name: Create DMG
+        run: |
+          mkdir -p dmg_contents
+          cp -R Triangles-Qt.app dmg_contents/
+          ln -s /Applications dmg_contents/Applications
+          hdiutil create -volname "Cryptographic Triangles" \
+            -srcfolder dmg_contents \
+            -ov -format UDZO \
+            "Cryptographic-Triangles-v${VERSION}-macos-arm64.dmg"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-dmg
+          path: "*.dmg"
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows-qt, build-windows-daemon, build-linux-qt, build-linux-daemon, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          # Windows
+          cd artifacts/windows-qt && zip -r ../../release/Cryptographic-Triangles-${VERSION}-win-x64.zip . && cd ../..
+          cp artifacts/windows-qt/triangles-qt.exe release/Cryptographic-Triangles-${VERSION}-win-x64-qt.exe
+          cp artifacts/windows-daemon/trianglesd.exe release/Cryptographic-Triangles-${VERSION}-win-x64-daemon.exe
+          # Linux
+          cp artifacts/linux-qt/Cryptographic-Triangles-* release/
+          cp artifacts/linux-daemon/Cryptographic-Triangles-* release/
+          # macOS
+          cp artifacts/macos-arm64-dmg/*.dmg release/
+          ls -la release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
