@@ -98,12 +98,18 @@ jobs:
             mingw-w64-x86_64-miniupnpc
             make
 
+      - name: Build LevelDB
+        run: |
+          cd src/leveldb
+          make clean || true
+          CC=gcc CXX=g++ TARGET_OS=OS_WINDOWS_CROSSCOMPILE make OPT="-fno-keep-inline-dllexport -march=nocona -msahf -mtune=generic -Wa,-mbig-obj -O2" libleveldb.a libmemenv.a
+
       - name: Build daemon
         run: |
+          set -eo pipefail
           cd src
           mkdir -p obj
-          make -f makefile.mingw DEPSDIR=/mingw64 -j$(nproc)
-          ls -la trianglesd.exe
+          make -f makefile.mingw DEPSDIR=/mingw64 -j$(nproc) 2>&1
           strip --strip-all trianglesd.exe
           cp trianglesd.exe ../trianglesd.exe
 
