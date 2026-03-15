@@ -35,6 +35,12 @@ jobs:
             mingw-w64-x86_64-miniupnpc
             make
 
+      - name: Create Qt5 tool symlinks
+        run: |
+          ln -sf /mingw64/bin/qmake-qt5.exe /mingw64/bin/qmake.exe 2>/dev/null || true
+          ln -sf /mingw64/bin/lrelease-qt5.exe /mingw64/bin/lrelease.exe 2>/dev/null || true
+          ln -sf /mingw64/bin/windeployqt-qt5.exe /mingw64/bin/windeployqt.exe 2>/dev/null || true
+
       - name: Clean stale build artifacts
         run: rm -rf build/*.o build/*.h
 
@@ -46,7 +52,7 @@ jobs:
 
       - name: Run qmake
         run: |
-          qmake-qt5 triangles-qt.pro "RELEASE=1"
+          qmake triangles-qt.pro "RELEASE=1"
 
       - name: Build
         run: |
@@ -56,7 +62,7 @@ jobs:
         run: |
           mkdir -p dist
           cp release/triangles-qt.exe dist/
-          windeployqt-qt5 dist/triangles-qt.exe || true
+          windeployqt dist/triangles-qt.exe || true
           # Copy runtime DLLs
           for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do
             cp /mingw64/bin/$dll dist/ 2>/dev/null || true
@@ -97,15 +103,15 @@ jobs:
           cd src
           mkdir -p obj
           make -f makefile.mingw DEPSDIR=/mingw64 -j$(nproc)
-
-      - name: Strip daemon
-        run: strip --strip-all src/trianglesd.exe
+          ls -la trianglesd.exe
+          strip --strip-all trianglesd.exe
+          cp trianglesd.exe ../trianglesd.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-daemon
-          path: src/trianglesd.exe
+          path: trianglesd.exe
 
   build-linux-qt:
     runs-on: ubuntu-22.04
