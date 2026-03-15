@@ -1,0 +1,220 @@
+# Copyright (c) 2009-2010 Satoshi Nakamoto
+# Distributed under the MIT/X11 software license, see the accompanying
+# file COPYING or http://www.opensource.org/licenses/mit-license.php.
+#
+# Windows (MSYS2 MinGW64) makefile for trianglesd headless daemon
+
+USE_UPNP:=1
+USE_IPV6:=1
+
+CXX=g++
+CC=gcc
+LINK=$(CXX)
+
+DEPSDIR=C:/msys64/mingw64
+
+DEFS=-DBOOST_SPIRIT_THREADSAFE -DBOOST_THREAD_USE_LIB -DBOOST_BIND_GLOBAL_PLACEHOLDERS -DWIN32 -D__NO_SYSTEM_INCLUDES
+
+DEFS += $(addprefix -I,$(CURDIR) $(CURDIR)/tor $(CURDIR)/obj \
+    $(DEPSDIR)/include)
+
+LIBS = $(addprefix -L,$(DEPSDIR)/lib)
+
+# libevent
+LIBS += -levent
+
+LMODE = dynamic
+LMODE2 = dynamic
+ifdef STATIC
+	LMODE = static
+	ifeq (${STATIC}, all)
+		LMODE2 = static
+	endif
+endif
+
+LIBS += \
+ -lboost_filesystem-mt \
+ -lboost_program_options-mt \
+ -lboost_thread-mt \
+ -lboost_chrono-mt \
+ -ldb_cxx \
+ -lssl \
+ -lcrypto \
+ -levent
+
+ifndef USE_UPNP
+	override USE_UPNP = -
+endif
+ifneq (${USE_UPNP}, -)
+	LIBS += -lminiupnpc -liphlpapi
+	DEFS += -DUSE_UPNP=$(USE_UPNP) -DSTATICLIB -DMINIUPNP_STATICLIB
+endif
+
+ifneq (${USE_IPV6}, -)
+	DEFS += -DUSE_IPV6=$(USE_IPV6)
+endif
+
+# Windows-specific libraries
+LIBS += \
+ -lws2_32 \
+ -lshlwapi \
+ -lmswsock \
+ -lole32 \
+ -loleaut32 \
+ -luuid \
+ -lgdi32 \
+ -lcrypt32 \
+ -lz \
+ -lpthread
+
+# Hardening
+HARDENING=-fno-stack-protector
+HARDENING+=-fstack-protector-all -Wstack-protector
+HARDENING+=-D_FORTIFY_SOURCE=2
+
+DEBUGFLAGS=-g
+
+xCXXFLAGS=-O2 -pthread -Wall -Wextra -Wno-ignored-qualifiers -Wformat -Wformat-security -Wno-unused-parameter \
+    -Wno-deprecated-declarations -Wno-reserved-user-defined-literal \
+    -Wa,-mbig-obj \
+    $(DEBUGFLAGS) $(DEFS) $(HARDENING) $(CXXFLAGS)
+
+xLDFLAGS=-static -static-libgcc -static-libstdc++ $(LDFLAGS)
+
+OBJS= \
+    obj/fugue.o \
+    obj/hamsi.o \
+    obj/hamsi_helper.o \
+    obj/groestl.o \
+    obj/blake.o \
+    obj/bmw.o \
+    obj/skein.o \
+    obj/keccak.o \
+    obj/shavite.o \
+    obj/jh.o \
+    obj/luffa.o \
+    obj/cubehash.o \
+    obj/echo.o \
+    obj/simd.o \
+    obj/aes_helper.o \
+    obj/alert.o \
+    obj/version.o \
+    obj/checkpoints.o \
+    obj/netbase.o \
+    obj/addrman.o \
+    obj/crypter.o \
+    obj/key.o \
+    obj/db.o \
+    obj/init.o \
+    obj/irc.o \
+    obj/keystore.o \
+    obj/miner.o \
+    obj/main.o \
+    obj/net.o \
+    obj/net_bootstrap.o \
+    obj/protocol.o \
+    obj/trianglesrpc.o \
+    obj/rpcdump.o \
+    obj/rpcnet.o \
+    obj/rpcmining.o \
+    obj/rpcwallet.o \
+    obj/rpcblockchain.o \
+    obj/rpcrawtransaction.o \
+    obj/rpcsmessage.o \
+    obj/script.o \
+    obj/sync.o \
+    obj/util.o \
+    obj/wallet.o \
+    obj/walletdb.o \
+    obj/noui.o \
+    obj/kernel.o \
+    obj/pbkdf2.o \
+    obj/scrypt.o \
+    obj/scrypt-arm.o \
+    obj/scrypt-x86.o \
+    obj/scrypt-x86_64.o \
+    obj/smessage.o \
+    obj/onion_v3.o
+
+LIBS += $(CURDIR)/leveldb/libleveldb.a $(CURDIR)/leveldb/libmemenv.a
+DEFS += $(addprefix -I,$(CURDIR)/leveldb/include)
+DEFS += $(addprefix -I,$(CURDIR)/leveldb/helpers)
+OBJS += obj/txdb-leveldb.o
+
+leveldb/libleveldb.a:
+	@echo "Building LevelDB ..."; cd leveldb; CC=gcc CXX=g++ TARGET_OS=OS_WINDOWS_CROSSCOMPILE $(MAKE) OPT="-fno-keep-inline-dllexport -march=nocona -msahf -mtune=generic -Wa,-mbig-obj -O2" libleveldb.a libmemenv.a; cd ..;
+obj/txdb-leveldb.o: leveldb/libleveldb.a
+
+# auto-generated dependencies:
+-include obj/*.P
+
+obj/build.h: FORCE
+	/bin/sh ../share/genbuild.sh obj/build.h
+version.cpp: obj/build.h
+DEFS += -DHAVE_BUILD_INFO
+
+obj/scrypt-x86.o: scrypt-x86.S
+	$(CXX) -c $(xCXXFLAGS) -MMD -o $@ $<
+
+obj/scrypt-x86_64.o: scrypt-x86_64.S
+	$(CXX) -c $(xCXXFLAGS) -MMD -o $@ $<
+
+obj/scrypt-arm.o: scrypt-arm.S
+	$(CXX) -c $(xCXXFLAGS) -MMD -o $@ $<
+
+obj/%.o: %.cpp
+	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
+	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
+	  sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+	      -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
+	  rm -f $(@:%.o=%.d)
+
+obj/%.o: %.c
+	$(CXX) -c $(xCXXFLAGS) -fpermissive -MMD -MF $(@:%.o=%.d) -o $@ $<
+	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
+	  sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+	      -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
+	rm -f $(@:%.o=%.d)
+
+obj/%.o: tor/%.c
+	$(CC) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
+	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
+	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+            -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
+	rm -f $(@:%.o=%.d)
+
+obj/anonymize.o: tor/anonymize.cpp
+	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
+	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
+	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+            -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
+	rm -f $(@:%.o=%.d)
+
+obj/onion_v3.o: tor/onion_v3.cpp
+	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
+	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
+	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+            -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
+	rm -f $(@:%.o=%.d)
+
+obj/net_bootstrap.o: net_bootstrap.cpp
+	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
+	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
+	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+            -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
+	rm -f $(@:%.o=%.d)
+
+all: trianglesd.exe
+
+trianglesd.exe: $(OBJS:obj/%=obj/%) obj/anonymize.o
+	$(LINK) $(xCXXFLAGS) -o $@ $^ $(xLDFLAGS) $(LIBS)
+
+clean:
+	-rm -f trianglesd.exe
+	-rm -f obj/*.o
+	-rm -f obj/*.P
+	-rm -f obj/build.h
+	-rm -f leveldb/libleveldb.a
+	-rm -f leveldb/libmemenv.a
+
+FORCE:
