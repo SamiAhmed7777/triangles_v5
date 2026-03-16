@@ -1,0 +1,413 @@
+// Copyright (c) 2024-2025 Triangles developers
+// Tor Process Manager - launches and manages an external Tor binary
+// Distributed under the MIT/X11 software license
+
+#ifdef WIN32
+#define NOMINMAX
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
+#endif
+
+#include "tor_process.h"
+#include "../util.h"
+#include "../net.h"
+
+#include <boost/filesystem.hpp>
+#include <fstream>
+#include <cstdio>
+
+#ifdef WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <tlhelp32.h>
+#else
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <signal.h>
+#include <unistd.h>
+#endif
+
+namespace fs = boost::filesystem;
+
+static CTorProcess* torProcessInstance = nullptr;
+
+CTorProcess* CTorProcess::GetInstance()
+{
+    if (!torProcessInstance) {
+        torProcessInstance = new CTorProcess();
+    }
+    return torProcessInstance;
+}
+
+CTorProcess::CTorProcess()
+    : socksPort(19099)
+    , hiddenServicePort(24112)
+    , running(false)
+#ifdef WIN32
+    , hProcess(NULL)
+    , processId(0)
+#else
+    , processId(0)
+#endif
+{
+}
+
+CTorProcess::~CTorProcess()
+{
+    Stop();
+}
+
+std::string CTorProcess::FindTorBinary()
+{
+    // List of candidate paths to search for the Tor binary
+    std::vector<std::string> candidates;
+
+#ifdef WIN32
+    // Same directory as the wallet executable
+    char exePath[MAX_PATH];
+    if (GetModuleFileNameA(NULL, exePath, MAX_PATH)) {
+        fs::path exeDir = fs::path(exePath).parent_path();
+        candidates.push_back((exeDir / "tor.exe").string());
+        candidates.push_back((exeDir / "tor" / "tor.exe").string());
+        candidates.push_back((exeDir / "Tor" / "tor.exe").string());
+    }
+
+    // Data directory
+    candidates.push_back((GetDataDir() / "tor.exe").string());
+    candidates.push_back((GetDataDir() / "tor" / "tor.exe").string());
+
+    // Common Windows install locations
+    const char* programFiles = getenv("ProgramFiles");
+    if (programFiles) {
+        candidates.push_back(std::string(programFiles) + "\\Tor\\tor.exe");
+        candidates.push_back(std::string(programFiles) + "\\Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe");
+    }
+    const char* programFilesX86 = getenv("ProgramFiles(x86)");
+    if (programFilesX86) {
+        candidates.push_back(std::string(programFilesX86) + "\\Tor\\tor.exe");
+        candidates.push_back(std::string(programFilesX86) + "\\Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe");
+    }
+    const char* localAppData = getenv("LOCALAPPDATA");
+    if (localAppData) {
+        candidates.push_back(std::string(localAppData) + "\\Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe");
+    }
+
+    // Tor Expert Bundle (common install)
+    candidates.push_back("C:\\Tor\\tor.exe");
+
+#else
+    // Same directory as the wallet executable
+    char exePath[4096];
+    ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+    if (len > 0) {
+        exePath[len] = '\0';
+        fs::path exeDir = fs::path(exePath).parent_path();
+        candidates.push_back((exeDir / "tor").string());
+        candidates.push_back((exeDir / "tor" / "tor").string());
+    }
+
+    // Data directory
+    candidates.push_back((GetDataDir() / "tor").string());
+    candidates.push_back((GetDataDir() / "tor" / "tor").string());
+
+    // Standard Linux/macOS locations
+    candidates.push_back("/usr/bin/tor");
+    candidates.push_back("/usr/local/bin/tor");
+    candidates.push_back("/usr/sbin/tor");
+    candidates.push_back("/opt/tor/bin/tor");
+    candidates.push_back("/snap/bin/tor");
+
+    // Homebrew (macOS)
+    candidates.push_back("/opt/homebrew/bin/tor");
+    candidates.push_back("/usr/local/opt/tor/bin/tor");
+#endif
+
+    // Check each candidate
+    for (const std::string& path : candidates) {
+        if (fs::exists(path)) {
+            printf("Found Tor binary at: %s\n", path.c_str());
+            return path;
+        }
+    }
+
+    return "";
+}
+
+bool CTorProcess::IsPortInUse(int port)
+{
+#ifdef WIN32
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET) return false;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    addr.sin_port = htons(port);
+
+    int result = connect(sock, (struct sockaddr*)&addr, sizeof(addr));
+    closesocket(sock);
+    return (result == 0);
+#else
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) return false;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    addr.sin_port = htons(port);
+
+    int result = connect(sock, (struct sockaddr*)&addr, sizeof(addr));
+    close(sock);
+    return (result == 0);
+#endif
+}
+
+bool CTorProcess::WriteTorrc()
+{
+    fs::path dataPath(torDataDir);
+    fs::create_directories(dataPath);
+
+    torrcPath = (dataPath / "torrc").string();
+
+    // Hidden service directory
+    fs::path hsDir = dataPath / "hidden_service";
+    fs::create_directories(hsDir);
+
+    std::ofstream torrc(torrcPath.c_str());
+    if (!torrc.is_open()) {
+        printf("ERROR: Cannot write torrc to %s\n", torrcPath.c_str());
+        return false;
+    }
+
+    torrc << "# Triangles Wallet Tor Configuration (auto-generated)\n";
+    torrc << "# Do not edit - this file is overwritten on startup\n\n";
+
+    // SOCKS proxy for wallet connections
+    torrc << "SocksPort " << socksPort << "\n";
+
+    // Data directory for Tor state
+    fs::path torStateDir = dataPath / "state";
+    fs::create_directories(torStateDir);
+    torrc << "DataDirectory " << torStateDir.string() << "\n";
+
+    // V3 hidden service so this node is reachable via .onion
+    torrc << "HiddenServiceDir " << hsDir.string() << "\n";
+    torrc << "HiddenServiceVersion 3\n";
+    torrc << "HiddenServicePort " << hiddenServicePort
+          << " 127.0.0.1:" << hiddenServicePort << "\n";
+
+    // Reduce bandwidth/resource usage for wallet use
+    torrc << "ClientOnly 1\n";
+
+    // Disable unused features
+    torrc << "AvoidDiskWrites 1\n";
+    torrc << "Log notice stderr\n";
+
+    torrc.close();
+
+    printf("Wrote torrc to %s (SOCKS %d, HS port %d)\n",
+           torrcPath.c_str(), socksPort, hiddenServicePort);
+    return true;
+}
+
+bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort)
+{
+    socksPort = socks;
+    hiddenServicePort = hsPort;
+    torDataDir = dataDir;
+
+    // Check if something is already listening on our SOCKS port
+    if (IsPortInUse(socksPort)) {
+        printf("Tor SOCKS port %d already in use - assuming Tor is running\n", socksPort);
+        running = true;
+        return true;
+    }
+
+    // Find Tor binary
+    torBinaryPath = FindTorBinary();
+    if (torBinaryPath.empty()) {
+        printf("WARNING: Tor binary not found. Install Tor for .onion connectivity.\n");
+        printf("  Windows: Download from https://www.torproject.org/download/tor/\n");
+        printf("  Linux:   apt install tor  or  yum install tor\n");
+        printf("  Place tor executable next to the wallet binary for auto-detection.\n");
+        return false;
+    }
+
+    // Write configuration
+    if (!WriteTorrc()) {
+        printf("ERROR: Failed to write Tor configuration\n");
+        return false;
+    }
+
+    printf("Starting Tor process: %s -f %s\n", torBinaryPath.c_str(), torrcPath.c_str());
+
+#ifdef WIN32
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE; // Run hidden
+    ZeroMemory(&pi, sizeof(pi));
+
+    std::string cmdLine = "\"" + torBinaryPath + "\" -f \"" + torrcPath + "\"";
+
+    if (!CreateProcessA(
+            NULL,
+            (LPSTR)cmdLine.c_str(),
+            NULL, NULL,
+            FALSE,
+            CREATE_NO_WINDOW,
+            NULL, NULL,
+            &si, &pi))
+    {
+        printf("ERROR: Failed to start Tor process (error %lu)\n", GetLastError());
+        return false;
+    }
+
+    hProcess = pi.hProcess;
+    processId = pi.dwProcessId;
+    CloseHandle(pi.hThread);
+
+    printf("Tor process started (PID %lu)\n", processId);
+#else
+    pid_t pid = fork();
+    if (pid < 0) {
+        printf("ERROR: Failed to fork for Tor process\n");
+        return false;
+    }
+
+    if (pid == 0) {
+        // Child process - exec Tor
+        // Redirect stdout/stderr to /dev/null to avoid cluttering wallet output
+        freopen("/dev/null", "w", stdout);
+        freopen("/dev/null", "w", stderr);
+        execl(torBinaryPath.c_str(), torBinaryPath.c_str(),
+              "-f", torrcPath.c_str(), (char*)NULL);
+        // If exec fails, exit child
+        _exit(1);
+    }
+
+    processId = pid;
+    printf("Tor process started (PID %d)\n", processId);
+#endif
+
+    running = true;
+
+    // Wait a few seconds for Tor to bootstrap, then check if SOCKS is up
+    printf("Waiting for Tor to bootstrap...\n");
+    for (int i = 0; i < 30; i++) {
+        MilliSleep(1000);
+        if (fShutdown) {
+            Stop();
+            return false;
+        }
+        if (IsPortInUse(socksPort)) {
+            printf("Tor SOCKS proxy ready on port %d (took %ds)\n", socksPort, i + 1);
+
+            // Read and display the hidden service hostname if available
+            fs::path hsHostname = fs::path(torDataDir) / "hidden_service" / "hostname";
+            if (fs::exists(hsHostname)) {
+                std::ifstream f(hsHostname.string().c_str());
+                std::string hostname;
+                if (f.is_open() && std::getline(f, hostname)) {
+                    printf("Tor hidden service: %s\n", hostname.c_str());
+                }
+            }
+            return true;
+        }
+
+        // Check if Tor process is still alive
+        if (!IsRunning()) {
+            printf("ERROR: Tor process exited prematurely\n");
+            running = false;
+            return false;
+        }
+    }
+
+    printf("WARNING: Tor started but SOCKS proxy not yet ready after 30s\n");
+    printf("  Tor may still be bootstrapping. .onion connections will work once ready.\n");
+    return true;
+}
+
+void CTorProcess::Stop()
+{
+    if (!running) return;
+
+#ifdef WIN32
+    if (hProcess != NULL) {
+        printf("Stopping Tor process (PID %lu)...\n", processId);
+        TerminateProcess(hProcess, 0);
+        WaitForSingleObject(hProcess, 5000);
+        CloseHandle(hProcess);
+        hProcess = NULL;
+    }
+#else
+    if (processId > 0) {
+        printf("Stopping Tor process (PID %d)...\n", processId);
+        kill(processId, SIGTERM);
+        // Wait up to 5 seconds for graceful shutdown
+        for (int i = 0; i < 50; i++) {
+            int status;
+            pid_t result = waitpid(processId, &status, WNOHANG);
+            if (result != 0) break;
+            MilliSleep(100);
+        }
+        // Force kill if still running
+        kill(processId, SIGKILL);
+        waitpid(processId, NULL, 0);
+    }
+#endif
+
+    processId = 0;
+    running = false;
+    printf("Tor process stopped\n");
+}
+
+bool CTorProcess::IsRunning()
+{
+    if (!running) return false;
+
+#ifdef WIN32
+    if (hProcess == NULL) return false;
+    DWORD exitCode;
+    if (GetExitCodeProcess(hProcess, &exitCode)) {
+        return (exitCode == STILL_ACTIVE);
+    }
+    return false;
+#else
+    if (processId <= 0) return false;
+    int status;
+    pid_t result = waitpid(processId, &status, WNOHANG);
+    if (result == 0) return true;  // Still running
+    if (result == processId) {
+        running = false;
+        return false;  // Exited
+    }
+    return false;
+#endif
+}
+
+std::string CTorProcess::GetSocksProxy() const
+{
+    return "127.0.0.1:" + std::to_string(socksPort);
+}
+
+// Global convenience functions
+bool StartTorProcess(const std::string& dataDir)
+{
+    return CTorProcess::GetInstance()->Start(dataDir);
+}
+
+void StopTorProcess()
+{
+    CTorProcess::GetInstance()->Stop();
+}

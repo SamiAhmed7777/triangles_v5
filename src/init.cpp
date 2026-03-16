@@ -12,6 +12,7 @@
 #include "checkpoints.h"
 #include "smessage.h"
 #include "tor/onion_v3.h"
+#include "tor/tor_process.h"
 #ifdef ENABLE_ZMQ
 #include "zmqpublishnotifier.h"
 #endif
@@ -154,6 +155,7 @@ void Shutdown(void* parg)
 
         SecureMsgShutdown();
         ShutdownTorV3();
+        StopTorProcess();
 
 #ifdef ENABLE_ZMQ
         if (pzmqNotifier)
@@ -962,18 +964,33 @@ bool AppInit2()
         printf(" rescan      %15"PRId64"ms\n", GetTimeMillis() - nStart);
     }
 
-    // ********************************************************* Step 8.5: initialize Tor V3 identity
+    // ********************************************************* Step 8.5: start Tor and initialize V3 identity
     {
+        uiInterface.InitMessage(_("Starting Tor..."));
+        printf("Starting Tor process...\n");
+
+        // Start the Tor process (finds/launches tor binary, provides SOCKS proxy)
+        std::string torDataPath = (GetDataDir() / "tor_data").string();
+        bool torStarted = StartTorProcess(torDataPath);
+
+        if (torStarted) {
+            printf("Tor process running, SOCKS proxy at %s\n",
+                   CTorProcess::GetInstance()->GetSocksProxy().c_str());
+        } else {
+            printf("WARNING: Tor not available. .onion peers will not be reachable.\n");
+            printf("  Clearnet connections will still work normally.\n");
+        }
+
+        // Initialize Tor V3 identity (Ed25519 keys, onion address)
         uiInterface.InitMessage(_("Initializing Tor V3 identity..."));
         printf("Initializing Tor V3 onion identity...\n");
 
-        // Tor V3 identity is innate to Triangles — always enabled
         LoadTorV3Config();
         TorV3Config& torConfig = GetTorV3Config();
         torConfig.enableTor = true;
         torConfig.enableHiddenService = true;
         torConfig.hiddenServicePort = GetListenPort();
-        torConfig.torDataDirectory = (GetDataDir() / "tor_data").string();
+        torConfig.torDataDirectory = torDataPath;
 
         if (InitTorV3()) {
             string onionAddr = CTorV3Manager::GetInstance()->GetWalletOnionAddress();
@@ -995,6 +1012,24 @@ bool AppInit2()
             }
         } else {
             printf("WARNING: Failed to initialize Tor V3 identity\n");
+        }
+
+        // Also check if Tor gave us a hidden service hostname
+        if (torStarted) {
+            fs::path torHsHostname = fs::path(torDataPath) / "hidden_service" / "hostname";
+            if (fs::exists(torHsHostname)) {
+                ifstream f(torHsHostname.string().c_str());
+                string torOnion;
+                if (f.is_open() && getline(f, torOnion)) {
+                    // Trim whitespace
+                    while (!torOnion.empty() && (torOnion.back() == '\n' || torOnion.back() == '\r' || torOnion.back() == ' '))
+                        torOnion.pop_back();
+                    if (!torOnion.empty()) {
+                        AddLocal(CService(torOnion, GetListenPort(), fNameLookup), LOCAL_MANUAL);
+                        printf("Tor hidden service (from Tor process): %s\n", torOnion.c_str());
+                    }
+                }
+            }
         }
     }
 

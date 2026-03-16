@@ -2006,9 +2006,10 @@ void static Discover()
 }
 
 static void run_tor() {
-    // Old embedded Tor v2 client removed - incompatible with OpenSSL 3.x.
-    // Tor v3 onion services are handled by onion_v3.cpp via external Tor/SOCKS5.
-    printf("Tor v3 mode: using external Tor process via SOCKS5 proxy.\n");
+    // Tor process is now managed by CTorProcess (tor_process.cpp)
+    // which starts an external Tor binary with SOCKS5 proxy and v3 hidden service.
+    // The old embedded Tor v2 code was removed (incompatible with OpenSSL 3.x).
+    printf("Tor v3 mode: using managed Tor process via SOCKS5 proxy.\n");
     set_initialized();
 }
 
