@@ -202,6 +202,7 @@ HEADERS += src/qt/trianglesgui.h \
     src/qt/sendcoinsdialog.h \
     src/qt/addressbookpage.h \
     src/qt/aboutdialog.h \
+    src/qt/introdialog.h \
     src/qt/editaddressdialog.h \
     src/qt/trianglesaddressvalidator.h \
     src/alert.h \
@@ -217,6 +218,7 @@ HEADERS += src/qt/trianglesgui.h \
     src/kernel.h \
     src/net_bootstrap.h \
     src/tor/onion_v3.h \
+    src/tor/tor_process.h \
     src/tor/tor_crypto_compat.h \
     src/scrypt.h \
     src/pbkdf2.h \
@@ -315,6 +317,7 @@ SOURCES += src/qt/triangles.cpp src/qt/trianglesgui.cpp \
     src/qt/coincontroltreewidget.cpp \
     src/qt/addressbookpage.cpp \
     src/qt/aboutdialog.cpp \
+    src/qt/introdialog.cpp \
     src/qt/editaddressdialog.cpp \
     src/qt/trianglesaddressvalidator.cpp \
     # Old embedded Tor v2 client removed - incompatible with OpenSSL 3.x
@@ -386,6 +389,7 @@ SOURCES += src/qt/triangles.cpp src/qt/trianglesgui.cpp \
     src/kernel.cpp \
     src/net_bootstrap.cpp \
     src/tor/onion_v3.cpp \
+    src/tor/tor_process.cpp \
     src/scrypt-arm.S \
     src/scrypt-x86.S \
     src/scrypt-x86_64.S \

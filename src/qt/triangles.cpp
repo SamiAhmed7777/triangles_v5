@@ -8,6 +8,7 @@
 #include "guiutil.h"
 #include "guiconstants.h"
 
+#include "introdialog.h"
 #include "init.h"
 #include "ui_interface.h"
 #include "qtipcserver.h"
@@ -130,6 +131,10 @@ int main(int argc, char *argv[])
 
     // Command-line options take precedence:
     ParseParameters(argc, argv);
+
+    // Show data directory selection dialog on first run (unless -datadir was passed)
+    if (!IntroDialog::pickDataDirectory())
+        return 0;
 
     // ... then triangles.conf:
     if (!boost::filesystem::is_directory(GetDataDir(false)))
