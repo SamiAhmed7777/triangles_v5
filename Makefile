@@ -261,7 +261,7 @@ distclean: release-distclean debug-distclean  FORCE
 	-$(DEL_FILE) .qmake.stash
 
 E:/repos/triangles/src/leveldb/libleveldb.a: FORCE
-	cd E:/repos/triangles/src/leveldb && CC=gcc CXX=g++ TARGET_OS=OS_WINDOWS_CROSSCOMPILE $(MAKE) OPT="-fpermissive -O2" libleveldb.a libmemenv.a && ranlib E:/repos/triangles/src/leveldb/libleveldb.a && ranlib E:/repos/triangles/src/leveldb/libmemenv.a
+	cd E:/repos/triangles/src/leveldb && CC=gcc CXX=g++ TARGET_OS=OS_WINDOWS_CROSSCOMPILE $(MAKE) OPT="-fno-keep-inline-dllexport -march=nocona -msahf -mtune=generic -Wa,-mbig-obj -O2" libleveldb.a libmemenv.a && ranlib E:/repos/triangles/src/leveldb/libleveldb.a && ranlib E:/repos/triangles/src/leveldb/libmemenv.a
 
 release-mocclean:
 	$(MAKE) -f $(MAKEFILE).Release mocclean

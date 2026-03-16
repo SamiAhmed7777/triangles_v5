@@ -403,6 +403,12 @@ std::string HelpMessage()
         "  -rpcsslprivatekeyfile=<file.pem>         " + _("Server private key (default: server.pem)") + "\n" +
         "  -rpcsslciphers=<ciphers>                 " + _("Acceptable ciphers (default: TLSv1+HIGH:!SSLv2:!aNULL:!eNULL:!AH:!3DES:@STRENGTH)") + "\n" +
 
+        "\n" + _("REST API options:") + "\n" +
+        "  -rest                                    " + _("Enable public REST API on RPC port (default: 0)") + "\n" +
+        "  -restcorsorigin=<origin>                 " + _("CORS Access-Control-Allow-Origin header (default: *)") + "\n" +
+        "  -restapikey=<key>                        " + _("Bearer token for authenticated wallet endpoints") + "\n" +
+        "  -restratelimit=<n>                       " + _("Max requests/sec per IP for public endpoints (default: 30, 0=disabled)") + "\n" +
+
         "\n" + _("Secure messaging options:") + "\n" +
         "  -nosmsg                                  " + _("Disable secure messaging.") + "\n" +
         "  -debugsmsg                               " + _("Log extra debug messages.") + "\n" +
@@ -694,24 +700,26 @@ bool AppInit2()
     //if (nSocksVersion != 4 && nSocksVersion != 5)
     //  return InitError(strprintf(_("Unknown -socks proxy version requested: %i"), nSocksVersion));
 
-    do {
+    // Network selection: enable all networks (IPv4, IPv6, Tor)
+    // Tor is always enabled; clearnet is also allowed for seed node discovery
+    // Users can restrict to Tor-only with -onlynet=tor
+    if (mapArgs.count("-onlynet")) {
         std::set<enum Network> nets;
-
-
-
-
-        nets.insert(NET_TOR);
-
+        BOOST_FOREACH(std::string snet, mapMultiArgs["-onlynet"]) {
+            enum Network net = ParseNetwork(snet);
+            if (net == NET_UNROUTABLE)
+                return InitError(strprintf(_("Unknown network specified in -onlynet: '%s'"), snet.c_str()));
+            nets.insert(net);
+        }
         for (int n = 0; n < NET_MAX; n++) {
             enum Network net = (enum Network)n;
             if (!nets.count(net))
                 SetLimited(net);
         }
-    } while (false);
+    }
 
-    
-	CService addrOnion;
-    // need to move onion_port to a header
+    // Tor proxy: always configured for .onion connectivity
+    CService addrOnion;
     unsigned short const onion_port = 19099;
 
     if (mapArgs.count("-tor") && mapArgs["-tor"] != "0") {
@@ -722,10 +730,8 @@ bool AppInit2()
         addrOnion = CService("127.0.0.1", onion_port);
     }
 
-    if (true) {
-        SetProxy(NET_TOR, addrOnion, 5);
-        SetReachable(NET_TOR);
-    }
+    SetProxy(NET_TOR, addrOnion, 5);
+    SetReachable(NET_TOR);
 
     // see Step 2: parameter interactions for more information about these
     fNoListen = !GetBoolArg("-listen", true);

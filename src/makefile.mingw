@@ -114,6 +114,7 @@ OBJS= \
     obj/net_bootstrap.o \
     obj/protocol.o \
     obj/trianglesrpc.o \
+    obj/rest.o \
     obj/rpcdump.o \
     obj/rpcnet.o \
     obj/rpcmining.o \

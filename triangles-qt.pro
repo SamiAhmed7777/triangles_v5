@@ -261,6 +261,7 @@ HEADERS += src/qt/trianglesgui.h \
     src/qt/transactionview.h \
     src/qt/walletmodel.h \
     src/trianglesrpc.h \
+    src/rest.h \
     src/qt/overviewpage.h \
     src/qt/csvmodelwriter.h \
     src/crypter.h \
@@ -351,6 +352,7 @@ SOURCES += src/qt/triangles.cpp src/qt/trianglesgui.cpp \
     src/qt/transactionview.cpp \
     src/qt/walletmodel.cpp \
     src/trianglesrpc.cpp \
+    src/rest.cpp \
     src/rpcdump.cpp \
     src/rpcnet.cpp \
     src/rpcmining.cpp \

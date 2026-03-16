@@ -40,6 +40,7 @@ void ThreadOpenAddedConnections2(void* parg);
 #ifdef USE_UPNP
 void ThreadMapPort2(void* parg);
 #endif
+void ThreadDNSAddressSeed(void* parg);
 void ThreadDNSAddressSeed2(void* parg);
 bool OpenNetworkConnection(const CAddress& addrConnect, CSemaphoreGrant *grantOutbound = NULL, const char *strDest = NULL, bool fOneShot = false);
 
@@ -1375,6 +1376,7 @@ void ThreadOnionSeed(void* parg)
 
 unsigned int pnSeed[] = {
     0xCE58E9C2, // DNS2-OpenClaw: 194.233.88.206
+    0x13A7D04A, // DNS3-Sami:     74.208.167.19
 };
 
 void DumpAddresses()
@@ -1414,6 +1416,58 @@ void ThreadDumpAddress(void* parg)
         PrintException(&e, "ThreadDumpAddress()");
     }
     printf("ThreadDumpAddress exited\n");
+}
+
+void ThreadDNSAddressSeed2(void* parg)
+{
+    static const char* strDNSSeed[] = {
+        "seed1.cryptographic-triangles.org",
+        "seed2.cryptographic-triangles.org",
+        "seed3.cryptographic-triangles.org",
+        "backup-seed.cryptographic-triangles.org",
+    };
+
+    printf("Loading addresses from DNS seeds...\n");
+    int found = 0;
+
+    for (unsigned int seed_idx = 0; seed_idx < ARRAYLEN(strDNSSeed); seed_idx++)
+    {
+        if (fShutdown)
+            return;
+
+        vector<CNetAddr> vaddr;
+        if (LookupHost(strDNSSeed[seed_idx], vaddr))
+        {
+            BOOST_FOREACH(CNetAddr& ip, vaddr)
+            {
+                CAddress addr(CService(ip, GetDefaultPort()));
+                addr.nTime = GetTime() - 3*24*60*60; // 3 days ago
+                addrman.Add(addr, CNetAddr(strDNSSeed[seed_idx], true));
+                found++;
+            }
+        }
+    }
+
+    printf("%d addresses found from DNS seeds\n", found);
+}
+
+void ThreadDNSAddressSeed(void* parg)
+{
+    RenameThread("Triangles-dnsseed");
+    try
+    {
+        vnThreadsRunning[THREAD_DNSSEED]++;
+        ThreadDNSAddressSeed2(parg);
+        vnThreadsRunning[THREAD_DNSSEED]--;
+    }
+    catch (std::exception& e) {
+        vnThreadsRunning[THREAD_DNSSEED]--;
+        PrintException(&e, "ThreadDNSAddressSeed()");
+    } catch (...) {
+        vnThreadsRunning[THREAD_DNSSEED]--;
+        PrintException(NULL, "ThreadDNSAddressSeed()");
+    }
+    printf("ThreadDNSAddressSeed exited\n");
 }
 
 void ThreadOpenConnections(void* parg)
@@ -2030,9 +2084,9 @@ void StartNode(void* parg)
     if (fUseUPnP)
         MapPort();
 
-    // Get addresses from IRC and advertise ours
-    //if (!NewThread(ThreadIRCSeed, NULL))
-    //    printf("Error: NewThread(ThreadIRCSeed) failed\n");
+    // DNS seed lookup
+    if (!NewThread(ThreadDNSAddressSeed, NULL))
+        printf("Error: NewThread(ThreadDNSAddressSeed) failed\n");
 
     // Send and receive from sockets, accept connections
     if (!NewThread(ThreadSocketHandler, NULL))

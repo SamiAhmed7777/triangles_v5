@@ -3226,7 +3226,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
              (nAskedForBlocks < 1 || vNodes.size() <= 1))
         {
             nAskedForBlocks++;
-            pfrom->PushGetHeaders(pindexBest, uint256(0));
+            pfrom->PushGetBlocks(pindexBest, uint256(0));
         }
 
         // Relay alerts
@@ -3599,6 +3599,11 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
         if (nRequested > 0 && fDebug)
             printf("requested %d blocks from headers announcement\n", nRequested);
+
+        // If we received a full batch, continue sync via getblocks
+        // (the getblocks/inv/orphan cycle handles chain continuation)
+        if (vHeaders.size() >= 2000)
+            pfrom->PushGetBlocks(pindexBest, uint256(0));
     }
 
 

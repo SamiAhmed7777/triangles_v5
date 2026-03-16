@@ -30,7 +30,7 @@ static const int DATABASE_VERSION = 70509;
 // network protocol versioning
 //
 
-static const int PROTOCOL_VERSION = 70205;
+static const int PROTOCOL_VERSION = 70206;
 
 // v5 hard fork: require new protocol version (disconnects old nodes)
 static const int MIN_PROTO_VERSION = 70205;
@@ -53,7 +53,7 @@ static const int MEMPOOL_GD_VERSION = 60002;
 
 #define DISPLAY_VERSION_MAJOR       5
 #define DISPLAY_VERSION_MINOR       1
-#define DISPLAY_VERSION_REVISION    5
+#define DISPLAY_VERSION_REVISION    6
 #define DISPLAY_VERSION_BUILD       0
 
 #endif
