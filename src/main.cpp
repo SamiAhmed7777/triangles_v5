@@ -1835,12 +1835,8 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
     }
 
     // Watch for transactions paying to me
-    // Skip during initial block download - wallet will rescan on next normal startup
-    if (!IsInitialBlockDownload())
-    {
-        BOOST_FOREACH(CTransaction& tx, vtx)
-            SyncWithWallets(tx, this, true);
-    }
+    BOOST_FOREACH(CTransaction& tx, vtx)
+        SyncWithWallets(tx, this, true);
 
     return true;
 }
@@ -2040,11 +2036,8 @@ bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
 
     // Update best block in wallet (so we can detect restored wallets)
     bool fIsInitialDownload = IsInitialBlockDownload();
-    if (!fIsInitialDownload)
-    {
-        const CBlockLocator locator(pindexNew);
-        ::SetBestChain(locator);
-    }
+    const CBlockLocator locator(pindexNew);
+    ::SetBestChain(locator);
 
     // New best block
     hashBestChain = hash;
@@ -2057,7 +2050,8 @@ bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
 
     uint256 nBestBlockTrust = pindexBest->nHeight != 0 ? (pindexBest->nChainTrust - pindexBest->pprev->nChainTrust) : pindexBest->nChainTrust;
 
-    if (nBestHeight % 10000 == 0 || nBestHeight > 2186900)
+    // Log every 500 blocks during sync, every block once caught up
+    if (nBestHeight % 500 == 0 || !IsInitialBlockDownload())
         printf("SetBestChain: new best=%s  height=%d  trust=%s  blocktrust=%"PRId64"  date=%s\n",
           hashBestChain.ToString().substr(0,20).c_str(), nBestHeight,
           CBigNum(nBestChainTrust).ToString().c_str(),
@@ -2604,8 +2598,8 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         mapOrphanBlocksByPrev.erase(hashPrev);
     }
 
-    if (nBestHeight % 10000 == 0 || nBestHeight > 2186900)
-        printf("ProcessBlock: ACCEPTED\n");
+    if (nBestHeight % 500 == 0 || !IsInitialBlockDownload())
+        printf("ProcessBlock: ACCEPTED block %d\n", nBestHeight);
 
     // triangles: if responsible for sync-checkpoint send it
     if (pfrom && !CSyncCheckpoint::strMasterPrivKey.empty())
