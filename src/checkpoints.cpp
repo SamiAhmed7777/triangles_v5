@@ -218,30 +218,10 @@ namespace Checkpoints
     }
 
     // Check against synchronized checkpoint
+    // Disabled: master key removed in V5, no new sync checkpoints possible.
+    // Always returns true to prevent stale DB-persisted checkpoints from blocking IBD.
     bool CheckSync(const uint256& hashBlock, const CBlockIndex* pindexPrev)
     {
-        if (fTestNet) return true; // Testnet has no checkpoints
-        int nHeight = pindexPrev->nHeight + 1;
-
-        LOCK(cs_hashSyncCheckpoint);
-        // sync-checkpoint should always be accepted block
-        assert(mapBlockIndex.count(hashSyncCheckpoint));
-        const CBlockIndex* pindexSync = mapBlockIndex[hashSyncCheckpoint];
-
-        if (nHeight > pindexSync->nHeight)
-        {
-            // trace back to same height as sync-checkpoint
-            const CBlockIndex* pindex = pindexPrev;
-            while (pindex->nHeight > pindexSync->nHeight)
-                if (!(pindex = pindex->pprev))
-                    return error("CheckSync: pprev null - block index structure failure");
-            if (pindex->nHeight < pindexSync->nHeight || pindex->GetBlockHash() != hashSyncCheckpoint)
-                return false; // only descendant of sync-checkpoint can pass check
-        }
-        if (nHeight == pindexSync->nHeight && hashBlock != hashSyncCheckpoint)
-            return false; // same height with sync-checkpoint
-        if (nHeight < pindexSync->nHeight && !mapBlockIndex.count(hashBlock))
-            return false; // lower height than sync-checkpoint
         return true;
     }
 
@@ -361,8 +341,8 @@ namespace Checkpoints
     bool IsMatureSyncCheckpoint()
     {
         LOCK(cs_hashSyncCheckpoint);
-        // sync-checkpoint should always be accepted block
-        assert(mapBlockIndex.count(hashSyncCheckpoint));
+        if (!mapBlockIndex.count(hashSyncCheckpoint))
+            return true; // no valid sync checkpoint, treat as mature
         const CBlockIndex* pindexSync = mapBlockIndex[hashSyncCheckpoint];
         return (nBestHeight >= pindexSync->nHeight + nCoinbaseMaturity ||
                 pindexSync->GetBlockTime() + nStakeMinAge < GetAdjustedTime());

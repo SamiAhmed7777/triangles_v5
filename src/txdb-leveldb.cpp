@@ -484,10 +484,17 @@ bool CTxDB::LoadBlockIndex()
       hashBestChain.ToString().substr(0,20).c_str(), nBestHeight, CBigNum(nBestChainTrust).ToString().c_str(),
       DateTimeStrFormat("%x %H:%M:%S", pindexBest->GetBlockTime()).c_str());
 
-    // triangles: load hashSyncCheckpoint
+    // triangles: load hashSyncCheckpoint (best-effort, non-fatal)
     if (!ReadSyncCheckpoint(Checkpoints::hashSyncCheckpoint))
-        return error("CTxDB::LoadBlockIndex() : hashSyncCheckpoint not loaded");
-    printf("LoadBlockIndex(): synchronized checkpoint %s\n", Checkpoints::hashSyncCheckpoint.ToString().c_str());
+        printf("LoadBlockIndex(): no sync checkpoint in DB, using default\n");
+    else
+        printf("LoadBlockIndex(): synchronized checkpoint %s\n", Checkpoints::hashSyncCheckpoint.ToString().c_str());
+    // If the stored checkpoint isn't in our index, reset to genesis so we don't assert-crash
+    if (!mapBlockIndex.count(Checkpoints::hashSyncCheckpoint))
+    {
+        printf("LoadBlockIndex(): sync checkpoint not in index, resetting to genesis\n");
+        Checkpoints::hashSyncCheckpoint = (!fTestNet ? hashGenesisBlockOfficial : hashGenesisBlockTestNet);
+    }
 
     // Load bnBestInvalidTrust, OK if it doesn't exist
     CBigNum bnBestInvalidTrust;

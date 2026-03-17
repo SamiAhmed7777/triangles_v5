@@ -2471,18 +2471,10 @@ bool CBlock::AcceptBlock()
         }
     }
 
-    // Before fork: enforce sync checkpoints for historical chain integrity
-    // After fork: no sync checkpoint enforcement (decentralized)
-    if (nHeight < FORK_HEIGHT_V5)
-    {
-        bool cpSatisfies = Checkpoints::CheckSync(hash, pindexPrev);
-
-        if (CheckpointsMode == Checkpoints::STRICT && !cpSatisfies)
-            return error("AcceptBlock() : rejected by synchronized checkpoint");
-
-        if (CheckpointsMode == Checkpoints::ADVISORY && !cpSatisfies)
-            strMiscWarning = _("WARNING: syncronized checkpoint violation detected, but skipped!");
-    }
+    // Sync checkpoint enforcement is disabled:
+    // - Master key was removed in V5 fork, no new sync checkpoints will be broadcast
+    // - Hardcoded checkpoints already guarantee chain integrity
+    // - The persisted hashSyncCheckpoint in LevelDB blocks IBD from progressing
 
     // Enforce rule that the coinbase starts with serialized block height
     CScript expect = CScript() << nHeight;
