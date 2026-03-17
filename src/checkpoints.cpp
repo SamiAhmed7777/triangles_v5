@@ -87,8 +87,8 @@ namespace Checkpoints
     }
 
     // triangles: synchronized checkpoint (centrally broadcasted)
-    uint256 hashSyncCheckpoint = uint256("0xbd952e8d4a612e336d840ad924a7e09395e36bcd9d929b302e47e60b5c3098c0");
-    uint256 hashPendingCheckpoint = uint256("0xbd952e8d4a612e336d840ad924a7e09395e36bcd9d929b302e47e60b5c3098c0");
+    uint256 hashSyncCheckpoint = uint256("0x7e7a6e4dd5fe895106fca912dfbacaeaf2a89e76c6a588df8ff96e0e18b96021");
+    uint256 hashPendingCheckpoint = uint256("0x7e7a6e4dd5fe895106fca912dfbacaeaf2a89e76c6a588df8ff96e0e18b96021");
     CSyncCheckpoint checkpointMessage;
     CSyncCheckpoint checkpointMessagePending;
     uint256 hashInvalidCheckpoint = 0;
