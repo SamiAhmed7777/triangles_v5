@@ -751,24 +751,57 @@ void TrianglesGUI::setNumBlocks(int count, int nTotalBlocks)
 
     QString tooltip;
 
-    QString importText;
-    importText = tr("Synchronizing with network...");
-
     if(count < nTotalBlocks)
     {
+        // Calculate blocks/sec - only update rate when new blocks arrive
+        static int lastCount = 0;
+        static qint64 lastRateTime = 0;
+        static float blocksPerSec = 0.0f;
+        qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (count > lastCount) {
+            // New blocks arrived - recalculate speed
+            if (lastRateTime > 0) {
+                float elapsed = (now - lastRateTime) / 1000.0f;
+                if (elapsed > 0.1f) {
+                    float instantRate = (count - lastCount) / elapsed;
+                    blocksPerSec = (blocksPerSec < 0.1f) ? instantRate : (blocksPerSec * 0.7f + instantRate * 0.3f);
+                }
+            }
+            lastCount = count;
+            lastRateTime = now;
+        } else if (lastRateTime > 0 && (now - lastRateTime) > 10000) {
+            // No blocks for 10+ seconds - show 0
+            blocksPerSec = 0.0f;
+        }
+
         int nRemainingBlocks = nTotalBlocks - count;
         float nPercentageDone = count / (nTotalBlocks * 0.01f);
 
-        progressBarLabel->setText(importText);
+        // Build informative status text
+        QString speedText;
+        if (blocksPerSec >= 1.0f) {
+            int etaSeconds = (int)(nRemainingBlocks / blocksPerSec);
+            QString etaStr;
+            if (etaSeconds < 60)
+                etaStr = tr("%n sec", "", etaSeconds);
+            else if (etaSeconds < 3600)
+                etaStr = tr("%n min", "", etaSeconds / 60);
+            else
+                etaStr = tr("%1h %2m").arg(etaSeconds / 3600).arg((etaSeconds % 3600) / 60);
+            speedText = tr("Syncing: %1 blk/s  ~%2 remaining").arg(blocksPerSec, 0, 'f', 1).arg(etaStr);
+        } else {
+            speedText = tr("Synchronizing with network...");
+        }
+
+        progressBarLabel->setText(speedText);
         progressBarLabel->setVisible(true);
-        progressBar->setFormat(tr("~%n block(s) remaining", "", nRemainingBlocks));
+        progressBar->setFormat(tr("Block %1 / %2  (%3%)").arg(count).arg(nTotalBlocks).arg(nPercentageDone, 0, 'f', 2));
         progressBar->setMaximum(nTotalBlocks);
         progressBar->setValue(count);
         progressBar->setVisible(true);
-        ui->label_blocks->setText(tr("%n blocks", "", count));
-        ui->label_blocks->setVisible(true);
+        ui->label_blocks->setVisible(false);
 
-		tooltip = tr("Downloaded %1 of %2 blocks of transaction history (%3% done).").arg(count).arg(nTotalBlocks).arg(nPercentageDone, 0, 'f', 2);
+        tooltip = tr("Downloaded %1 of %2 blocks of transaction history (%3% done).").arg(count).arg(nTotalBlocks).arg(nPercentageDone, 0, 'f', 2);
     }
     else
     {
@@ -871,16 +904,27 @@ void TrianglesGUI::changeEvent(QEvent *e)
 
 void TrianglesGUI::closeEvent(QCloseEvent *event)
 {
+#ifndef Q_OS_MAC // Ignored on Mac
     if(clientModel)
     {
-#ifndef Q_OS_MAC // Ignored on Mac
-        if(!clientModel->getOptionsModel()->getMinimizeToTray() &&
-           !clientModel->getOptionsModel()->getMinimizeOnClose())
+        if(clientModel->getOptionsModel()->getMinimizeOnClose())
         {
-            QApplication::quit();
+            // Minimize to taskbar instead of closing
+            QMainWindow::showMinimized();
+            event->ignore();
+            return;
         }
-#endif
+        if(clientModel->getOptionsModel()->getMinimizeToTray() && trayIcon)
+        {
+            // Hide to system tray instead of closing
+            hide();
+            event->ignore();
+            return;
+        }
     }
+#endif
+    // Actually closing - quit the application
+    QApplication::quit();
     QMainWindow::closeEvent(event);
 }
 

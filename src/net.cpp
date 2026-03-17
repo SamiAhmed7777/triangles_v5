@@ -6,6 +6,7 @@
 #include "irc.h"
 #include "db.h"
 #include "net.h"
+#include "main.h"
 #include "init.h"
 #include "strlcpy.h"
 #include "addrman.h"
@@ -889,7 +890,7 @@ void ThreadSocketHandler2(void* parg)
         //
         struct timeval timeout;
         timeout.tv_sec  = 0;
-        timeout.tv_usec = 50000; // frequency to poll pnode->vSend
+        timeout.tv_usec = IsInitialBlockDownload() ? 10000 : 50000; // faster polling during IBD
 
         fd_set fdsetRecv;
         fd_set fdsetSend;
@@ -1574,24 +1575,29 @@ void ThreadOpenConnections2(void* parg)
         if (fShutdown)
             return;
 
-        // Add seed nodes if IRC isn't working
-        if (addrman.size()==0 && (GetTime() - nStart > 60) && !fTestNet)
+        // Add hardcoded seed nodes when we have no connections.
+        // Original check (addrman.size()==0) was too conservative - stale entries
+        // in peers.dat would prevent fallback to working hardcoded IPs forever.
         {
-            std::vector<CAddress> vAdd;
-            for (unsigned int i = 0; i < ARRAYLEN(pnSeed); i++)
-            {
-                // It'll only connect to one or two seed nodes because once it connects,
-                // it'll get a pile of addresses with newer timestamps.
-                // Seed nodes are given a random 'last seen time' of between one and two
-                // weeks ago.
-                const int64_t nOneWeek = 7*24*60*60;
-                struct in_addr ip;
-                memcpy(&ip, &pnSeed[i], sizeof(ip));
-                CAddress addr(CService(ip, GetDefaultPort()));
-                addr.nTime = GetTime()-GetRand(nOneWeek)-nOneWeek;
-                vAdd.push_back(addr);
+            LOCK(cs_vNodes);
+            bool fNoOutbound = true;
+            BOOST_FOREACH(CNode* pnode, vNodes) {
+                if (!pnode->fInbound) { fNoOutbound = false; break; }
             }
-            addrman.Add(vAdd, CNetAddr("127.0.0.1"));
+            if (fNoOutbound && (GetTime() - nStart > 30) && !fTestNet)
+            {
+                std::vector<CAddress> vAdd;
+                for (unsigned int i = 0; i < ARRAYLEN(pnSeed); i++)
+                {
+                    struct in_addr ip;
+                    memcpy(&ip, &pnSeed[i], sizeof(ip));
+                    CAddress addr(CService(ip, GetDefaultPort()));
+                    addr.nTime = GetTime() - GetRand(60*60); // seen recently
+                    vAdd.push_back(addr);
+                }
+                addrman.Add(vAdd, CNetAddr("127.0.0.1"));
+                printf("No outbound connections after 30s, added %d hardcoded seeds\n", (int)vAdd.size());
+            }
         }
 
         //
@@ -1809,6 +1815,7 @@ void ThreadMessageHandler2(void* parg)
 {
     printf("ThreadMessageHandler started\n");
     SetThreadPriority(THREAD_PRIORITY_BELOW_NORMAL);
+    bool fWasBoosted = false;
     while (!fShutdown)
     {
         vector<CNode*> vNodesCopy;
@@ -1851,11 +1858,21 @@ void ThreadMessageHandler2(void* parg)
                 pnode->Release();
         }
 
+        // Boost thread priority during IBD, restore when caught up
+        if (IsInitialBlockDownload() && !fWasBoosted) {
+            SetThreadPriority(THREAD_PRIORITY_NORMAL);
+            fWasBoosted = true;
+        } else if (!IsInitialBlockDownload() && fWasBoosted) {
+            SetThreadPriority(THREAD_PRIORITY_BELOW_NORMAL);
+            fWasBoosted = false;
+        }
+
         // Wait and allow messages to bunch up.
+        // During IBD, use a shorter sleep to maximize block processing throughput.
         // Reduce vnThreadsRunning so StopNode has permission to exit while
         // we're sleeping, but we must always check fShutdown after doing this.
         vnThreadsRunning[THREAD_MESSAGEHANDLER]--;
-        MilliSleep(100);
+        MilliSleep(IsInitialBlockDownload() ? 10 : 100);
         if (fRequestShutdown)
             StartShutdown();
         vnThreadsRunning[THREAD_MESSAGEHANDLER]++;
@@ -2149,8 +2166,18 @@ bool StopNode()
     if (vnThreadsRunning[THREAD_ADDEDCONNECTIONS] > 0) printf("ThreadOpenAddedConnections still running\n");
     if (vnThreadsRunning[THREAD_DUMPADDRESS] > 0) printf("ThreadDumpAddresses still running\n");
     if (vnThreadsRunning[THREAD_STAKE_MINER] > 0) printf("ThreadStakeMiner still running\n");
-    while (vnThreadsRunning[THREAD_MESSAGEHANDLER] > 0 || vnThreadsRunning[THREAD_RPCHANDLER] > 0)
-        MilliSleep(20);
+    {
+        int64_t nWaitStart = GetTime();
+        while (vnThreadsRunning[THREAD_MESSAGEHANDLER] > 0 || vnThreadsRunning[THREAD_RPCHANDLER] > 0)
+        {
+            if (GetTime() - nWaitStart > 10)
+            {
+                printf("Timed out waiting for message/RPC threads to stop\n");
+                break;
+            }
+            MilliSleep(20);
+        }
+    }
     MilliSleep(50);
     DumpAddresses();
     return true;

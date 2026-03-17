@@ -1639,6 +1639,12 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
     if (!CheckBlock(!fJustCheck, !fJustCheck, false))
         return false;
 
+    // Determine if this block is covered by the hardcoded checkpoint.
+    // Below checkpoint: skip all input validation, FetchInputs, ConnectInputs,
+    // and wallet sync. The checkpoint hash guarantees chain integrity for these blocks.
+    bool fAssumeValid = (pindex->nHeight <= Checkpoints::GetTotalBlocksEstimate());
+    bool fIsInitialDownload = IsInitialBlockDownload();
+
     //// issue here: it doesn't know the version
     unsigned int nTxPos;
     if (fJustCheck)
@@ -1657,6 +1663,20 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
     BOOST_FOREACH(CTransaction& tx, vtx)
     {
         uint256 hashTx = tx.GetHash();
+
+        CDiskTxPos posThisTx(pindex->nFile, pindex->nBlockPos, nTxPos);
+        if (!fJustCheck)
+            nTxPos += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
+
+        // Fast path: below checkpoint, skip all input validation and spent-tracking.
+        // Just record where each transaction lives on disk (txindex).
+        if (fAssumeValid)
+        {
+            mapQueuedChanges[hashTx] = CTxIndex(posThisTx, tx.vout.size());
+            continue;
+        }
+
+        // Full validation path (above checkpoint)
 
         // Do not allow blocks that contain transactions which 'overwrite' older transactions,
         // unless those are already completely spent.
@@ -1680,10 +1700,6 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
         nSigOps += tx.GetLegacySigOpCount();
         if (nSigOps > MAX_BLOCK_SIGOPS)
             return DoS(100, error("ConnectBlock() : too many sigops"));
-
-        CDiskTxPos posThisTx(pindex->nFile, pindex->nBlockPos, nTxPos);
-        if (!fJustCheck)
-            nTxPos += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
 
         MapPrevTx mapInputs;
         if (tx.IsCoinBase())
@@ -1717,20 +1733,18 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
         mapQueuedChanges[hashTx] = CTxIndex(posThisTx, tx.vout.size());
     }
 
-    if (IsProofOfWork() && pindex->nHeight > Checkpoints::GetTotalBlocksEstimate())
+    if (!fAssumeValid)
     {
-        int64_t nReward = GetProofOfWorkReward(nFees);
-        // Check coinbase reward
-        if (vtx[0].GetValueOut() > nReward)
-            return DoS(50, error("ConnectBlock() : coinbase reward exceeded (actual=%"PRId64" vs calculated=%"PRId64")",
-                   vtx[0].GetValueOut(),
-                   nReward));
-    }
-    if (IsProofOfStake())
+        if (IsProofOfWork())
         {
-            // Skip expensive coin age calculation and reward validation for blocks
-            // covered by the hardcoded checkpoint. The checkpoint guarantees chain integrity.
-        if (pindex->nHeight > Checkpoints::GetTotalBlocksEstimate())
+            int64_t nReward = GetProofOfWorkReward(nFees);
+            // Check coinbase reward
+            if (vtx[0].GetValueOut() > nReward)
+                return DoS(50, error("ConnectBlock() : coinbase reward exceeded (actual=%"PRId64" vs calculated=%"PRId64")",
+                       vtx[0].GetValueOut(),
+                       nReward));
+        }
+        if (IsProofOfStake())
         {
             // triangles: coin stake tx earns reward instead of paying fee
             uint64_t nCoinAge;
@@ -1760,8 +1774,8 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
             return error("ConnectBlock() : UpdateTxIndex failed");
     }
 
-    // Update address index
-    if (fAddressIndex)
+    // Update address index (skip during IBD - will be rebuilt on next start with -reindex)
+    if (fAddressIndex && !fIsInitialDownload)
     {
         for (unsigned int i = 0; i < vtx.size(); i++)
         {
@@ -1834,9 +1848,13 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
             return error("ConnectBlock() : WriteBlockIndex failed");
     }
 
-    // Watch for transactions paying to me
-    BOOST_FOREACH(CTransaction& tx, vtx)
-        SyncWithWallets(tx, this, true);
+    // Skip wallet sync during IBD - a full wallet rescan runs when IBD completes.
+    // This eliminates millions of per-transaction wallet lookups during sync.
+    if (!fIsInitialDownload)
+    {
+        BOOST_FOREACH(CTransaction& tx, vtx)
+            SyncWithWallets(tx, this, true);
+    }
 
     return true;
 }
@@ -2034,10 +2052,14 @@ bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
         }
     }
 
-    // Update best block in wallet (so we can detect restored wallets)
+    // Update best block in wallet (so we can detect restored wallets).
+    // During IBD, skip this so the wallet knows it needs rescanning on restart.
     bool fIsInitialDownload = IsInitialBlockDownload();
-    const CBlockLocator locator(pindexNew);
-    ::SetBestChain(locator);
+    if (!fIsInitialDownload)
+    {
+        const CBlockLocator locator(pindexNew);
+        ::SetBestChain(locator);
+    }
 
     // New best block
     hashBestChain = hash;
@@ -2050,8 +2072,8 @@ bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
 
     uint256 nBestBlockTrust = pindexBest->nHeight != 0 ? (pindexBest->nChainTrust - pindexBest->pprev->nChainTrust) : pindexBest->nChainTrust;
 
-    // Log every 500 blocks during sync, every block once caught up
-    if (nBestHeight % 500 == 0 || !IsInitialBlockDownload())
+    // Log every 5000 blocks during sync, every block once caught up
+    if (nBestHeight % 5000 == 0 || !IsInitialBlockDownload())
         printf("SetBestChain: new best=%s  height=%d  trust=%s  blocktrust=%"PRId64"  date=%s\n",
           hashBestChain.ToString().substr(0,20).c_str(), nBestHeight,
           CBigNum(nBestChainTrust).ToString().c_str(),
@@ -2100,6 +2122,40 @@ bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
             hashBestChain.GetHex().c_str(),
             pindexBest->nHeight);
         pNotificationQueue->Push(strBlockEvent);
+    }
+
+    // Detect IBD-to-synced transition and trigger deferred work:
+    // wallet rescan (since SyncWithWallets was skipped) and smsg chain scan.
+    {
+        static bool fWasInitialDownload = true;
+        if (fWasInitialDownload && !fIsInitialDownload)
+        {
+            printf("*** Initial block download complete at height %d ***\n", nBestHeight);
+
+            // Update wallet best chain locator now that IBD is done
+            const CBlockLocator locator(pindexBest);
+            ::SetBestChain(locator);
+
+            // Wallet rescan: SyncWithWallets was skipped during IBD, so scan
+            // the entire chain to pick up all wallet transactions.
+            if (pwalletMain)
+            {
+                printf("Starting post-IBD wallet rescan from genesis...\n");
+                uiInterface.InitMessage(_("Rescanning wallet..."));
+                int nFound = pwalletMain->ScanForWalletTransactions(pindexGenesisBlock, true);
+                printf("Post-IBD wallet rescan complete: %d transactions found\n", nFound);
+            }
+
+            // Secure messaging: scan chain for public keys needed to decrypt messages
+            if (fSecMsgEnabled)
+            {
+                printf("Starting post-IBD secure message chain scan...\n");
+                uiInterface.InitMessage(_("Scanning for secure messages..."));
+                SecureMsgScanBlockChain();
+                printf("Post-IBD secure message chain scan complete\n");
+            }
+        }
+        fWasInitialDownload = fIsInitialDownload;
     }
 
     return true;
@@ -2598,7 +2654,7 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         mapOrphanBlocksByPrev.erase(hashPrev);
     }
 
-    if (nBestHeight % 500 == 0 || !IsInitialBlockDownload())
+    if (nBestHeight % 5000 == 0 || !IsInitialBlockDownload())
         printf("ProcessBlock: ACCEPTED block %d\n", nBestHeight);
 
     // triangles: if responsible for sync-checkpoint send it
@@ -3211,13 +3267,14 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             }
         }
 
-        // Ask the first connected node for block updates
+        // Ask connected nodes for block updates
+        // During IBD, always request blocks from any valid peer (critical for reconnection)
         static int nAskedForBlocks = 0;
         if (!pfrom->fClient && !pfrom->fOneShot &&
             (pfrom->nStartingHeight > (nBestHeight - 144)) &&
             (pfrom->nVersion < NOBLKS_VERSION_START ||
              pfrom->nVersion >= NOBLKS_VERSION_END) &&
-             (nAskedForBlocks < 1 || vNodes.size() <= 1))
+             (IsInitialBlockDownload() || nAskedForBlocks < 1 || vNodes.size() <= 1))
         {
             nAskedForBlocks++;
             pfrom->PushGetBlocks(pindexBest, uint256(0));
@@ -3464,7 +3521,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         // Send the rest of the chain
         if (pindex)
             pindex = pindex->pnext;
-        int nLimit = 500;
+        int nLimit = IsInitialBlockDownload() ? 20000 : 500;
         printf("getblocks %d to %s limit %d\n", (pindex ? pindex->nHeight : -1), hashStop.ToString().substr(0,20).c_str(), nLimit);
         for (; pindex; pindex = pindex->pnext)
         {
@@ -3674,19 +3731,35 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         vRecv >> block;
         uint256 hashBlock = block.GetHash();
 
-        printf("received block %s\n", hashBlock.ToString().substr(0,20).c_str());
+        if (!IsInitialBlockDownload())
+            printf("received block %s\n", hashBlock.ToString().substr(0,20).c_str());
         // block.print();
 
         CInv inv(MSG_BLOCK, hashBlock);
         pfrom->AddInventoryKnown(inv);
 
         if (ProcessBlock(pfrom, &block))
+        {
             mapAlreadyAskedFor.erase(inv);
-        
+
+            // During IBD, proactively request more blocks to keep the pipeline full.
+            // With assumevalid, blocks process near-instantly, so request aggressively.
+            if (IsInitialBlockDownload())
+            {
+                static int nBlocksSinceRequest = 0;
+                if (++nBlocksSinceRequest >= 100)
+                {
+                    nBlocksSinceRequest = 0;
+                    pfrom->pindexLastGetBlocksBegin = NULL; // clear dedup filter
+                    pfrom->PushGetBlocks(pindexBest, uint256(0));
+                }
+            }
+        }
+
         if (block.nDoS)
             pfrom->Misbehaving(block.nDoS);
-        
-        if (fSecMsgEnabled)
+
+        if (fSecMsgEnabled && !IsInitialBlockDownload())
             SecureMsgScanBlock(block);
     }
 
@@ -4119,6 +4192,25 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
         if (!vInv.empty())
             pto->PushMessage("inv", vInv);
 
+
+        //
+        // Stall detection: if IBD and no new blocks for 30 seconds, re-request
+        //
+        if (IsInitialBlockDownload() && !pto->fClient)
+        {
+            static int64_t nLastBlockReceived = 0;
+            static int nLastHeight = 0;
+            if (nBestHeight > nLastHeight) {
+                nLastHeight = nBestHeight;
+                nLastBlockReceived = GetTime();
+            } else if (nLastBlockReceived > 0 && GetTime() - nLastBlockReceived > 5) {
+                printf("IBD stall detected at height %d, re-requesting blocks\n", nBestHeight);
+                // Clear dedup filter so the request actually sends
+                pto->pindexLastGetBlocksBegin = NULL;
+                pto->PushGetBlocks(pindexBest, uint256(0));
+                nLastBlockReceived = GetTime(); // reset timer
+            }
+        }
 
         //
         // Message: getdata

@@ -140,6 +140,7 @@ void Shutdown(void* parg)
     if (fFirstThread)
     {
         fShutdown = true;
+
         int64_t nDeferredWaitStart = GetTimeMillis();
         while (true)
         {
@@ -180,6 +181,7 @@ void Shutdown(void* parg)
         fs::remove(GetPidFile());
         UnregisterWallet(pwalletMain);
         delete pwalletMain;
+        // DB is flushed and wallet saved - safe to force-exit if something hangs
         NewThread(ExitTimeout, NULL);
         MilliSleep(50);
         printf("Triangles exited\n\n");

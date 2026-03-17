@@ -22,12 +22,13 @@
 class CRequestTracker;
 class CNode;
 class CBlockIndex;
+bool IsInitialBlockDownload();
 extern int nBestHeight;
 
 
 
-inline unsigned int ReceiveFloodSize() { return 1000*GetArg("-maxreceivebuffer", 5*1000); }
-inline unsigned int SendBufferSize() { return 1000*GetArg("-maxsendbuffer", 1*1000); }
+inline unsigned int ReceiveFloodSize() { return (unsigned int)-1; }
+inline unsigned int SendBufferSize() { return (unsigned int)-1; }
 
 void AddOneShot(std::string strDest);
 bool RecvLine(SOCKET hSocket, std::string& strLine);
@@ -429,8 +430,12 @@ public:
         nNow = std::max(nNow, nLastTime);
         nLastTime = nNow;
 
-        // Each retry is 2 minutes after the last
-        nRequestTime = std::max(nRequestTime + 2 * 60 * 1000000, nNow);
+        // During IBD, request immediately (no 2-minute retry delay)
+        // Normal operation: each retry is 2 minutes after the last
+        if (nRequestTime > 0 && IsInitialBlockDownload())
+            nRequestTime = nNow;
+        else
+            nRequestTime = std::max(nRequestTime + 2 * 60 * 1000000, nNow);
         mapAskFor.insert(std::make_pair(nRequestTime, inv));
     }
 
