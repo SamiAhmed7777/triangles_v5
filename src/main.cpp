@@ -3764,8 +3764,8 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         }
 
         if (block.nDoS) {
-            printf("IBD-DIAG: Misbehaving peer %s by %d (total=%d)\n",
-                pfrom->addr.ToString().c_str(), block.nDoS, pfrom->nMisbehavior + block.nDoS);
+            printf("IBD-DIAG: Misbehaving peer %s by %d\n",
+                pfrom->addr.ToString().c_str(), block.nDoS);
             pfrom->Misbehaving(block.nDoS);
         }
 
