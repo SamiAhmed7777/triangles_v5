@@ -3278,12 +3278,8 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
                 item.second.RelayTo(pfrom);
         }
 
-        // triangles: relay sync-checkpoint
-        {
-            LOCK(Checkpoints::cs_hashSyncCheckpoint);
-            if (!Checkpoints::checkpointMessage.IsNull())
-                Checkpoints::checkpointMessage.RelayTo(pfrom);
-        }
+        // Sync checkpoint relay disabled (master key removed in V5 fork).
+        // Relaying stale checkpoints causes IBD nodes to request far-future blocks.
 
         pfrom->fSuccessfullyConnected = true;
 
@@ -3538,17 +3534,9 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
     }
     else if (strCommand == "checkpoint")
     {
-        CSyncCheckpoint checkpoint;
-        vRecv >> checkpoint;
-
-        if (checkpoint.ProcessSyncCheckpoint(pfrom))
-        {
-            // Relay
-            pfrom->hashCheckpointKnown = checkpoint.hashCheckpoint;
-            LOCK(cs_vNodes);
-            BOOST_FOREACH(CNode* pnode, vNodes)
-                checkpoint.RelayTo(pnode);
-        }
+        // Sync checkpoint system disabled (master key removed in V5 fork).
+        // Ignore checkpoint messages — processing them during IBD causes the
+        // node to request a single far-future block instead of syncing sequentially.
     }
 
     else if (strCommand == "getheaders")
