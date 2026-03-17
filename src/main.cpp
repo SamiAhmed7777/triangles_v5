@@ -2550,7 +2550,11 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     // Skip block signature verification during initial block download (below checkpoint).
     // The hardcoded checkpoint guarantees historical chain integrity.
     if (!pblock->CheckBlock(true, true, !IsInitialBlockDownload()))
+    {
+        printf("IBD-DIAG: CheckBlock FAILED for %s (PoS=%d, IBD=%d)\n",
+            hash.ToString().substr(0,20).c_str(), pblock->IsProofOfStake(), IsInitialBlockDownload());
         return error("ProcessBlock() : CheckBlock FAILED");
+    }
 
     // Anti-spam: reject blocks with insufficient difficulty to prevent memory flooding.
     // Use sync checkpoint as reference; fall back to chain tip if checkpoint is genesis.
@@ -3261,14 +3265,19 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         // Ask connected nodes for block updates
         // During IBD, always request blocks from any valid peer (critical for reconnection)
         static int nAskedForBlocks = 0;
-        if (!pfrom->fClient && !pfrom->fOneShot &&
+        bool fShouldAsk = !pfrom->fClient && !pfrom->fOneShot &&
             (pfrom->nStartingHeight > (nBestHeight - 144)) &&
             (pfrom->nVersion < NOBLKS_VERSION_START ||
              pfrom->nVersion >= NOBLKS_VERSION_END) &&
-             (IsInitialBlockDownload() || nAskedForBlocks < 1 || vNodes.size() <= 1))
+             (IsInitialBlockDownload() || nAskedForBlocks < 1 || vNodes.size() <= 1);
+        printf("IBD-DIAG: version handler: peer=%s height=%d ourHeight=%d fClient=%d fOneShot=%d shouldAsk=%d nAskedForBlocks=%d IBD=%d\n",
+            pfrom->addr.ToString().c_str(), pfrom->nStartingHeight, nBestHeight,
+            pfrom->fClient, pfrom->fOneShot, fShouldAsk, nAskedForBlocks, IsInitialBlockDownload());
+        if (fShouldAsk)
         {
             nAskedForBlocks++;
             pfrom->PushGetBlocks(pindexBest, uint256(0));
+            printf("IBD-DIAG: sent getblocks from height %d to peer %s\n", nBestHeight, pfrom->addr.ToString().c_str());
         }
 
         // Relay alerts
@@ -3385,13 +3394,19 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
         // find last block in inv vector
         unsigned int nLastBlock = (unsigned int)(-1);
+        int nBlockInv = 0, nTxInv = 0;
         for (unsigned int nInv = 0; nInv < vInv.size(); nInv++) {
-            if (vInv[vInv.size() - 1 - nInv].type == MSG_BLOCK) {
+            if (vInv[nInv].type == MSG_BLOCK) nBlockInv++;
+            else nTxInv++;
+            if (vInv[vInv.size() - 1 - nInv].type == MSG_BLOCK && nLastBlock == (unsigned int)(-1)) {
                 nLastBlock = vInv.size() - 1 - nInv;
-                break;
             }
         }
+        printf("IBD-DIAG: inv received: %d blocks, %d tx from %s (our height=%d)\n",
+            nBlockInv, nTxInv, pfrom->addr.ToString().c_str(), nBestHeight);
+
         CTxDB txdb("r");
+        int nNew = 0, nAlready = 0;
         for (unsigned int nInv = 0; nInv < vInv.size(); nInv++)
         {
             const CInv &inv = vInv[nInv];
@@ -3401,25 +3416,24 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             pfrom->AddInventoryKnown(inv);
 
             bool fAlreadyHave = AlreadyHave(txdb, inv);
-            if (fDebug)
-                printf("  got inventory: %s  %s\n", inv.ToString().c_str(), fAlreadyHave ? "have" : "new");
+            if (inv.type == MSG_BLOCK) {
+                if (fAlreadyHave) nAlready++; else nNew++;
+            }
 
             if (!fAlreadyHave)
                 pfrom->AskFor(inv);
             else if (inv.type == MSG_BLOCK && mapOrphanBlocks.count(inv.hash)) {
                 pfrom->PushGetBlocks(pindexBest, GetOrphanRoot(mapOrphanBlocks[inv.hash]));
             } else if (nInv == nLastBlock) {
-                // In case we are on a very long side-chain, it is possible that we already have
-                // the last block in an inv bundle sent in response to getblocks. Try to detect
-                // this situation and push another getblocks to continue.
                 pfrom->PushGetBlocks(mapBlockIndex[inv.hash], uint256(0));
-                if (fDebug)
-                    printf("force request: %s\n", inv.ToString().c_str());
+                printf("IBD-DIAG: inv last block already known, pushing getblocks from %d\n",
+                    mapBlockIndex[inv.hash]->nHeight);
             }
 
-            // Track requests for our stuff
             Inventory(inv.hash);
         }
+        if (nBlockInv > 0)
+            printf("IBD-DIAG: inv result: %d new blocks requested, %d already have\n", nNew, nAlready);
     }
 
 
@@ -3509,7 +3523,9 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         if (pindex)
             pindex = pindex->pnext;
         int nLimit = IsInitialBlockDownload() ? 20000 : 500;
-        printf("getblocks %d to %s limit %d\n", (pindex ? pindex->nHeight : -1), hashStop.ToString().substr(0,20).c_str(), nLimit);
+        printf("IBD-DIAG: getblocks request from peer %s: start=%d stop=%s limit=%d\n",
+            pfrom->addr.ToString().c_str(), (pindex ? pindex->nHeight : -1),
+            hashStop.ToString().substr(0,20).c_str(), nLimit);
         for (; pindex; pindex = pindex->pnext)
         {
             if (pindex->GetBlockHash() == hashStop)
@@ -3710,9 +3726,17 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         vRecv >> block;
         uint256 hashBlock = block.GetHash();
 
-        if (!IsInitialBlockDownload())
-            printf("received block %s\n", hashBlock.ToString().substr(0,20).c_str());
-        // block.print();
+        // Log every block during IBD (with throttling after first 100)
+        static int64_t nLastBlockLog = 0;
+        static int nBlocksReceived = 0;
+        nBlocksReceived++;
+        bool fLogThis = (nBlocksReceived <= 20) || (nBestHeight % 500 == 0) || !IsInitialBlockDownload() || (GetTime() - nLastBlockLog >= 5);
+        if (fLogThis) {
+            printf("IBD-DIAG: block received #%d hash=%s from=%s ourHeight=%d\n",
+                nBlocksReceived, hashBlock.ToString().substr(0,20).c_str(),
+                pfrom->addr.ToString().c_str(), nBestHeight);
+            nLastBlockLog = GetTime();
+        }
 
         CInv inv(MSG_BLOCK, hashBlock);
         pfrom->AddInventoryKnown(inv);
@@ -3721,22 +3745,29 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         {
             mapAlreadyAskedFor.erase(inv);
 
-            // During IBD, proactively request more blocks to keep the pipeline full.
-            // With assumevalid, blocks process near-instantly, so request aggressively.
             if (IsInitialBlockDownload())
             {
                 static int nBlocksSinceRequest = 0;
                 if (++nBlocksSinceRequest >= 100)
                 {
                     nBlocksSinceRequest = 0;
-                    pfrom->pindexLastGetBlocksBegin = NULL; // clear dedup filter
+                    pfrom->pindexLastGetBlocksBegin = NULL;
                     pfrom->PushGetBlocks(pindexBest, uint256(0));
+                    printf("IBD-DIAG: pipeline refill at height %d\n", nBestHeight);
                 }
             }
         }
+        else
+        {
+            printf("IBD-DIAG: ProcessBlock FAILED for block %s (height after prev=%d, DoS=%d)\n",
+                hashBlock.ToString().substr(0,20).c_str(), nBestHeight, block.nDoS);
+        }
 
-        if (block.nDoS)
+        if (block.nDoS) {
+            printf("IBD-DIAG: Misbehaving peer %s by %d (total=%d)\n",
+                pfrom->addr.ToString().c_str(), block.nDoS, pfrom->nMisbehavior + block.nDoS);
             pfrom->Misbehaving(block.nDoS);
+        }
 
         if (fSecMsgEnabled && !IsInitialBlockDownload())
             SecureMsgScanBlock(block);
@@ -4173,27 +4204,43 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
 
 
         //
-        // Stall detection: if IBD and no new blocks for 30 seconds, re-request
+        // Stall detection: if IBD and no new blocks for 5 seconds, re-request
         //
         if (IsInitialBlockDownload() && !pto->fClient)
         {
             static int64_t nLastBlockReceived = 0;
             static int nLastHeight = 0;
+            static int64_t nLastStallLog = 0;
             if (nBestHeight > nLastHeight) {
                 nLastHeight = nBestHeight;
                 nLastBlockReceived = GetTime();
             } else if (nLastBlockReceived > 0 && GetTime() - nLastBlockReceived > 5) {
-                printf("IBD stall detected at height %d, re-requesting blocks\n", nBestHeight);
-                // Clear dedup filter so the request actually sends
+                if (GetTime() - nLastStallLog >= 10) { // log every 10s max
+                    printf("IBD-DIAG: STALL at height %d for %ds, peer=%s askfor_queue=%d send_size=%d\n",
+                        nBestHeight, (int)(GetTime() - nLastBlockReceived),
+                        pto->addr.ToString().c_str(),
+                        (int)pto->mapAskFor.size(), (int)pto->nSendSize);
+                    nLastStallLog = GetTime();
+                }
                 pto->pindexLastGetBlocksBegin = NULL;
                 pto->PushGetBlocks(pindexBest, uint256(0));
-                nLastBlockReceived = GetTime(); // reset timer
+                nLastBlockReceived = GetTime();
             }
         }
 
         //
         // Message: getdata
         //
+        // Periodic IBD status
+        if (IsInitialBlockDownload()) {
+            static int64_t nLastStatus = 0;
+            if (GetTime() - nLastStatus >= 15) {
+                printf("IBD-DIAG: STATUS height=%d peers=%d askfor_queued=%d orphans=%d\n",
+                    nBestHeight, (int)vNodes.size(), (int)pto->mapAskFor.size(), (int)mapOrphanBlocks.size());
+                nLastStatus = GetTime();
+            }
+        }
+
         vector<CInv> vGetData;
         int64_t nNow = GetTime() * 1000000;
         CTxDB txdb("r");
