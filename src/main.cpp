@@ -2552,33 +2552,38 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     if (!pblock->CheckBlock(true, true, !IsInitialBlockDownload()))
         return error("ProcessBlock() : CheckBlock FAILED");
 
-    // Anti-spam difficulty check: skip during IBD (hardcoded checkpoints guarantee integrity)
-    // and skip when sync checkpoint is genesis (no PoS history to compute min stake from).
-    if (!IsInitialBlockDownload())
+    // Anti-spam: reject blocks with insufficient difficulty to prevent memory flooding.
+    // Use sync checkpoint as reference; fall back to chain tip if checkpoint is genesis.
+    CBlockIndex* pcheckpoint = Checkpoints::GetLastSyncCheckpoint();
+    if (!pcheckpoint || pcheckpoint->nHeight == 0)
+        pcheckpoint = pindexBest;
+
+    if (pcheckpoint && pblock->hashPrevBlock != hashBestChain && !Checkpoints::WantedByPendingSyncCheckpoint(hash))
     {
-        CBlockIndex* pcheckpoint = Checkpoints::GetLastSyncCheckpoint();
-        if (pcheckpoint && pcheckpoint->nHeight > 0 && pblock->hashPrevBlock != hashBestChain && !Checkpoints::WantedByPendingSyncCheckpoint(hash))
+        int64_t deltaTime = pblock->GetBlockTime() - pcheckpoint->nTime;
+        CBigNum bnNewBlock;
+        bnNewBlock.SetCompact(pblock->nBits);
+        CBigNum bnRequired;
+
+        if (pblock->IsProofOfStake())
         {
-            int64_t deltaTime = pblock->GetBlockTime() - pcheckpoint->nTime;
-            CBigNum bnNewBlock;
-            bnNewBlock.SetCompact(pblock->nBits);
-            CBigNum bnRequired;
+            const CBlockIndex* pindexLastPos = GetLastBlockIndex(pcheckpoint, true);
+            if (pindexLastPos)
+                bnRequired.SetCompact(ComputeMinStake(pindexLastPos->nBits, deltaTime, pblock->nTime));
+            // else: no PoS history yet (below block 9001), skip — AcceptBlock rejects PoS below MODIFIER_INTERVAL_SWITCH
+        }
+        else
+        {
+            const CBlockIndex* pindexLastPow = GetLastBlockIndex(pcheckpoint, false);
+            if (pindexLastPow)
+                bnRequired.SetCompact(ComputeMinWork(pindexLastPow->nBits, deltaTime));
+        }
 
-            if (pblock->IsProofOfStake())
-            {
-                const CBlockIndex* pindexLastPos = GetLastBlockIndex(pcheckpoint, true);
-                if (pindexLastPos)
-                    bnRequired.SetCompact(ComputeMinStake(pindexLastPos->nBits, deltaTime, pblock->nTime));
-            }
-            else
-                bnRequired.SetCompact(ComputeMinWork(GetLastBlockIndex(pcheckpoint, false)->nBits, deltaTime));
-
-            if (bnRequired != 0 && bnNewBlock > bnRequired)
-            {
-                if (pfrom)
-                    pfrom->Misbehaving(100);
-                return error("ProcessBlock() : block with too little %s", pblock->IsProofOfStake()? "proof-of-stake" : "proof-of-work");
-            }
+        if (bnRequired != 0 && bnNewBlock > bnRequired)
+        {
+            if (pfrom)
+                pfrom->Misbehaving(100);
+            return error("ProcessBlock() : block with too little %s", pblock->IsProofOfStake()? "proof-of-stake" : "proof-of-work");
         }
     }
 
