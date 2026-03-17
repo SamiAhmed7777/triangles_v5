@@ -325,8 +325,10 @@ public:
 
         // Be shy and don't send version until we hear
         if (hSocket != INVALID_SOCKET && !fInbound)
+        {
             printf("CNode(): pfrom-addr %s\n", addrName.c_str());
             PushVersion();
+        }
     }
 
     ~CNode()
