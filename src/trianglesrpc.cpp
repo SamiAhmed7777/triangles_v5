@@ -24,6 +24,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/filesystem/fstream.hpp>
+#include <boost/shared_ptr.hpp>
 #include <memory>
 #include <list>
 
@@ -739,7 +740,7 @@ void ThreadRPCServer(void* parg)
 
 // Forward declaration required for RPCListen
 template <typename Protocol, typename SocketAcceptorService>
-static void RPCAcceptHandler(std::shared_ptr< basic_socket_acceptor<Protocol, SocketAcceptorService> > acceptor,
+static void RPCAcceptHandler(boost::shared_ptr< basic_socket_acceptor<Protocol, SocketAcceptorService> > acceptor,
                              ssl::context& context,
                              bool fUseSSL,
                              AcceptedConnection* conn,
@@ -749,7 +750,7 @@ static void RPCAcceptHandler(std::shared_ptr< basic_socket_acceptor<Protocol, So
  * Sets up I/O resources to accept and handle a new connection.
  */
 template <typename Protocol, typename SocketAcceptorService>
-static void RPCListen(std::shared_ptr< basic_socket_acceptor<Protocol, SocketAcceptorService> > acceptor,
+static void RPCListen(boost::shared_ptr< basic_socket_acceptor<Protocol, SocketAcceptorService> > acceptor,
                    ssl::context& context,
                    const bool fUseSSL)
 {
@@ -771,7 +772,7 @@ static void RPCListen(std::shared_ptr< basic_socket_acceptor<Protocol, SocketAcc
  * Accept and handle incoming connection.
  */
 template <typename Protocol, typename SocketAcceptorService>
-static void RPCAcceptHandler(std::shared_ptr< basic_socket_acceptor<Protocol, SocketAcceptorService> > acceptor,
+static void RPCAcceptHandler(boost::shared_ptr< basic_socket_acceptor<Protocol, SocketAcceptorService> > acceptor,
                              ssl::context& context,
                              const bool fUseSSL,
                              AcceptedConnection* conn,
@@ -874,7 +875,7 @@ void ThreadRPCServer2(void* parg)
     asio::ip::address bindAddress = loopback ? asio::ip::address_v6::loopback() : asio::ip::address_v6::any();
     ip::tcp::endpoint endpoint(bindAddress, GetArg("-rpcport", GetDefaultRPCPort()));
     boost::system::error_code v6_only_error;
-    std::shared_ptr<ip::tcp::acceptor> acceptor(new ip::tcp::acceptor(io_service));
+    boost::shared_ptr<ip::tcp::acceptor> acceptor(new ip::tcp::acceptor(io_service));
 
     boost::signals2::signal<void ()> StopRequests;
 
