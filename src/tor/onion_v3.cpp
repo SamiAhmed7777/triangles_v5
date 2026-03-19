@@ -1241,7 +1241,7 @@ bool CTorV3Manager::RegisterAsSeederNode(const std::string& onionAddress, int po
     int announcementsSent = 0;
     {
         LOCK(cs_vNodes);
-        BOOST_FOREACH(CNode* pnode, vNodes) {
+        for (CNode* pnode : vNodes) {
             try {
                 // Send seeder announcement to connected peers
                 pnode->PushMessage("seeder", onionAddress, port);
@@ -1301,7 +1301,7 @@ bool CTorV3Manager::ConnectToOnionPeer(const std::string& onionAddr, int port)
     // Check if already connected to this peer
     {
         LOCK(cs_vNodes);
-        BOOST_FOREACH(CNode* pnode, vNodes) {
+        for (CNode* pnode : vNodes) {
             std::string nodeAddr = pnode->addr.ToString();
             if (nodeAddr.find(onionAddr) != std::string::npos) {
                 printf("Already connected to onion peer %s\n", onionAddr.c_str());
@@ -1363,7 +1363,7 @@ std::vector<std::string> CTorV3Manager::GetOnionPeers()
     
     try {
         LOCK(cs_vNodes);
-        BOOST_FOREACH(CNode* pnode, vNodes) {
+        for (CNode* pnode : vNodes) {
             std::string addr = pnode->addr.ToString();
             if (addr.find(".onion") != std::string::npos) {
                 // Include connection status and timing information
@@ -1577,7 +1577,7 @@ bool CTorV3Manager::ConnectToSeederNode(const std::string& seederAddress)
     // Check if already connected
     {
         LOCK(cs_vNodes);
-        BOOST_FOREACH(CNode* pnode, vNodes) {
+        for (CNode* pnode : vNodes) {
             if (pnode->addr.ToString().find(onionAddr) != std::string::npos) {
                 printf("Already connected to seeder %s\n", onionAddr.c_str());
                 // Update last seen time for this seeder
@@ -1887,7 +1887,7 @@ void CTorV3Manager::DiscoverAdditionalPeers()
     // Request peer lists from connected onion nodes
     {
         LOCK(cs_vNodes);
-        BOOST_FOREACH(CNode* pnode, vNodes) {
+        for (CNode* pnode : vNodes) {
             std::string addr = pnode->addr.ToString();
             if (addr.find(".onion") != std::string::npos && pnode->fSuccessfullyConnected) {
                 // Request additional peer information
@@ -2004,7 +2004,7 @@ void CTorV3Manager::RequestSeederListFromPeers()
     printf("Requesting seeder lists from connected peers...\n");
     
     LOCK(cs_vNodes);
-    BOOST_FOREACH(CNode* pnode, vNodes) {
+    for (CNode* pnode : vNodes) {
         // Request seeder list from each connected peer
         pnode->PushMessage("getseederlist");
     }
@@ -2017,7 +2017,7 @@ void CTorV3Manager::BroadcastSeederList()
     std::vector<std::string> seederList = GetKnownSeederNodes();
     
     LOCK(cs_vNodes);
-    BOOST_FOREACH(CNode* pnode, vNodes) {
+    for (CNode* pnode : vNodes) {
         // Send our seeder list to requesting peers
         pnode->PushMessage("seederlist", seederList);
     }
@@ -2075,7 +2075,7 @@ void CTorV3Manager::UpdateSeederReputation(const std::string& seederAddress, boo
 void CTorV3Manager::RequestSeederListFromPeer(const std::string& peerAddress)
 {
     LOCK(cs_vNodes);
-    BOOST_FOREACH(CNode* pnode, vNodes) {
+    for (CNode* pnode : vNodes) {
         if (pnode->addr.ToString().find(peerAddress) != std::string::npos) {
             try {
                 pnode->PushMessage("getseederlist");

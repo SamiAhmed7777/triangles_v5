@@ -301,7 +301,7 @@ Value smsglocalkeys(const Array& params, bool fHelp)
     if (mode == "wallet")
     {
         uint32_t nKeys = 0;
-        BOOST_FOREACH(const PAIRTYPE(CTxDestination, std::string)& entry, pwalletMain->mapAddressBook)
+        for (const auto& entry : pwalletMain->mapAddressBook)
         {
             if (!IsMine(*pwalletMain, entry.first))
                 continue;

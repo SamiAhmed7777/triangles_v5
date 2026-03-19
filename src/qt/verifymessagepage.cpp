@@ -14,8 +14,6 @@
 #include <vector>
 
 #include <QClipboard>
-#include <QDesktopWidget>
-
 VerifyMessagePage::VerifyMessagePage(QWidget *parent) :
     QWidget(parent),
     ui(new Ui::VerifyMessagePage),

@@ -6,6 +6,7 @@ INCLUDEPATH += src src/json src/qt src/qt/plugins/mrichtexteditor
 DEFINES += QT_GUI BOOST_THREAD_USE_LIB BOOST_SPIRIT_THREADSAFE BOOST_THREAD_PROVIDES_GENERIC_SHARED_MUTEX_ON_WIN BOOST_BIND_GLOBAL_PLACEHOLDERS __NO_SYSTEM_INCLUDES
 CONFIG += no_include_pwd
 CONFIG += thread
+CONFIG += c++17
 
 lessThan(QT_MAJOR_VERSION, 5) {
     error(Triangles Qt requires Qt 5 or newer)
@@ -214,11 +215,13 @@ HEADERS += src/qt/trianglesgui.h \
     src/coincontrol.h \
     src/sync.h \
     src/util.h \
+    src/openssl_compat.h \
     src/uint256.h \
     src/kernel.h \
     src/net_bootstrap.h \
     src/tor/onion_v3.h \
     src/tor/tor_process.h \
+    src/tor/tor_embedded.h \
     src/tor/tor_crypto_compat.h \
     src/scrypt.h \
     src/pbkdf2.h \
@@ -262,6 +265,7 @@ HEADERS += src/qt/trianglesgui.h \
     src/qt/transactionfilterproxy.h \
     src/qt/transactionview.h \
     src/qt/walletmodel.h \
+    src/tor_embed_hooks.h \
     src/trianglesrpc.h \
     src/rest.h \
     src/qt/overviewpage.h \
@@ -322,7 +326,7 @@ SOURCES += src/qt/triangles.cpp src/qt/trianglesgui.cpp \
     src/qt/trianglesaddressvalidator.cpp \
     # Old embedded Tor v2 client removed - incompatible with OpenSSL 3.x
     # Tor v3 onion services handled by onion_v3.cpp via external Tor/SOCKS5
-    src/tor/anonymize.cpp \
+    src/tor_embed_hooks.cpp \
     src/alert.cpp \
     src/version.cpp \
     src/sync.cpp \
@@ -390,6 +394,7 @@ SOURCES += src/qt/triangles.cpp src/qt/trianglesgui.cpp \
     src/net_bootstrap.cpp \
     src/tor/onion_v3.cpp \
     src/tor/tor_process.cpp \
+    src/tor/tor_embedded.cpp \
     src/scrypt-arm.S \
     src/scrypt-x86.S \
     src/scrypt-x86_64.S \
@@ -457,8 +462,7 @@ isEmpty(BOOST_LIB_SUFFIX) {
 }
 
 isEmpty(BOOST_THREAD_LIB_SUFFIX) {
-    win32:BOOST_THREAD_LIB_SUFFIX = _win32$$BOOST_LIB_SUFFIX
-    else:BOOST_THREAD_LIB_SUFFIX = $$BOOST_LIB_SUFFIX
+    BOOST_THREAD_LIB_SUFFIX = $$BOOST_LIB_SUFFIX
 }
 
 isEmpty(BDB_LIB_PATH) {
@@ -549,6 +553,47 @@ contains(USE_ZMQ, 1) {
     message(Building with ZMQ support)
     DEFINES += ENABLE_ZMQ
     LIBS += -lzmq
+}
+
+# Embedded Tor support (optional)
+# Build with:
+#   qmake "USE_TOR_EMBEDDED=1" "TOR_INCLUDE_PATH=src/tor/tor-src/src/feature/api" \
+#         "TOR_LIB_PATH=src/tor/tor-src/src/core src/tor/tor-src/src/lib src/tor/tor-src/src/trunnel"
+contains(USE_TOR_EMBEDDED, 1) {
+    message(Building with embedded Tor support)
+    DEFINES += ENABLE_TOR_EMBEDDED
+
+    isEmpty(TOR_SOURCE_ROOT) {
+        TOR_SOURCE_ROOT = src/tor/tor-src
+    }
+
+    isEmpty(TOR_INCLUDE_PATH) {
+        TOR_INCLUDE_PATH = $$TOR_SOURCE_ROOT/src/feature/api
+    }
+
+    isEmpty(TOR_LIB_PATH) {
+        TOR_LIB_PATH = $$TOR_SOURCE_ROOT/src/core $$TOR_SOURCE_ROOT/src/lib $$TOR_SOURCE_ROOT/src/trunnel
+    }
+
+    !isEmpty(TOR_INCLUDE_PATH) {
+        INCLUDEPATH += $$TOR_INCLUDE_PATH
+    }
+
+    for(path, TOR_LIB_PATH) {
+        LIBS += -L$$path
+    }
+
+    # Default static library set for Tor 0.4.8/0.4.9 style builds.
+    # Override with TOR_EMBEDDED_LIBS from the qmake command line if needed.
+    isEmpty(TOR_EMBEDDED_LIBS) {
+        TOR_EMBEDDED_LIBS = -ltor-app -lor -lor-ctime -lor-event -lor-trunnel
+    }
+
+    unix {
+        LIBS += -Wl,--start-group $$TOR_EMBEDDED_LIBS -Wl,--end-group
+    } else {
+        LIBS += $$TOR_EMBEDDED_LIBS
+    }
 }
 
 system($$QMAKE_LRELEASE -silent $$_PRO_FILE_)

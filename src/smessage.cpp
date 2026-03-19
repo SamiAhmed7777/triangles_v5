@@ -670,7 +670,7 @@ void ThreadSecureMsg(void* parg)
                                 printf("Lock on bucket %"PRId64" for peer %u timed out.\n", it->first, nPeerId);
                             // -- look through the nodes for the peer that locked this bucket
                             LOCK(cs_vNodes);
-                            BOOST_FOREACH(CNode* pnode, vNodes)
+                            for (CNode* pnode : vNodes)
                             {
                                 if (pnode->smsgData.nPeerId != nPeerId)
                                     continue;
@@ -961,7 +961,7 @@ int SecureMsgAddWalletAddresses()
         printf("SecureMsgAddWalletAddresses()\n");
     
     uint32_t nAdded = 0;
-    BOOST_FOREACH(const PAIRTYPE(CTxDestination, std::string)& entry, pwalletMain->mapAddressBook)
+    for (const auto& entry : pwalletMain->mapAddressBook)
     {
         if (!IsMine(*pwalletMain, entry.first))
             continue;
@@ -1255,7 +1255,7 @@ bool SecureMsgEnable()
     // -- ping each peer, don't know which have messaging enabled
     {
         LOCK(cs_vNodes);
-        BOOST_FOREACH(CNode* pnode, vNodes)
+        for (CNode* pnode : vNodes)
         {
             pnode->PushMessage("smsgPing");
             pnode->PushMessage("smsgPong"); // Send pong as have missed initial ping sent by peer when it connected
@@ -1291,7 +1291,7 @@ bool SecureMsgDisable()
         // -- tell each smsg enabled peer that this node is disabling
         {
             LOCK(cs_vNodes);
-            BOOST_FOREACH(CNode* pnode, vNodes)
+            for (CNode* pnode : vNodes)
             {
                 if (!pnode->smsgData.fEnabled)
                     continue;
@@ -1947,7 +1947,7 @@ static bool ScanBlock(CBlock& block, CTxDB& txdb, SecMsgDB& addrpkdb,
     uint32_t& nTransactions, uint32_t& nInputs, uint32_t& nPubkeys, uint32_t& nDuplicates)
 {
     // -- should have LOCK(cs_smsg) where db is opened
-    BOOST_FOREACH(CTransaction& tx, block.vtx)
+    for (CTransaction& tx : block.vtx)
     {
         if (!tx.IsStandard())
             continue; // leave out coinbase and others
@@ -3674,7 +3674,7 @@ int SecureMsgSend(std::string& addressFrom, std::string& addressTo, std::string&
     std::string addressOutbox = "None";
     CTrianglesAddress coinAddrOutbox;
     
-    BOOST_FOREACH(const PAIRTYPE(CTxDestination, std::string)& entry, pwalletMain->mapAddressBook)
+    for (const auto& entry : pwalletMain->mapAddressBook)
     {
         // -- get first owned address
         if (!IsMine(*pwalletMain, entry.first))

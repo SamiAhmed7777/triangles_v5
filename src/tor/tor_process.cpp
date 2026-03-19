@@ -402,9 +402,9 @@ std::string CTorProcess::GetSocksProxy() const
 }
 
 // Global convenience functions
-bool StartTorProcess(const std::string& dataDir)
+bool StartTorProcess(const std::string& dataDir, int socksPort, int hsPort)
 {
-    return CTorProcess::GetInstance()->Start(dataDir);
+    return CTorProcess::GetInstance()->Start(dataDir, socksPort, hsPort);
 }
 
 void StopTorProcess()

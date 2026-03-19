@@ -393,7 +393,7 @@ static bool HandleMempool(string& strReply, int& nStatus)
     vector<uint256> vtxid;
     mempool.queryHashes(vtxid);
     Array a;
-    BOOST_FOREACH(const uint256& hash, vtxid)
+    for (const uint256& hash : vtxid)
         a.push_back(hash.ToString());
     strReply = write_string(Value(a), false) + "\n";
     nStatus = HTTP_OK;

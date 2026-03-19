@@ -14,8 +14,6 @@
 #include <vector>
 
 #include <QClipboard>
-#include <QDesktopWidget>
-
 SignMessagePage::SignMessagePage(QWidget *parent) :
     QWidget(parent),
     ui(new Ui::SignMessagePage),

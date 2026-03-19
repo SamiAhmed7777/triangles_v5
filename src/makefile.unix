@@ -107,7 +107,7 @@ endif
 
 # CXXFLAGS can be specified on the make command line, so we use xCXXFLAGS that only
 # adds some defaults in front. Unfortunately, CXXFLAGS=... $(CXXFLAGS) does not work.
-xCXXFLAGS=-O2 $(EXT_OPTIONS) -pthread -Wall -Wextra -Wno-ignored-qualifiers -Wformat -Wformat-security -Wno-unused-parameter \
+xCXXFLAGS=-O2 -std=c++17 $(EXT_OPTIONS) -pthread -Wall -Wextra -Wno-ignored-qualifiers -Wformat -Wformat-security -Wno-unused-parameter \
     $(DEBUGFLAGS) $(DEFS) $(HARDENING) $(CXXFLAGS)
 
 # LDFLAGS can be specified on the make command line, so we use xLDFLAGS that only
@@ -171,7 +171,24 @@ OBJS= \
     obj/scrypt-x86_64.o \
     obj/smessage.o \
     obj/onion_v3.o \
-    obj/tor_process.o
+    obj/tor_process.o \
+    obj/tor_embed_hooks.o \
+    obj/tor_embedded.o
+
+# Embedded Tor support (optional)
+# Build with: make -f makefile.unix USE_TOR_EMBEDDED=1 TOR_LIB_PATH=/path/to/libtor
+# Requires libtor.a built from official Tor source (see CODEX-TOR-GUIDE.md)
+TOR_SOURCE_ROOT ?= tor/tor-src
+TOR_INCLUDE_PATH ?= $(TOR_SOURCE_ROOT)/src/feature/api
+TOR_LIB_PATH ?= $(TOR_SOURCE_ROOT)/src/core $(TOR_SOURCE_ROOT)/src/lib $(TOR_SOURCE_ROOT)/src/trunnel
+TOR_EMBEDDED_LIBS ?= -ltor-app -lor -lor-ctime -lor-event -lor-trunnel
+ifdef USE_TOR_EMBEDDED
+    DEFS += -DENABLE_TOR_EMBEDDED
+    DEFS += $(addprefix -I,$(TOR_INCLUDE_PATH))
+    LIBS += $(addprefix -L,$(TOR_LIB_PATH))
+    LIBS += -Wl,--start-group $(TOR_EMBEDDED_LIBS) -Wl,--end-group
+    LIBS += -levent -levent_pthreads -lssl -lcrypto -lz -lm -lpthread
+endif
 
 # ZMQ support (optional)
 # Build with: make -f makefile.unix USE_ZMQ=1
@@ -226,14 +243,7 @@ obj/%.o: %.c
 	      -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
 	rm -f $(@:%.o=%.d)
 
-obj/%.o: tor/%.c
-	$(CC) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
-	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
-	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
-            -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
-	rm -f $(@:%.o=%.d)
-
-obj/anonymize.o: tor/anonymize.cpp
+obj/tor_embed_hooks.o: tor_embed_hooks.cpp
 	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
 	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
 	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
@@ -254,6 +264,13 @@ obj/tor_process.o: tor/tor_process.cpp
             -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
 	rm -f $(@:%.o=%.d)
 
+obj/tor_embedded.o: tor/tor_embedded.cpp
+	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
+	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
+	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+            -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
+	rm -f $(@:%.o=%.d)
+
 obj/net_bootstrap.o: net_bootstrap.cpp
 	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
 	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
@@ -261,7 +278,7 @@ obj/net_bootstrap.o: net_bootstrap.cpp
             -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
 	rm -f $(@:%.o=%.d)
 
-trianglesd: $(OBJS:obj/%=obj/%) obj/anonymize.o
+trianglesd: $(OBJS:obj/%=obj/%)
 	$(LINK) $(xCXXFLAGS) -o $@ $^ $(xLDFLAGS) $(LIBS)
 
 TESTOBJS := $(patsubst test/%.cpp,obj-test/%.o,$(wildcard test/*.cpp))

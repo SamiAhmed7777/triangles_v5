@@ -79,6 +79,11 @@ protected:
 
 private:
     void updateMask();
+    void ensureSendCoinsPage();
+    void ensureMessagePage();
+    void ensureSignMessagePage();
+    void ensureVerifyMessagePage();
+    void ensureRPCConsole();
 
 private:
     Ui::MainWindow *ui;
@@ -181,6 +186,8 @@ public slots:
 
 private slots:
     void ensureMessageModel();
+    void openRPCConsole();
+    void requestShutdown();
 
     void menuFileRequested();
     void menuOperationsRequested();

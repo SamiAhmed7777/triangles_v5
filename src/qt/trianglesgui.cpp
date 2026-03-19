@@ -76,9 +76,10 @@
 #include <QTextStream>
 #include <QTextDocument>
 #include <QSettings>
-#include <QDesktopWidget>
+#include <QGuiApplication>
 #include <QListWidget>
 #include <QPainter>
+#include <QScreen>
 //#include <QSound>
 #include <QSizeGrip>
 
@@ -297,19 +298,15 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
 
     receiveCoinsPage = new AddressBookPage(AddressBookPage::ForEditing, AddressBookPage::ReceivingTab);
 
-    sendCoinsPage = new SendCoinsDialog(this);
-    messagePage   = new MessagePage(this);
-	signMessagePage = new SignMessagePage(this);
-    verifyMessagePage = new VerifyMessagePage(this);
+    sendCoinsPage = 0;
+    messagePage = 0;
+	signMessagePage = 0;
+    verifyMessagePage = 0;
     centralWidget = ui->stackedWidget;
     centralWidget->addWidget(overviewPage);
     centralWidget->addWidget(transactionsPage);
     centralWidget->addWidget(addressBookPage);
     centralWidget->addWidget(receiveCoinsPage);
-    centralWidget->addWidget(sendCoinsPage);
-    centralWidget->addWidget(messagePage);
-	centralWidget->addWidget(signMessagePage);
-    centralWidget->addWidget(verifyMessagePage);
 
     QSizeGrip* grip = new QSizeGrip(this);
     grip->setStyleSheet("width: 6px; height: 6px; image: url(:/res/icons/handle.png);");
@@ -337,6 +334,10 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
         updateStakingIcon();
     }
 
+    QTimer *timerShutdown = new QTimer(this);
+    connect(timerShutdown, SIGNAL(timeout()), this, SLOT(detectShutdown()));
+    timerShutdown->start(200);
+
     // Progress bar and label for blocks download
     progressBarLabel = ui->label_synchronization;
     progressBarLabel->setVisible(false);
@@ -359,8 +360,7 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     // Double-clicking on a transaction on the transaction history page shows details
     connect(transactionView, SIGNAL(doubleClicked(QModelIndex)), transactionView, SLOT(showDetails()));
 
-    rpcConsole = new RPCConsole(this);
-    connect(openRPCConsoleAction, SIGNAL(triggered()), rpcConsole, SLOT(show()));
+    connect(openRPCConsoleAction, SIGNAL(triggered()), this, SLOT(openRPCConsole()));
 
     // Clicking on "Verify Message" in the address book sends you to the verify message tab
     connect(addressBookPage, SIGNAL(verifyMessage(QString)), this, SLOT(gotoVerifyMessageTab(QString)));
@@ -479,7 +479,7 @@ void TrianglesGUI::createActions(bool fIsTestnet)
     openRPCConsoleAction = new QAction(QIcon(":/menu_16/debug"), tr("&Debug window"), this);
     openRPCConsoleAction->setStatusTip(tr("Open debugging and diagnostic console"));
 
-    connect(quitAction, SIGNAL(triggered()), qApp, SLOT(quit()));
+    connect(quitAction, SIGNAL(triggered()), this, SLOT(requestShutdown()));
     connect(aboutAction, SIGNAL(triggered()), this, SLOT(aboutClicked()));    
     connect(aboutQtAction, SIGNAL(triggered()), qApp, SLOT(aboutQt()));
     connect(optionsAction, SIGNAL(triggered()), this, SLOT(optionsClicked()));
@@ -563,7 +563,8 @@ void TrianglesGUI::setClientModel(ClientModel *clientModel)
         // Receive and report messages from network/worker thread
         connect(clientModel, SIGNAL(message(QString,QString,unsigned int)), this, SLOT(message(QString,QString,unsigned int)));
 
-        rpcConsole->setClientModel(clientModel);
+        if (rpcConsole)
+            rpcConsole->setClientModel(clientModel);
         addressBookPage->setOptionsModel(clientModel->getOptionsModel());
         receiveCoinsPage->setOptionsModel(clientModel->getOptionsModel());
     }
@@ -582,9 +583,12 @@ void TrianglesGUI::setWalletModel(WalletModel *walletModel)
         overviewPage->setModel(walletModel);
         addressBookPage->setModel(walletModel->getAddressTableModel());
         receiveCoinsPage->setModel(walletModel->getAddressTableModel());
-        sendCoinsPage->setModel(walletModel);
-        signMessagePage->setModel(walletModel);
-        verifyMessagePage->setModel(walletModel);
+        if (sendCoinsPage)
+            sendCoinsPage->setModel(walletModel);
+        if (signMessagePage)
+            signMessagePage->setModel(walletModel);
+        if (verifyMessagePage)
+            verifyMessagePage->setModel(walletModel);
 
         setEncryptionStatus(walletModel->getEncryptionStatus());
         connect(walletModel, SIGNAL(encryptionStatusChanged(int)), this, SLOT(setEncryptionStatus(int)));
@@ -610,7 +614,8 @@ void TrianglesGUI::setMessageModel(MessageModel *messageModel)
         connect(messageModel, SIGNAL(error(QString,QString,bool)), this, SLOT(error(QString,QString,bool)));
 
         // Put transaction list in tabs
-        messagePage->setModel(messageModel);
+        if (messagePage)
+            messagePage->setModel(messageModel);
 
         // Balloon pop-up for new message
         connect(messageModel, SIGNAL(rowsInserted(QModelIndex,int,int)),
@@ -624,6 +629,60 @@ void TrianglesGUI::ensureMessageModel()
         return;
 
     setMessageModel(new MessageModel(pwalletMain, walletModel, this));
+}
+
+void TrianglesGUI::ensureSendCoinsPage()
+{
+    if (sendCoinsPage)
+        return;
+
+    sendCoinsPage = new SendCoinsDialog(this);
+    if (walletModel)
+        sendCoinsPage->setModel(walletModel);
+    centralWidget->addWidget(sendCoinsPage);
+}
+
+void TrianglesGUI::ensureMessagePage()
+{
+    if (messagePage)
+        return;
+
+    messagePage = new MessagePage(this);
+    if (messageModel)
+        messagePage->setModel(messageModel);
+    centralWidget->addWidget(messagePage);
+}
+
+void TrianglesGUI::ensureSignMessagePage()
+{
+    if (signMessagePage)
+        return;
+
+    signMessagePage = new SignMessagePage(this);
+    if (walletModel)
+        signMessagePage->setModel(walletModel);
+    centralWidget->addWidget(signMessagePage);
+}
+
+void TrianglesGUI::ensureVerifyMessagePage()
+{
+    if (verifyMessagePage)
+        return;
+
+    verifyMessagePage = new VerifyMessagePage(this);
+    if (walletModel)
+        verifyMessagePage->setModel(walletModel);
+    centralWidget->addWidget(verifyMessagePage);
+}
+
+void TrianglesGUI::ensureRPCConsole()
+{
+    if (rpcConsole)
+        return;
+
+    rpcConsole = new RPCConsole(this);
+    if (clientModel)
+        rpcConsole->setClientModel(clientModel);
 }
 
 void TrianglesGUI::createTrayIcon()
@@ -698,7 +757,8 @@ void TrianglesGUI::restoreWindowGeometry()
     QSize size = settings.value("nWindowSize", QSize(850, 550)).toSize();
     if (!pos.x() && !pos.y())
     {
-        QRect screen = QApplication::desktop()->screenGeometry();
+        QScreen *screenObject = QGuiApplication::primaryScreen();
+        QRect screen = screenObject ? screenObject->availableGeometry() : QRect(QPoint(0, 0), size);
         pos.setX((screen.width()-size.width())/2);
         pos.setY((screen.height()-size.height())/2);
     }
@@ -923,9 +983,15 @@ void TrianglesGUI::closeEvent(QCloseEvent *event)
         }
     }
 #endif
-    // Actually closing - quit the application
-    QApplication::quit();
+    // Actually closing - request a full core shutdown before leaving the UI loop.
+    StartShutdown();
+    event->accept();
     QMainWindow::closeEvent(event);
+}
+
+void TrianglesGUI::requestShutdown()
+{
+    StartShutdown();
 }
 
 void TrianglesGUI::askFee(qint64 nFeeRequired, bool *payFee)
@@ -1070,6 +1136,8 @@ void TrianglesGUI::gotoReceiveCoinsPage()
 
 void TrianglesGUI::gotoSendCoinsPage()
 {
+    ensureSendCoinsPage();
+
     sendCoinsAction->setChecked(true);
     centralWidget->setCurrentWidget(sendCoinsPage);
 
@@ -1079,6 +1147,7 @@ void TrianglesGUI::gotoSendCoinsPage()
 
 void TrianglesGUI::gotoMessagePage()
 {
+    ensureMessagePage();
     ensureMessageModel();
 
     messageAction->setChecked(true);
@@ -1091,6 +1160,8 @@ void TrianglesGUI::gotoMessagePage()
 
 void TrianglesGUI::gotoSignMessageTab(QString addr)
 {
+    ensureSignMessagePage();
+
     centralWidget->setCurrentWidget(signMessagePage);
 
     exportAction->setEnabled(false);
@@ -1105,6 +1176,8 @@ void TrianglesGUI::gotoSignMessageTab(QString addr)
 
 void TrianglesGUI::gotoVerifyMessageTab(QString addr)
 {
+    ensureVerifyMessagePage();
+
     centralWidget->setCurrentWidget(verifyMessagePage);
 
     exportAction->setEnabled(false);
@@ -1128,6 +1201,7 @@ void TrianglesGUI::dropEvent(QDropEvent *event)
 {
     if(event->mimeData()->hasUrls())
     {
+        ensureSendCoinsPage();
         int nValidUrisFound = 0;
         QList<QUrl> uris = event->mimeData()->urls();
         foreach(const QUrl &uri, uris)
@@ -1209,6 +1283,7 @@ void TrianglesGUI::updateMask()
 void TrianglesGUI::handleURI(QString strURI)
 {
     // URI has to be valid
+    ensureSendCoinsPage();
     if (sendCoinsPage->handleURI(strURI))
     {
         showNormalIfMinimized();
@@ -1263,6 +1338,12 @@ void TrianglesGUI::menuFileRequested()
     {
         qApp->quit();
     }
+}
+
+void TrianglesGUI::openRPCConsole()
+{
+    ensureRPCConsole();
+    rpcConsole->show();
 }
 
 void TrianglesGUI::menuOperationsRequested()
@@ -1564,5 +1645,6 @@ void TrianglesGUI::detectShutdown()
 
 void TrianglesGUI::on_bHelp_clicked()
 {    
+    ensureRPCConsole();
     rpcConsole->show();
 }

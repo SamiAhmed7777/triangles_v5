@@ -219,6 +219,7 @@ int main(int argc, char *argv[])
         if (GUIUtil::GetStartOnSystemStartup())
             GUIUtil::SetStartOnSystemStartup(true);
 
+        InitMessage(_("Preparing interface..."));
         TrianglesGUI window;
         guiref = &window;
         if(AppInit2())

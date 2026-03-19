@@ -64,7 +64,7 @@ public:
 };
 
 // Global convenience functions
-bool StartTorProcess(const std::string& dataDir);
+bool StartTorProcess(const std::string& dataDir, int socksPort = 19099, int hsPort = 24112);
 void StopTorProcess();
 
 #endif // TRIANGLES_TOR_PROCESS_H

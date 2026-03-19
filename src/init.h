@@ -6,7 +6,7 @@
 #define TRIANGLES_INIT_H
 
 #include "wallet.h"
-#include <tor/anonymize.h>
+#include "tor_embed_hooks.h"
 
 extern CWallet* pwalletMain;
 extern std::string strWalletFileName;

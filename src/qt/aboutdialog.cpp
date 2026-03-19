@@ -1,8 +1,6 @@
 #include "aboutdialog.h"
 #include "ui_aboutdialog.h"
 
-#include <QDesktopWidget>
-
 #include "clientmodel.h"
 #include "dialog_move_handler.h"
 #include "version.h"

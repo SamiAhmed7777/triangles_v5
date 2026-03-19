@@ -11,6 +11,8 @@
 #include "ui_interface.h"
 #include "checkpoints.h"
 #include "smessage.h"
+#include "openssl_compat.h"
+#include "tor/tor_embedded.h"
 #include "tor/onion_v3.h"
 #include "tor/tor_process.h"
 #ifdef ENABLE_ZMQ
@@ -156,7 +158,7 @@ void Shutdown(void* parg)
 
         SecureMsgShutdown();
         ShutdownTorV3();
-        StopTorProcess();
+        StopEmbeddedTor();
 
 #ifdef ENABLE_ZMQ
         if (pzmqNotifier)
@@ -332,6 +334,9 @@ std::string HelpMessage()
         //"  -proxy=<ip:port>       " + _("Connect through socks proxy") + "\n" +
         //"  -socks=<n>             " + _("Select the version of socks proxy to use (4-5, default: 5)") + "\n" +
         "  -tor=<ip:port>         " + _("Use proxy to reach tor hidden services (default: same as -proxy)") + "\n"
+        "  -notor                 " + _("Disable Tor startup and .onion connectivity") + "\n" +
+        "  -torsocks=<port>       " + _("Set embedded or managed Tor SOCKS proxy port (default: 19099)") + "\n" +
+        "  -torhsport=<port>      " + _("Set embedded or managed Tor hidden service port (default: wallet listen port)") + "\n" +
         //"  -dns                   " + _("Allow DNS lookups for -addnode, -seednode and -connect") + "\n" +
         "  -port=<port>           " + _("Listen for connections on <port> (default: 24112 or testnet: 24111)") + "\n" +
         "  -maxconnections=<n>    " + _("Maintain at most <n> connections to peers (default: 125)") + "\n" +
@@ -651,7 +656,7 @@ bool AppInit2()
         ShrinkDebugFile();
     printf("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
     printf("Triangles version %s (%s)\n", FormatFullVersion().c_str(), CLIENT_DATE.c_str());
-    printf("Using OpenSSL version %s\n", SSLeay_version(SSLEAY_VERSION));
+    printf("Using OpenSSL version %s\n", TrianglesOpenSSLVersionString());
     if (!fLogTimestamps)
         printf("Startup time: %s\n", DateTimeStrFormat("%x %H:%M:%S", GetTime()).c_str());
     printf("Default data directory %s\n", GetDefaultDataDir().string().c_str());
@@ -709,7 +714,7 @@ bool AppInit2()
     // Users can restrict to Tor-only with -onlynet=tor
     if (mapArgs.count("-onlynet")) {
         std::set<enum Network> nets;
-        BOOST_FOREACH(std::string snet, mapMultiArgs["-onlynet"]) {
+        for (std::string snet : mapMultiArgs["-onlynet"]) {
             enum Network net = ParseNetwork(snet);
             if (net == NET_UNROUTABLE)
                 return InitError(strprintf(_("Unknown network specified in -onlynet: '%s'"), snet.c_str()));
@@ -761,11 +766,11 @@ bool AppInit2()
 
 
     // Release the old Tor initialization mutex (no longer blocking on embedded Tor)
-    set_initialized();
+    triangles_tor_set_initialized();
 
     if (mapArgs.count("-externalip"))
     {
-        BOOST_FOREACH(string strAddr, mapMultiArgs["-externalip"]) {
+        for (string strAddr : mapMultiArgs["-externalip"]) {
             CService addrLocal(strAddr, GetListenPort(), fNameLookup);
             if (!addrLocal.IsValid())
                 return InitError(strprintf(_("Cannot resolve -externalip address: '%s'"), strAddr.c_str()));
@@ -789,7 +794,7 @@ bool AppInit2()
             InitError(_("Unable to sign checkpoint, wrong checkpointkey?\n"));
     }
 
-    BOOST_FOREACH(string strDest, mapMultiArgs["-seednode"])
+    for (string strDest : mapMultiArgs["-seednode"])
         AddOneShot(strDest);
 
     // ********************************************************* Step 7: load blockchain
@@ -971,13 +976,14 @@ bool AppInit2()
         uiInterface.InitMessage(_("Starting Tor..."));
         printf("Starting Tor process...\n");
 
-        // Start the Tor process (finds/launches tor binary, provides SOCKS proxy)
-        std::string torDataPath = (GetDataDir() / "tor_data").string();
-        bool torStarted = StartTorProcess(torDataPath);
+        bool torStarted = StartEmbeddedTor();
+        std::string torDataPath = CTorEmbedded::GetInstance()->GetDataDir();
+        if (torDataPath.empty())
+            torDataPath = (GetDataDir() / "tor_data").string();
 
         if (torStarted) {
             printf("Tor process running, SOCKS proxy at %s\n",
-                   CTorProcess::GetInstance()->GetSocksProxy().c_str());
+                   CTorEmbedded::GetInstance()->GetSocksProxy().c_str());
         } else {
             printf("WARNING: Tor not available. .onion peers will not be reachable.\n");
             printf("  Clearnet connections will still work normally.\n");
@@ -1041,7 +1047,7 @@ bool AppInit2()
     {
         uiInterface.InitMessage(_("Importing blockchain data file."));
 
-        BOOST_FOREACH(string strFile, mapMultiArgs["-loadblock"])
+        for (string strFile : mapMultiArgs["-loadblock"])
         {
             FILE *file = fopen(strFile.c_str(), "rb");
             if (file)

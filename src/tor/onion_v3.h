@@ -8,7 +8,6 @@
 #include <string>
 #include <vector>
 #include <map>
-#include "compat.h"
 
 // Forward declarations
 class CNode;

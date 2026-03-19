@@ -2,9 +2,6 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <boost/assign/list_of.hpp> // for 'map_list_of()'
-#include <boost/foreach.hpp>
-
 #include "checkpoints.h"
 
 #include "txdb.h"
@@ -22,39 +19,37 @@ namespace Checkpoints
     //    timestamp before)
     // + Contains no strange transactions
     //
-    static MapCheckpoints mapCheckpoints =
-        boost::assign::map_list_of
-    (     0, hashGenesisBlockOfficial )
-    (  2000, uint256("0x0000000000b5f20078bf46ebdf1500813bb6b2cb482065aa93b89e073b2c6467"))
-    (  2101, uint256("0xd4ea1ac45b63c8162a7fc8033cec441db8d532ba988202849d7831e32fe2d059"))
-    (  2847, uint256("0xb5015e2835f13fd3bb6135cff9b31ac33310c9b77d694bdb592b8680d98d018e"))
-    (  3589, uint256("0xb12a2ca3db4e288cada98aa2139768532bd4474c49dd7b8158031032dac08d51"))
-    (  3935, uint256("0xe16290c9757d1368b8d7c35de07d4f8f70c2c9f9c785b667df0c3bff85086ca6"))
-    (  5703, uint256("0x587db07bb2172ad7db72c5fabc2518262a1b27f503f99417510b2c6fafa6557b"))
-    (  9000, uint256("0x00000000019ef6b2f5e7c324c7d083ee94502305aabc7e9cd73a7fb2a57bb8db"))
-    (  9001, uint256("0x6d5c6c5f201cc9e59659ee0da30d1430dc6bf3b12a8ff4c3864ab8d6286b0007"))
-    (  9002, uint256("0xa1e20fb1d44688b763690cf74d6aefe859e4cc32981f9e3f2b2ae9702bbcf249"))
-    ( 10881, uint256("0x4b6554c45e1e6764a6f3c309c47baf53c9edd81f624e52b072518cd15da237e6"))
-	  ( 17650, uint256("0x224940e1f986a202209b8e762728d1452ab45870c308abf84905674acf326a47"))
-    (2186940, uint256("0xbd952e8d4a612e336d840ad924a7e09395e36bcd9d929b302e47e60b5c3098c0"))
-            ;
+    static MapCheckpoints mapCheckpoints = {
+        {     0, hashGenesisBlockOfficial },
+        {  2000, uint256("0x0000000000b5f20078bf46ebdf1500813bb6b2cb482065aa93b89e073b2c6467")},
+        {  2101, uint256("0xd4ea1ac45b63c8162a7fc8033cec441db8d532ba988202849d7831e32fe2d059")},
+        {  2847, uint256("0xb5015e2835f13fd3bb6135cff9b31ac33310c9b77d694bdb592b8680d98d018e")},
+        {  3589, uint256("0xb12a2ca3db4e288cada98aa2139768532bd4474c49dd7b8158031032dac08d51")},
+        {  3935, uint256("0xe16290c9757d1368b8d7c35de07d4f8f70c2c9f9c785b667df0c3bff85086ca6")},
+        {  5703, uint256("0x587db07bb2172ad7db72c5fabc2518262a1b27f503f99417510b2c6fafa6557b")},
+        {  9000, uint256("0x00000000019ef6b2f5e7c324c7d083ee94502305aabc7e9cd73a7fb2a57bb8db")},
+        {  9001, uint256("0x6d5c6c5f201cc9e59659ee0da30d1430dc6bf3b12a8ff4c3864ab8d6286b0007")},
+        {  9002, uint256("0xa1e20fb1d44688b763690cf74d6aefe859e4cc32981f9e3f2b2ae9702bbcf249")},
+        { 10881, uint256("0x4b6554c45e1e6764a6f3c309c47baf53c9edd81f624e52b072518cd15da237e6")},
+        { 17650, uint256("0x224940e1f986a202209b8e762728d1452ab45870c308abf84905674acf326a47")},
+        {2186940, uint256("0xbd952e8d4a612e336d840ad924a7e09395e36bcd9d929b302e47e60b5c3098c0")},
+    };
 
-    static MapCheckpoints mapCheckpointsTestnet =
-        boost::assign::map_list_of
-    (     0, hashGenesisBlockTestNet )
-    (  2000, uint256("0x0000000000b5f20078bf46ebdf1500813bb6b2cb482065aa93b89e073b2c6467"))
-    (  2101, uint256("0xd4ea1ac45b63c8162a7fc8033cec441db8d532ba988202849d7831e32fe2d059"))
-    (  2847, uint256("0xb5015e2835f13fd3bb6135cff9b31ac33310c9b77d694bdb592b8680d98d018e"))
-    (  3589, uint256("0xb12a2ca3db4e288cada98aa2139768532bd4474c49dd7b8158031032dac08d51"))
-    (  3935, uint256("0xe16290c9757d1368b8d7c35de07d4f8f70c2c9f9c785b667df0c3bff85086ca6"))
-    (  5703, uint256("0x587db07bb2172ad7db72c5fabc2518262a1b27f503f99417510b2c6fafa6557b"))
-    (  9000, uint256("0x00000000019ef6b2f5e7c324c7d083ee94502305aabc7e9cd73a7fb2a57bb8db"))
-    (  9001, uint256("0x6d5c6c5f201cc9e59659ee0da30d1430dc6bf3b12a8ff4c3864ab8d6286b0007"))
-    (  9002, uint256("0xa1e20fb1d44688b763690cf74d6aefe859e4cc32981f9e3f2b2ae9702bbcf249"))
-    ( 10881, uint256("0x4b6554c45e1e6764a6f3c309c47baf53c9edd81f624e52b072518cd15da237e6"))
-	  ( 17650, uint256("0x224940e1f986a202209b8e762728d1452ab45870c308abf84905674acf326a47"))
-    (2186940, uint256("0xbd952e8d4a612e336d840ad924a7e09395e36bcd9d929b302e47e60b5c3098c0"))
-            ;
+    static MapCheckpoints mapCheckpointsTestnet = {
+        {     0, hashGenesisBlockTestNet },
+        {  2000, uint256("0x0000000000b5f20078bf46ebdf1500813bb6b2cb482065aa93b89e073b2c6467")},
+        {  2101, uint256("0xd4ea1ac45b63c8162a7fc8033cec441db8d532ba988202849d7831e32fe2d059")},
+        {  2847, uint256("0xb5015e2835f13fd3bb6135cff9b31ac33310c9b77d694bdb592b8680d98d018e")},
+        {  3589, uint256("0xb12a2ca3db4e288cada98aa2139768532bd4474c49dd7b8158031032dac08d51")},
+        {  3935, uint256("0xe16290c9757d1368b8d7c35de07d4f8f70c2c9f9c785b667df0c3bff85086ca6")},
+        {  5703, uint256("0x587db07bb2172ad7db72c5fabc2518262a1b27f503f99417510b2c6fafa6557b")},
+        {  9000, uint256("0x00000000019ef6b2f5e7c324c7d083ee94502305aabc7e9cd73a7fb2a57bb8db")},
+        {  9001, uint256("0x6d5c6c5f201cc9e59659ee0da30d1430dc6bf3b12a8ff4c3864ab8d6286b0007")},
+        {  9002, uint256("0xa1e20fb1d44688b763690cf74d6aefe859e4cc32981f9e3f2b2ae9702bbcf249")},
+        { 10881, uint256("0x4b6554c45e1e6764a6f3c309c47baf53c9edd81f624e52b072518cd15da237e6")},
+        { 17650, uint256("0x224940e1f986a202209b8e762728d1452ab45870c308abf84905674acf326a47")},
+        {2186940, uint256("0xbd952e8d4a612e336d840ad924a7e09395e36bcd9d929b302e47e60b5c3098c0")},
+    };
 
     bool CheckHardened(int nHeight, const uint256& hash)
     {
@@ -76,9 +71,9 @@ namespace Checkpoints
     {
         MapCheckpoints& checkpoints = (fTestNet ? mapCheckpointsTestnet : mapCheckpoints);
 
-        BOOST_REVERSE_FOREACH(const MapCheckpoints::value_type& i, checkpoints)
+        for (auto it = checkpoints.rbegin(); it != checkpoints.rend(); ++it)
         {
-            const uint256& hash = i.second;
+            const uint256& hash = it->second;
             std::map<uint256, CBlockIndex*>::const_iterator t = mapBlockIndex.find(hash);
             if (t != mapBlockIndex.end())
                 return t->second;
@@ -199,7 +194,7 @@ namespace Checkpoints
             // relay the checkpoint
             if (!checkpointMessage.IsNull())
             {
-                BOOST_FOREACH(CNode* pnode, vNodes)
+                for (CNode* pnode : vNodes)
                     checkpointMessage.RelayTo(pnode);
             }
             return true;
@@ -264,9 +259,9 @@ namespace Checkpoints
             printf("ResetSyncCheckpoint: pending for sync-checkpoint %s\n", hashPendingCheckpoint.ToString().c_str());
         }
 
-        BOOST_REVERSE_FOREACH(const MapCheckpoints::value_type& i, mapCheckpoints)
+        for (auto it = mapCheckpoints.rbegin(); it != mapCheckpoints.rend(); ++it)
         {
-            const uint256& hash = i.second;
+            const uint256& hash = it->second;
             if (mapBlockIndex.count(hash) && mapBlockIndex[hash]->IsInMainChain())
             {
                 if (!WriteSyncCheckpoint(hash))
@@ -331,7 +326,7 @@ namespace Checkpoints
         // Relay checkpoint
         {
             LOCK(cs_vNodes);
-            BOOST_FOREACH(CNode* pnode, vNodes)
+            for (CNode* pnode : vNodes)
                 checkpoint.RelayTo(pnode);
         }
         return true;

@@ -61,7 +61,7 @@ public:
         cachedAddressTable.clear();
         {
             LOCK(wallet->cs_wallet);
-            BOOST_FOREACH(const PAIRTYPE(CTxDestination, std::string)& item, wallet->mapAddressBook)
+            for (const auto& item : wallet->mapAddressBook)
             {
                 const CTrianglesAddress& address = item.first;
                 const std::string& strName = item.second;
