@@ -331,6 +331,7 @@ SOURCES += src/qt/triangles.cpp src/qt/trianglesgui.cpp \
     src/version.cpp \
     src/sync.cpp \
     src/smessage.cpp \
+    src/lz4/lz4.c \
     src/util.cpp \
     src/netbase.cpp \
     src/key.cpp \

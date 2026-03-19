@@ -54,7 +54,7 @@ Notes:
 #include "txdb.h"
 
 
-#include "lz4/lz4.c"
+#include "lz4/lz4.h"
 
 #include "xxhash/xxhash.h"
 #include "xxhash/xxhash.c"
