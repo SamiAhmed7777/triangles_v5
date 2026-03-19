@@ -11,7 +11,7 @@ trianglesd / triangles-qt
   ├── tor_embedded.cpp    ← calls tor_run_main() in a background thread
   ├── tor_process.cpp     ← fallback: launches external tor binary (already works)
   ├── onion_v3.cpp        ← V3 onion address generation / SOCKS5 proxy logic
-  └── libtor.a            ← static Tor library (built from official source)
+  └── libtor.a            ← aggregate static Tor library (built from official source)
 ```
 
 When compiled with `ENABLE_TOR_EMBEDDED`, the wallet calls `tor_run_main()` from
@@ -34,7 +34,7 @@ This puts the full Tor source at `src/tor/tor-src/`.
 Current imported checkout in this repo: `release-0.4.9` at commit `1442ca4`.
 There is also a helper build script at `src/tor/build-libtor.sh`.
 
-## Step 2: Build libtor.a (Linux)
+## Step 2: Build libtor.a
 
 Tor uses autotools. Build it as a static library:
 
@@ -71,10 +71,9 @@ Or from the repo root:
 ./src/tor/build-libtor.sh
 ```
 
-After building, the static libraries are in `src/tor/tor-src/src/`:
-- `src/core/libtor-app.a`
+After building, the static libraries are in `src/tor/tor-src/`:
+- `libtor.a`
 - `src/lib/libtor-*.a` (multiple component libs)
-- `src/trunnel/libor-trunnel.a`
 
 The header `src/feature/api/tor_api.h` provides the public C API:
 ```c
@@ -98,22 +97,14 @@ make -f makefile.unix \
 ```
 
 You may need to adjust the `-l` flags in the makefile depending on the exact
-library names Tor produces. Check `src/tor/tor-src/src/` after building:
+library names Tor produces. Check `src/tor/tor-src/` after building:
 
 ```bash
-find tor/tor-src/src -name '*.a' | sort
+find tor/tor-src -name '*.a' | sort
 ```
 
-Common libraries to link (order matters):
-```
--ltor-app -lor -lor-ctime -lor-evloop -lor-event -lor-compress
--lor-container -lor-crypt-ops -lor-encoding -lor-err -lor-fs
--lor-intmath -lor-lock -lor-log -lor-malloc -lor-math -lor-memarea
--lor-meminfo -lor-net -lor-osinfo -lor-process -lor-sandbox
--lor-smartlist-core -lor-string -lor-term -lor-thread -lor-time
--lor-tls -lor-trace -lor-version -lor-wallclock
--lor-trunnel
-```
+On the imported `release-0.4.9` checkout in this repo, the simplest working
+link path is the aggregate `libtor.a` plus the normal dependency libraries.
 
 ### Windows (triangles-qt.pro)
 
@@ -126,9 +117,14 @@ qmake "USE_TOR_EMBEDDED=1" \
 Both build systems now default to:
 - source root: `src/tor/tor-src`
 - include path: `src/tor/tor-src/src/feature/api`
-- library paths: `src/tor/tor-src/src/core`, `src/tor/tor-src/src/lib`, `src/tor/tor-src/src/trunnel`
+- library path: `src/tor/tor-src`
+- embedded Tor library: `-ltor`
 
-Override `TOR_EMBEDDED_LIBS` if the actual Tor static library names differ on your platform/build.
+On Windows, the imported Tor `0.4.9.5` build also needed:
+- `-llzma`
+- `-lzstd`
+- `-liphlpapi`
+- `-lshlwapi` (already linked by Triangles)
 
 ## Step 4: Wire into init.cpp
 
@@ -182,10 +178,9 @@ The embedded Tor respects these command-line flags:
 src/tor/
 ├── tor-src/             ← git submodule (official Tor repo)
 │   └── src/
-│       ├── core/libtor-app.a
-│       ├── lib/libor-*.a
-│       ├── trunnel/libor-trunnel.a
+│       ├── lib/libtor-*.a
 │       └── feature/api/tor_api.h
+│   └── libtor.a
 ├── tor_embedded.h       ← CTorEmbedded class header
 ├── tor_embedded.cpp     ← implementation (calls tor_run_main)
 ├── tor_process.h        ← external Tor process manager (fallback)
@@ -213,11 +208,11 @@ object instead of raw `tor_main(int argc, char** argv)`.
 **Tor fails to bootstrap**: Check firewall rules. Tor needs outbound TCP to the
 Tor network (ports 80, 443, 9001, 9030).
 
-**Link errors with libtor**: The Tor static libraries must be linked in
-dependency order. If you get undefined symbols, reorder the `-l` flags or use
-`-Wl,--start-group ... -Wl,--end-group` to resolve circular deps:
+**Link errors with libtor**: Prefer the aggregate `libtor.a` from the top level
+of the Tor build tree. On the imported Windows/MSYS2 build in this repo, the
+minimal verified link set was:
 ```
-LIBS += -Wl,--start-group -ltor-app -lor -lor-ctime ... -Wl,--end-group
+-ltor -levent -lssl -lcrypto -lz -llzma -lzstd -lws2_32 -liphlpapi -lshlwapi
 ```
 
 **OpenSSL version mismatch**: Both Tor and Triangles must link against the same

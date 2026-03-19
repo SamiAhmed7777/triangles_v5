@@ -25,16 +25,18 @@ echo "Configuring Tor static library build from: $TOR_SRC_DIR"
   --disable-manpage \
   --disable-html-manual \
   --disable-unittests \
-  --disable-tool-name-check
+  --disable-tool-name-check \
+  --with-libevent-dir="${LIBEVENT_DIR:-/mingw64}" \
+  --with-openssl-dir="${OPENSSL_DIR:-/mingw64}" \
+  --with-zlib-dir="${ZLIB_DIR:-/mingw64}"
 
 echo "Building Tor"
 make -j"${NPROC:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 
 echo
 echo "Build finished. Inspect these locations for static libraries:"
-echo "  $TOR_SRC_DIR/src/core"
+echo "  $TOR_SRC_DIR"
 echo "  $TOR_SRC_DIR/src/lib"
-echo "  $TOR_SRC_DIR/src/trunnel"
 echo
 echo "Suggested next step for Triangles:"
-echo '  make -f src/makefile.unix USE_TOR_EMBEDDED=1'
+echo '  make -f src/makefile.unix USE_TOR_EMBEDDED=1 TOR_SOURCE_ROOT=src/tor/tor-src'

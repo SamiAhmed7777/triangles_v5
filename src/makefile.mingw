@@ -74,7 +74,7 @@ HARDENING+=-D_FORTIFY_SOURCE=2
 
 DEBUGFLAGS=-g
 
-xCXXFLAGS=-O2 -pthread -Wall -Wextra -Wno-ignored-qualifiers -Wformat -Wformat-security -Wno-unused-parameter \
+xCXXFLAGS=-O2 -std=c++17 -pthread -Wall -Wextra -Wno-ignored-qualifiers -Wformat -Wformat-security -Wno-unused-parameter \
     -Wno-deprecated-declarations -Wno-reserved-user-defined-literal \
     -Wa,-mbig-obj \
     $(DEBUGFLAGS) $(DEFS) $(HARDENING) $(CXXFLAGS)
@@ -135,8 +135,11 @@ OBJS= \
     obj/scrypt-x86.o \
     obj/scrypt-x86_64.o \
     obj/smessage.o \
+    obj/lz4.o \
     obj/onion_v3.o \
-    obj/tor_process.o
+    obj/tor_process.o \
+    obj/tor_embed_hooks.o \
+    obj/tor_embedded.o
 
 all: trianglesd.exe
 
@@ -202,6 +205,27 @@ obj/onion_v3.o: tor/onion_v3.cpp
 	rm -f $(@:%.o=%.d)
 
 obj/tor_process.o: tor/tor_process.cpp
+	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
+	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
+	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+            -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
+	rm -f $(@:%.o=%.d)
+
+obj/lz4.o: lz4/lz4.c
+	$(CXX) -c $(xCXXFLAGS) -fpermissive -MMD -MF $(@:%.o=%.d) -o $@ $<
+	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
+	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+            -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
+	rm -f $(@:%.o=%.d)
+
+obj/tor_embed_hooks.o: tor_embed_hooks.cpp
+	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
+	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
+	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+            -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
+	rm -f $(@:%.o=%.d)
+
+obj/tor_embedded.o: tor/tor_embedded.cpp
 	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
 	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
 	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \

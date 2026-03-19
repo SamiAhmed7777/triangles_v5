@@ -558,8 +558,7 @@ contains(USE_ZMQ, 1) {
 
 # Embedded Tor support (optional)
 # Build with:
-#   qmake "USE_TOR_EMBEDDED=1" "TOR_INCLUDE_PATH=src/tor/tor-src/src/feature/api" \
-#         "TOR_LIB_PATH=src/tor/tor-src/src/core src/tor/tor-src/src/lib src/tor/tor-src/src/trunnel"
+#   qmake "USE_TOR_EMBEDDED=1" "TOR_SOURCE_ROOT=src/tor/tor-src"
 contains(USE_TOR_EMBEDDED, 1) {
     message(Building with embedded Tor support)
     DEFINES += ENABLE_TOR_EMBEDDED
@@ -573,7 +572,7 @@ contains(USE_TOR_EMBEDDED, 1) {
     }
 
     isEmpty(TOR_LIB_PATH) {
-        TOR_LIB_PATH = $$TOR_SOURCE_ROOT/src/core $$TOR_SOURCE_ROOT/src/lib $$TOR_SOURCE_ROOT/src/trunnel
+        TOR_LIB_PATH = $$TOR_SOURCE_ROOT
     }
 
     !isEmpty(TOR_INCLUDE_PATH) {
@@ -584,10 +583,11 @@ contains(USE_TOR_EMBEDDED, 1) {
         LIBS += -L$$path
     }
 
-    # Default static library set for Tor 0.4.8/0.4.9 style builds.
+    # Default static library set for the imported Tor 0.4.9.x tree.
+    # A full upstream build emits a top-level libtor.a aggregator.
     # Override with TOR_EMBEDDED_LIBS from the qmake command line if needed.
     isEmpty(TOR_EMBEDDED_LIBS) {
-        TOR_EMBEDDED_LIBS = -ltor-app -lor -lor-ctime -lor-event -lor-trunnel
+        TOR_EMBEDDED_LIBS = -ltor
     }
 
     unix {
@@ -595,6 +595,9 @@ contains(USE_TOR_EMBEDDED, 1) {
     } else {
         LIBS += $$TOR_EMBEDDED_LIBS
     }
+
+    LIBS += -llzma -lzstd
+    windows:LIBS += -liphlpapi
 }
 
 system($$QMAKE_LRELEASE -silent $$_PRO_FILE_)
