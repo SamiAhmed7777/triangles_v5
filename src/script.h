@@ -11,7 +11,7 @@
 
 #include <stdint.h>
 
-#include <boost/variant.hpp>
+#include <variant>
 
 #include "keystore.h"
 #include "bignum.h"
@@ -52,7 +52,7 @@ public:
  *  * CScriptID: TX_SCRIPTHASH destination
  *  A CTxDestination is the internal data type encoded in a CTrianglesAddress
  */
-typedef boost::variant<CNoDestination, CKeyID, CScriptID> CTxDestination;
+typedef std::variant<CNoDestination, CKeyID, CScriptID> CTxDestination;
 
 const char* GetTxnOutputType(txnouttype t);
 

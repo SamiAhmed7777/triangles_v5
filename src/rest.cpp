@@ -13,7 +13,6 @@
 #include "init.h"
 
 #include <boost/algorithm/string.hpp>
-#include <boost/lexical_cast.hpp>
 
 using namespace std;
 using namespace json_spirit;

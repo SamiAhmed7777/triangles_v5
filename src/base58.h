@@ -260,7 +260,7 @@ public:
  * The data vector contains RIPEMD160(SHA256(cscript)), where cscript is the serialized redemption script.
  */
 class CTrianglesAddress;
-class CTrianglesAddressVisitor : public boost::static_visitor<bool>
+class CTrianglesAddressVisitor
 {
 private:
     CTrianglesAddress *addr;
@@ -294,7 +294,7 @@ public:
 
     bool Set(const CTxDestination &dest)
     {
-        return boost::apply_visitor(CTrianglesAddressVisitor(this), dest);
+        return std::visit(CTrianglesAddressVisitor(this), dest);
     }
 
     bool IsValid() const

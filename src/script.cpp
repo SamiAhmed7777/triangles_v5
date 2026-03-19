@@ -3,8 +3,7 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <boost/tuple/tuple.hpp>
-#include <boost/tuple/tuple_comparison.hpp>
+#include <tuple>
 
 using namespace std;
 using namespace boost;
@@ -1213,7 +1212,7 @@ class CSignatureCache
 {
 private:
      // sigdata_type is (signature hash, signature, public key):
-    typedef boost::tuple<uint256, std::vector<unsigned char>, std::vector<unsigned char> > sigdata_type;
+    typedef std::tuple<uint256, std::vector<unsigned char>, std::vector<unsigned char> > sigdata_type;
     std::set< sigdata_type> setValid;
     CCriticalSection cs_sigcache;
 
@@ -1542,7 +1541,7 @@ unsigned int HaveKeys(const vector<valtype>& pubkeys, const CKeyStore& keystore)
 }
 
 
-class CKeyStoreIsMineVisitor : public boost::static_visitor<bool>
+class CKeyStoreIsMineVisitor
 {
 private:
     const CKeyStore *keystore;
@@ -1555,7 +1554,7 @@ public:
 
 bool IsMine(const CKeyStore &keystore, const CTxDestination &dest)
 {
-    return boost::apply_visitor(CKeyStoreIsMineVisitor(&keystore), dest);
+    return std::visit(CKeyStoreIsMineVisitor(&keystore), dest);
 }
 
 bool IsMine(const CKeyStore &keystore, const CScript& scriptPubKey)
@@ -1623,7 +1622,7 @@ bool ExtractDestination(const CScript& scriptPubKey, CTxDestination& addressRet)
     return false;
 }
 
-class CAffectedKeysVisitor : public boost::static_visitor<void> {
+class CAffectedKeysVisitor {
 private:
     const CKeyStore &keystore;
     std::vector<CKeyID> &vKeys;
@@ -1637,7 +1636,7 @@ public:
         int nRequired;
         if (ExtractDestinations(script, type, vDest, nRequired)) {
             for (const CTxDestination &dest : vDest)
-                boost::apply_visitor(*this, dest);
+                std::visit(*this, dest);
         }
     }
 
@@ -1994,7 +1993,7 @@ bool CScript::HasCanonicalPushes() const
     return true;
 }
 
-class CScriptVisitor : public boost::static_visitor<bool>
+class CScriptVisitor
 {
 private:
     CScript *script;
@@ -2022,7 +2021,7 @@ public:
 
 void CScript::SetDestination(const CTxDestination& dest)
 {
-    boost::apply_visitor(CScriptVisitor(this), dest);
+    std::visit(CScriptVisitor(this), dest);
 }
 
 void CScript::SetMultisig(int nRequired, const std::vector<CKey>& keys)

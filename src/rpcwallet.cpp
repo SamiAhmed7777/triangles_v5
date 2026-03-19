@@ -1587,7 +1587,7 @@ Value encryptwallet(const Array& params, bool fHelp)
     return "wallet encrypted; Triangles server stopping, restart to run with encrypted wallet.  The keypool has been flushed, you need to make a new backup.";
 }
 
-class DescribeAddressVisitor : public boost::static_visitor<Object>
+class DescribeAddressVisitor
 {
 public:
     Object operator()(const CNoDestination &dest) const { return Object(); }
@@ -1644,7 +1644,7 @@ Value validateaddress(const Array& params, bool fHelp)
         bool fMine = IsMine(*pwalletMain, dest);
         ret.push_back(Pair("ismine", fMine));
         if (fMine) {
-            Object detail = boost::apply_visitor(DescribeAddressVisitor(), dest);
+            Object detail = std::visit(DescribeAddressVisitor(), dest);
             ret.insert(ret.end(), detail.begin(), detail.end());
         }
         if (pwalletMain->mapAddressBook.count(dest))
@@ -1681,7 +1681,7 @@ Value validatepubkey(const Array& params, bool fHelp)
         ret.push_back(Pair("ismine", fMine));
         ret.push_back(Pair("iscompressed", isCompressed));
         if (fMine) {
-            Object detail = boost::apply_visitor(DescribeAddressVisitor(), dest);
+            Object detail = std::visit(DescribeAddressVisitor(), dest);
             ret.insert(ret.end(), detail.begin(), detail.end());
         }
         if (pwalletMain->mapAddressBook.count(dest))

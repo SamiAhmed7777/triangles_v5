@@ -11,7 +11,6 @@
 #include "base58.h"
 
 #include <boost/date_time/posix_time/posix_time.hpp>
-#include <boost/variant/get.hpp>
 #include <boost/algorithm/string.hpp>
 
 #define printf OutputDebugStringF

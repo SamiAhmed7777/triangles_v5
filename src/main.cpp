@@ -1526,14 +1526,14 @@ static bool GetAddressFromScript(const CScript& script, int& nType, uint160& has
     if (!ExtractDestination(script, dest))
         return false;
 
-    const CKeyID* keyId = boost::get<CKeyID>(&dest);
+    const CKeyID* keyId = std::get_if<CKeyID>(&dest);
     if (keyId) {
         nType = ADDR_TYPE_P2PKH;
         hashBytes = *keyId;
         return true;
     }
 
-    const CScriptID* scriptId = boost::get<CScriptID>(&dest);
+    const CScriptID* scriptId = std::get_if<CScriptID>(&dest);
     if (scriptId) {
         nType = ADDR_TYPE_P2SH;
         hashBytes = *scriptId;
