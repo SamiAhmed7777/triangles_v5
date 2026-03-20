@@ -12,6 +12,7 @@
 #include "checkpoints.h"
 #include "smessage.h"
 #include "openssl_compat.h"
+#include "bootstrap.h"
 #include "tor/tor_embedded.h"
 #include "tor/onion_v3.h"
 #include "tor/tor_process.h"
@@ -796,6 +797,54 @@ bool AppInit2()
 
     for (string strDest : mapMultiArgs["-seednode"])
         AddOneShot(strDest);
+
+    // ********************************************************* Step 6b: bootstrap download (daemon)
+#ifndef QT_GUI
+    if (GetBoolArg("-bootstrap", false))
+    {
+        fs::path dataPath = GetDataDir();
+        std::string host = Bootstrap::DEFAULT_HOST;
+        std::string strError;
+        std::vector<std::string> files;
+
+        uiInterface.InitMessage(_("Fetching bootstrap file list..."));
+        printf("Bootstrap: contacting %s...\n", host.c_str());
+
+        bool fGotList = Bootstrap::FetchFileList(host, files, strError);
+        if (!fGotList) {
+            host = Bootstrap::FALLBACK_HOST;
+            printf("Bootstrap: primary host failed, trying fallback %s...\n", host.c_str());
+            fGotList = Bootstrap::FetchFileList(host, files, strError);
+        }
+
+        if (!fGotList) {
+            printf("Bootstrap: could not reach server: %s\n", strError.c_str());
+            printf("Bootstrap: skipping, will sync from network.\n");
+        } else {
+            printf("Bootstrap: downloading %d files...\n", (int)files.size());
+            for (int i = 0; i < (int)files.size(); i++) {
+                if (fRequestShutdown) break;
+
+                printf("Bootstrap: downloading %s (%d of %d)...\n",
+                       files[i].c_str(), i + 1, (int)files.size());
+                uiInterface.InitMessage(strprintf(_("Downloading %s (%d of %d)..."),
+                       files[i].c_str(), i + 1, (int)files.size()));
+
+                fs::path destPath = dataPath / files[i];
+                fs::create_directories(destPath.parent_path());
+
+                std::string urlPath = std::string(Bootstrap::BASE_PATH) + files[i];
+                if (!Bootstrap::DownloadFile(host, urlPath, destPath, nullptr, strError)) {
+                    printf("Bootstrap: download failed for %s: %s\n",
+                           files[i].c_str(), strError.c_str());
+                    printf("Bootstrap: will sync remaining data from network.\n");
+                    break;
+                }
+            }
+            printf("Bootstrap: done.\n");
+        }
+    }
+#endif
 
     // ********************************************************* Step 7: load blockchain
 

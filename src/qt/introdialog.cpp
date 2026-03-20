@@ -11,6 +11,7 @@
 #include <QMessageBox>
 #include <QDialogButtonBox>
 #include <QProgressDialog>
+#include <QCheckBox>
 #include <QApplication>
 
 #include <boost/filesystem.hpp>
@@ -204,18 +205,27 @@ bool IntroDialog::pickDataDirectory()
         return false;
     }
 
-    // Offer bootstrap download once (tracks via QSettings so it only asks once)
+    // Offer bootstrap download on each startup (unless user checked "don't ask again")
     fs::path dataDirPath(dataDir.toStdString());
-    if (!settings.value("bootstrapOffered", false).toBool())
+    if (!settings.value("bootstrapDontAsk", false).toBool())
     {
-        settings.setValue("bootstrapOffered", true);
-
-        int ret = QMessageBox::question(0, "Triangles",
+        QMessageBox msgBox;
+        msgBox.setWindowTitle("Triangles");
+        msgBox.setText(
             "Would you like to download the latest blockchain snapshot?\n\n"
             "This will download the blockchain data from the Triangles network "
             "and replace any existing chain data in your data directory.\n\n"
-            "Click Yes to download, or No to sync from the network.",
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+            "Click Yes to download, or No to sync from the network.");
+        msgBox.setIcon(QMessageBox::Question);
+        msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+        msgBox.setDefaultButton(QMessageBox::Yes);
+        QCheckBox *dontAskBox = new QCheckBox("Don't show this again");
+        msgBox.setCheckBox(dontAskBox);
+
+        int ret = msgBox.exec();
+
+        if (dontAskBox->isChecked())
+            settings.setValue("bootstrapDontAsk", true);
 
         if (ret == QMessageBox::Yes)
         {

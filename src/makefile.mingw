@@ -111,6 +111,7 @@ OBJS= \
     obj/miner.o \
     obj/main.o \
     obj/net.o \
+    obj/bootstrap.o \
     obj/net_bootstrap.o \
     obj/protocol.o \
     obj/trianglesrpc.o \
@@ -226,6 +227,13 @@ obj/tor_embed_hooks.o: tor_embed_hooks.cpp
 	rm -f $(@:%.o=%.d)
 
 obj/tor_embedded.o: tor/tor_embedded.cpp
+	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
+	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
+	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+            -e '/^$$/ d' -e 's/$$/ :/' < $(@:%.o=%.d) >> $(@:%.o=%.P); \
+	rm -f $(@:%.o=%.d)
+
+obj/bootstrap.o: bootstrap.cpp
 	$(CXX) -c $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
 	@cp $(@:%.o=%.d) $(@:%.o=%.P); \
 	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \

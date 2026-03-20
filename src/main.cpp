@@ -3775,7 +3775,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             if (IsInitialBlockDownload())
             {
                 static int nBlocksSinceRequest = 0;
-                if (++nBlocksSinceRequest >= 1000)
+                if (++nBlocksSinceRequest >= 100)
                 {
                     nBlocksSinceRequest = 0;
                     pfrom->pindexLastGetBlocksBegin = NULL;
