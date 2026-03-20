@@ -1584,7 +1584,7 @@ void ThreadOpenConnections2(void* parg)
             for (CNode* pnode : vNodes) {
                 if (!pnode->fInbound) { fNoOutbound = false; break; }
             }
-            if (fNoOutbound && (GetTime() - nStart > 30) && !fTestNet)
+            if (fNoOutbound && (GetTime() - nStart > 10) && !fTestNet)
             {
                 std::vector<CAddress> vAdd;
                 for (unsigned int i = 0; i < ARRAYLEN(pnSeed); i++)
@@ -1596,7 +1596,7 @@ void ThreadOpenConnections2(void* parg)
                     vAdd.push_back(addr);
                 }
                 addrman.Add(vAdd, CNetAddr("127.0.0.1"));
-                printf("No outbound connections after 30s, added %d hardcoded seeds\n", (int)vAdd.size());
+                printf("No outbound connections after 10s, added %d hardcoded seeds\n", (int)vAdd.size());
             }
         }
 
@@ -1642,7 +1642,7 @@ void ThreadOpenConnections2(void* parg)
                 continue;
 
             // only consider very recently tried nodes after 30 failed attempts
-            if (nANow - addr.nLastTry < 600 && nTries < 30)
+            if (nANow - addr.nLastTry < 120 && nTries < 30)
                 continue;
 
             // do not allow non-default ports, unless after 50 invalid addresses selected already

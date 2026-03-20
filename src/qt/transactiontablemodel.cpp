@@ -71,7 +71,13 @@ public:
         OutputDebugStringF("refreshWallet\n");
         cachedWallet.clear();
         {
-            LOCK(wallet->cs_wallet);
+            TRY_LOCK(wallet->cs_wallet, lockWallet);
+            if(!lockWallet)
+            {
+                // Lock busy (block processing), retry in 500ms
+                QTimer::singleShot(500, parent, SLOT(refreshWallet()));
+                return;
+            }
             for(std::map<uint256, CWalletTx>::iterator it = wallet->mapWallet.begin(); it != wallet->mapWallet.end(); ++it)
             {
                 if(TransactionRecord::showTransaction(it->second))

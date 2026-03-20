@@ -1,5 +1,6 @@
 #include "introdialog.h"
 #include "util.h"
+#include "bootstrap.h"
 
 #include <QSettings>
 #include <QVBoxLayout>
@@ -9,6 +10,8 @@
 #include <QDir>
 #include <QMessageBox>
 #include <QDialogButtonBox>
+#include <QProgressDialog>
+#include <QApplication>
 
 #include <boost/filesystem.hpp>
 
@@ -199,6 +202,82 @@ bool IntroDialog::pickDataDirectory()
         QMessageBox::critical(0, "Triangles",
             QString("Error: Could not create data directory \"%1\".").arg(dataDir));
         return false;
+    }
+
+    // Offer bootstrap download once (tracks via QSettings so it only asks once)
+    fs::path dataDirPath(dataDir.toStdString());
+    if (!settings.value("bootstrapOffered", false).toBool())
+    {
+        settings.setValue("bootstrapOffered", true);
+
+        int ret = QMessageBox::question(0, "Triangles",
+            "Would you like to download the latest blockchain snapshot?\n\n"
+            "This will download the blockchain data from the Triangles network "
+            "and replace any existing chain data in your data directory.\n\n"
+            "Click Yes to download, or No to sync from the network.",
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+
+        if (ret == QMessageBox::Yes)
+        {
+            std::string host = Bootstrap::DEFAULT_HOST;
+            std::string strError;
+            std::vector<std::string> files;
+
+            // Fetch file list (try domain first, then fallback to IP)
+            if (!Bootstrap::FetchFileList(host, files, strError)) {
+                host = Bootstrap::FALLBACK_HOST;
+                if (!Bootstrap::FetchFileList(host, files, strError)) {
+                    QMessageBox::warning(0, "Triangles",
+                        QString("Could not reach bootstrap server:\n%1\n\n"
+                                "The wallet will sync from the network instead.")
+                        .arg(QString::fromStdString(strError)));
+                    return true;
+                }
+            }
+
+            // Show progress dialog
+            QProgressDialog progress("Downloading blockchain data...", "Cancel",
+                                     0, (int)files.size(), 0);
+            progress.setWindowTitle("Triangles - Bootstrap");
+            progress.setWindowModality(Qt::ApplicationModal);
+            progress.setMinimumDuration(0);
+            progress.setValue(0);
+
+            bool failed = false;
+            for (int i = 0; i < (int)files.size(); i++) {
+                if (progress.wasCanceled())
+                    break;
+
+                QString filename = QString::fromStdString(files[i]);
+                progress.setLabelText(
+                    QString("Downloading %1 (%2 of %3)...")
+                    .arg(filename).arg(i + 1).arg((int)files.size()));
+                progress.setValue(i);
+                QApplication::processEvents();
+
+                // Create subdirectories if needed (e.g. txleveldb/)
+                fs::path destPath = dataDirPath / files[i];
+                fs::create_directories(destPath.parent_path());
+
+                // Download this file
+                std::string urlPath = std::string(Bootstrap::BASE_PATH) + files[i];
+                if (!Bootstrap::DownloadFile(host, urlPath, destPath,
+                    [](int64_t, int64_t) {
+                        QApplication::processEvents();
+                    }, strError))
+                {
+                    QMessageBox::warning(0, "Triangles",
+                        QString("Download failed for %1:\n%2\n\n"
+                                "The wallet will sync remaining data from the network.")
+                        .arg(filename).arg(QString::fromStdString(strError)));
+                    failed = true;
+                    break;
+                }
+            }
+
+            if (!failed)
+                progress.setValue((int)files.size());
+        }
     }
 
     return true;

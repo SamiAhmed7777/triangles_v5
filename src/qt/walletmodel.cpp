@@ -78,6 +78,12 @@ void WalletModel::pollBalanceChanged()
 {
     if(nBestHeight != cachedNumBlocks)
     {
+        // Don't block the UI thread waiting for cs_wallet - skip this
+        // update cycle if the lock is held by the block processing thread
+        TRY_LOCK(wallet->cs_wallet, lockWallet);
+        if(!lockWallet)
+            return;
+
         // Balance and number of transactions might have changed
         cachedNumBlocks = nBestHeight;
         checkBalanceChanged();

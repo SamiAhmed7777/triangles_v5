@@ -204,6 +204,7 @@ HEADERS += src/qt/trianglesgui.h \
     src/qt/addressbookpage.h \
     src/qt/aboutdialog.h \
     src/qt/introdialog.h \
+    src/bootstrap.h \
     src/qt/editaddressdialog.h \
     src/qt/trianglesaddressvalidator.h \
     src/alert.h \
@@ -322,6 +323,7 @@ SOURCES += src/qt/triangles.cpp src/qt/trianglesgui.cpp \
     src/qt/addressbookpage.cpp \
     src/qt/aboutdialog.cpp \
     src/qt/introdialog.cpp \
+    src/bootstrap.cpp \
     src/qt/editaddressdialog.cpp \
     src/qt/trianglesaddressvalidator.cpp \
     # Old embedded Tor v2 client removed - incompatible with OpenSSL 3.x

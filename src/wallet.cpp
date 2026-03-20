@@ -958,10 +958,20 @@ int CWallet::ScanForWalletTransactions(CBlockIndex* pindexStart, bool fUpdate)
     CBlockIndex* pindex = pindexStart;
     {
         LOCK(cs_wallet);
+        int nScanned = 0;
+        int nTotal = nBestHeight - (pindexStart ? pindexStart->nHeight : 0);
+        if (nTotal < 1) nTotal = 1;
         while (pindex)
         {
             if (fShutdown)
                 break;
+
+            // Report progress every 10000 blocks to keep UI responsive
+            if (++nScanned % 10000 == 0)
+            {
+                int nPercent = (nScanned * 100) / nTotal;
+                uiInterface.InitMessage(strprintf(_("Rescanning... %d%%"), nPercent));
+            }
 
             // no need to read and scan block, if block was created before
             // our wallet birthday (as adjusted for block time variability)
