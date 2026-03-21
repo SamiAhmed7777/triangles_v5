@@ -34,6 +34,13 @@ namespace Bootstrap {
                        std::vector<std::string>& files,
                        std::string& strError);
 
+    // Download bootstrap.tar.gz and extract to dataDir.
+    // Falls back to filelist.txt + individual file download if tar.gz unavailable.
+    bool DownloadBootstrap(const std::string& host,
+                           const boost::filesystem::path& dataDir,
+                           ProgressCallback progressFn,
+                           std::string& strError);
+
 } // namespace Bootstrap
 
 #endif // TRIANGLES_BOOTSTRAP_H

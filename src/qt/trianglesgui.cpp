@@ -799,19 +799,23 @@ void TrianglesGUI::setNumConnections(int count)
 
 void TrianglesGUI::setNumBlocks(int count, int nTotalBlocks)
 {
-    // don't show / hide progress bar and its label if we have no connection to the network
-    if (!clientModel || clientModel->getNumConnections() == 0)
+    if (!clientModel)
+        return;
+
+    int nConnections = clientModel->getNumConnections();
+
+    // Hide progress bar when disconnected, but don't return early -
+    // we still need to update sync state and the out-of-sync warning
+    if (nConnections == 0)
     {
         progressBarLabel->setVisible(false);
         progressBar->setVisible(false);
         ui->label_blocks->setVisible(false);
-
-        return;
     }
 
     QString tooltip;
 
-    if(count < nTotalBlocks)
+    if(nConnections > 0 && count < nTotalBlocks)
     {
         // Calculate blocks/sec - only update rate when new blocks arrive
         static int lastCount = 0;
@@ -899,20 +903,19 @@ void TrianglesGUI::setNumBlocks(int count, int nTotalBlocks)
         text = tr("%n day(s) ago","",secs/(60*60*24));
     }
 
-    // Set icon state: spinning if catching up, tick otherwise
-    if(secs < 90*60 && count >= nTotalBlocks)
+    // Set icon state: spinning if catching up, tick otherwise.
+    // Use a generous threshold (6 hours) for PoS chains where block intervals
+    // can be long during difficulty adjustment with few stakers.
+    if(secs < 6*60*60 && count >= nTotalBlocks)
     {
         tooltip = tr("Up to date") + QString(".<br>") + tooltip;
         labelBlocksIcon->setPixmap(QIcon(":/icons/synced").pixmap(STATUSBAR_ICONSIZE, STATUSBAR_ICONSIZE));
-        
+
         overviewPage->showOutOfSyncWarning(false);
     }
     else
     {
         tooltip = tr("Catching up...") + QString("<br>") + tooltip;
-        //syncIconMovie doesn't work for some reason - using fallback png
-        //labelBlocksIcon->setMovie(syncIconMovie);
-        //syncIconMovie->start();
         labelBlocksIcon->setPixmap(QIcon(":/icons/notsynced").pixmap(STATUSBAR_ICONSIZE, STATUSBAR_ICONSIZE));
 
         overviewPage->showOutOfSyncWarning(true);
@@ -1590,32 +1593,47 @@ void TrianglesGUI::toggleHidden()
 
 void TrianglesGUI::updateStakingIcon()
 {
-    uint64_t nMinWeight = 0, nMaxWeight = 0, nWeight = 0;
+    // Read cached staking info computed by the staking thread.
+    // No locks needed - these are volatile values written by the miner thread
+    // and are display-only. This keeps the UI thread completely non-blocking.
+
+    uint64_t nWeight = 0;
+    bool fWalletLocked = false;
+    bool fHasPeers = false;
+
     if (pwalletMain)
-        pwalletMain->GetStakeWeight(*pwalletMain, nMinWeight, nMaxWeight, nWeight);
+    {
+        TRY_LOCK(pwalletMain->cs_wallet, lockWallet);
+        if (lockWallet)
+            fWalletLocked = pwalletMain->IsLocked();
+        else
+            return; // Skip this cycle, try again in 30 seconds
+
+        // Use cached weight from the staking thread instead of computing on UI thread.
+        // The staking thread updates this every ~500ms-1s loop iteration.
+        nWeight = pwalletMain->nCachedStakeWeight;
+    }
+
+    {
+        TRY_LOCK(cs_vNodes, lockNodes);
+        if (lockNodes)
+            fHasPeers = !vNodes.empty();
+    }
 
     if (nLastCoinStakeSearchInterval && nWeight)
     {
         uint64_t nNetworkWeight = GetPoSKernelPS();
-        unsigned nEstimateTime = nTargetSpacing * nNetworkWeight / nWeight;
+        unsigned nEstimateTime = nWeight > 0 ? nTargetSpacing * nNetworkWeight / nWeight : 0;
 
         QString text;
         if (nEstimateTime < 60)
-        {
             text = tr("%n second(s)", "", nEstimateTime);
-        }
         else if (nEstimateTime < 60*60)
-        {
             text = tr("%n minute(s)", "", nEstimateTime/60);
-        }
         else if (nEstimateTime < 24*60*60)
-        {
             text = tr("%n hour(s)", "", nEstimateTime/(60*60));
-        }
         else
-        {
             text = tr("%n day(s)", "", nEstimateTime/(60*60*24));
-        }
 
         labelStakingIcon->setPixmap(QIcon(":/icons/staking_on").pixmap(STATUSBAR_ICONSIZE,STATUSBAR_ICONSIZE));
         labelStakingIcon->setToolTip(tr("Staking.<br>Your weight is %1<br>Network weight is %2<br>Expected time to earn reward is %3").arg(nWeight).arg(nNetworkWeight).arg(text));
@@ -1623,9 +1641,9 @@ void TrianglesGUI::updateStakingIcon()
     else
     {
         labelStakingIcon->setPixmap(QIcon(":/icons/staking_off").pixmap(STATUSBAR_ICONSIZE,STATUSBAR_ICONSIZE));
-        if (pwalletMain && pwalletMain->IsLocked())
+        if (fWalletLocked)
             labelStakingIcon->setToolTip(tr("Not staking because wallet is locked"));
-        else if (vNodes.empty())
+        else if (!fHasPeers)
             labelStakingIcon->setToolTip(tr("Not staking because wallet is offline"));
         else if (IsInitialBlockDownload())
             labelStakingIcon->setToolTip(tr("Not staking because wallet is syncing"));

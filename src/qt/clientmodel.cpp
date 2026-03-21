@@ -15,7 +15,7 @@ static const int64_t nClientStartupTime = GetTime();
 
 ClientModel::ClientModel(OptionsModel *optionsModel, QObject *parent) :
     QObject(parent), optionsModel(optionsModel),
-    cachedNumBlocks(0), cachedNumBlocksOfPeers(0), pollTimer(0)
+    cachedNumBlocks(0), cachedNumBlocksOfPeers(0), cachedNumConnections(0), pollTimer(0)
 {
     numBlocksAtStartup = -1;
 
@@ -34,7 +34,14 @@ ClientModel::~ClientModel()
 
 int ClientModel::getNumConnections() const
 {
-    return vNodes.size();
+    // Use TRY_LOCK to avoid blocking the UI thread when the network
+    // thread holds cs_vNodes (e.g. during DNS resolution or connections).
+    // Return the cached value if the lock is busy.
+    TRY_LOCK(cs_vNodes, lockNodes);
+    if (lockNodes) {
+        cachedNumConnections = vNodes.size();
+    }
+    return cachedNumConnections;
 }
 
 int ClientModel::getNumBlocks() const

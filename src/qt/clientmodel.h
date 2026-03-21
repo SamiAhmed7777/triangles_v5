@@ -49,6 +49,7 @@ private:
 
     int cachedNumBlocks;
     int cachedNumBlocksOfPeers;
+    mutable int cachedNumConnections;
 
     int numBlocksAtStartup;
 

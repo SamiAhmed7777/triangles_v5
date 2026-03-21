@@ -107,6 +107,8 @@ public:
         nMasterKeyMaxID = 0;
         pwalletdbEncryption = NULL;
         nOrderPosNext = 0;
+        nCachedStakeWeight = 0;
+        nCachedStakeWeightTime = 0;
     }
     CWallet(std::string strWalletFileIn)
     {
@@ -117,6 +119,8 @@ public:
         nMasterKeyMaxID = 0;
         pwalletdbEncryption = NULL;
         nOrderPosNext = 0;
+        nCachedStakeWeight = 0;
+        nCachedStakeWeightTime = 0;
     }
 
     std::map<uint256, CWalletTx> mapWallet;
@@ -190,12 +194,19 @@ public:
     int64_t GetImmatureBalance() const;
     int64_t GetStake() const;
     int64_t GetNewMint() const;
+    // Get all balances in a single lock acquisition + single pass (avoids 4x lock + 4x iteration)
+    void GetAllBalances(int64_t& nBalance, int64_t& nStake, int64_t& nUnconfirmed, int64_t& nImmature) const;
     bool CreateTransaction(const std::vector<std::pair<CScript, int64_t> >& vecSend, CWalletTx& wtxNew, CReserveKey& reservekey, int64_t& nFeeRet, const CCoinControl *coinControl=NULL);
     bool CreateTransaction(CScript scriptPubKey, int64_t nValue, std::string& sNarr, CWalletTx& wtxNew, CReserveKey& reservekey, int64_t& nFeeRet, const CCoinControl *coinControl=NULL);
     bool CommitTransaction(CWalletTx& wtxNew, CReserveKey& reservekey);
 
     bool GetStakeWeight(const CKeyStore& keystore, uint64_t& nMinWeight, uint64_t& nMaxWeight, uint64_t& nWeight);
     bool CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int64_t nSearchInterval, int64_t nFees, CTransaction& txNew, CKey& key);
+
+    // Cached staking info - updated by the staking thread, read by the UI thread.
+    // Access is safe without locks: written atomically by the miner, read by UI for display only.
+    volatile uint64_t nCachedStakeWeight;
+    volatile int64_t  nCachedStakeWeightTime;  // GetTime() when last updated
 
     std::string SendMoney(CScript scriptPubKey, int64_t nValue, std::string& sNarr, CWalletTx& wtxNew, bool fAskFee=false);
     std::string SendMoneyToDestination(const CTxDestination& address, int64_t nValue, std::string& sNarr, CWalletTx& wtxNew, bool fAskFee=false);

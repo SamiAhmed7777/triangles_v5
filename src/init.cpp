@@ -805,43 +805,32 @@ bool AppInit2()
         fs::path dataPath = GetDataDir();
         std::string host = Bootstrap::DEFAULT_HOST;
         std::string strError;
-        std::vector<std::string> files;
 
-        uiInterface.InitMessage(_("Fetching bootstrap file list..."));
+        uiInterface.InitMessage(_("Downloading blockchain snapshot..."));
         printf("Bootstrap: contacting %s...\n", host.c_str());
 
-        bool fGotList = Bootstrap::FetchFileList(host, files, strError);
-        if (!fGotList) {
+        auto progressFn = [](int64_t bytesDownloaded, int64_t totalBytes) {
+            if (totalBytes > 0) {
+                printf("\rBootstrap: %lld / %lld MB (%lld%%)",
+                       (long long)(bytesDownloaded / (1024*1024)),
+                       (long long)(totalBytes / (1024*1024)),
+                       (long long)((bytesDownloaded * 100) / totalBytes));
+                fflush(stdout);
+            }
+        };
+
+        bool success = Bootstrap::DownloadBootstrap(host, dataPath, progressFn, strError);
+        if (!success) {
             host = Bootstrap::FALLBACK_HOST;
-            printf("Bootstrap: primary host failed, trying fallback %s...\n", host.c_str());
-            fGotList = Bootstrap::FetchFileList(host, files, strError);
+            printf("\nBootstrap: primary host failed, trying fallback %s...\n", host.c_str());
+            success = Bootstrap::DownloadBootstrap(host, dataPath, progressFn, strError);
         }
 
-        if (!fGotList) {
-            printf("Bootstrap: could not reach server: %s\n", strError.c_str());
+        if (!success) {
+            printf("\nBootstrap: failed: %s\n", strError.c_str());
             printf("Bootstrap: skipping, will sync from network.\n");
         } else {
-            printf("Bootstrap: downloading %d files...\n", (int)files.size());
-            for (int i = 0; i < (int)files.size(); i++) {
-                if (fRequestShutdown) break;
-
-                printf("Bootstrap: downloading %s (%d of %d)...\n",
-                       files[i].c_str(), i + 1, (int)files.size());
-                uiInterface.InitMessage(strprintf(_("Downloading %s (%d of %d)..."),
-                       files[i].c_str(), i + 1, (int)files.size()));
-
-                fs::path destPath = dataPath / files[i];
-                fs::create_directories(destPath.parent_path());
-
-                std::string urlPath = std::string(Bootstrap::BASE_PATH) + files[i];
-                if (!Bootstrap::DownloadFile(host, urlPath, destPath, nullptr, strError)) {
-                    printf("Bootstrap: download failed for %s: %s\n",
-                           files[i].c_str(), strError.c_str());
-                    printf("Bootstrap: will sync remaining data from network.\n");
-                    break;
-                }
-            }
-            printf("Bootstrap: done.\n");
+            printf("\nBootstrap: done.\n");
         }
     }
 #endif
@@ -870,6 +859,16 @@ bool AppInit2()
     if (!LoadBlockIndex())
         return InitError(_("Error loading blkindex.dat"));
 
+    // If the block index is empty but blk0001.dat exists (bootstrap download),
+    // fast-import: build the index directly from the block file without re-writing
+    // data. Batches LevelDB commits every 200K blocks for speed.
+    if (nBestHeight == 0 && boost::filesystem::exists(GetDataDir() / "blk0001.dat")
+        && mapBlockIndex.size() <= 1)
+    {
+        uiInterface.InitMessage(_("Importing bootstrap blocks..."));
+        printf("Block index empty but blk0001.dat exists - running fast import...\n");
+        FastImportBlockFile();
+    }
 
     // as LoadBlockIndex can take several minutes, it's possible the user
     // requested to kill triangles-qt during the last operation. If so, exit.

@@ -3023,7 +3023,14 @@ bool LoadExternalBlockFile(FILE* fileIn)
 {
     int64_t nStart = GetTimeMillis();
 
+    // Get file size for progress reporting
+    int64_t nFileSize = 0;
+    fseek(fileIn, 0, SEEK_END);
+    nFileSize = ftell(fileIn);
+    fseek(fileIn, 0, SEEK_SET);
+
     int nLoaded = 0;
+    int64_t nLastProgressReport = 0;
     {
         LOCK(cs_main);
         try {
@@ -3074,6 +3081,20 @@ bool LoadExternalBlockFile(FILE* fileIn)
                         nLoaded++;
                     nPos += 4 + nSize;
                 }
+
+                // Report progress every 1000 blocks
+                if (nLoaded - nLastProgressReport >= 1000)
+                {
+                    nLastProgressReport = nLoaded;
+                    if (nFileSize > 0) {
+                        int pct = (int)((int64_t)nPos * 100 / nFileSize);
+                        printf("Importing blocks... %d blocks loaded (%d%%)\n", nLoaded, pct);
+                        uiInterface.InitMessage(strprintf(_("Importing blocks... %d loaded (%d%%)"), nLoaded, pct));
+                    } else {
+                        printf("Importing blocks... %d blocks loaded\n", nLoaded);
+                        uiInterface.InitMessage(strprintf(_("Importing blocks... %d loaded"), nLoaded));
+                    }
+                }
             }
         }
         catch (std::exception &e) {
@@ -3082,6 +3103,210 @@ bool LoadExternalBlockFile(FILE* fileIn)
         }
     }
     printf("Loaded %i blocks from external file in %"PRId64"ms\n", nLoaded, GetTimeMillis() - nStart);
+    return nLoaded > 0;
+}
+
+bool FastImportBlockFile()
+{
+    // Fast block import: reads blk0001.dat and builds the block index
+    // directly without re-writing block data. LevelDB writes are batched
+    // every 200K blocks for speed. Only used for trusted bootstrap data
+    // (blocks below the hardcoded checkpoint).
+
+    fs::path blkPath = GetDataDir() / "blk0001.dat";
+    if (!fs::exists(blkPath))
+        return false;
+
+    printf("FastImportBlockFile: starting from %s\n", blkPath.string().c_str());
+    int64_t nStart = GetTimeMillis();
+
+    FILE* fileIn = fopen(blkPath.string().c_str(), "rb");
+    if (!fileIn)
+        return false;
+
+    // Get file size for progress
+    fseek(fileIn, 0, SEEK_END);
+    int64_t nFileSize = ftell(fileIn);
+    fseek(fileIn, 0, SEEK_SET);
+
+    int nLoaded = 0;
+    int64_t nLastProgressReport = 0;
+
+    {
+        LOCK(cs_main);
+        CAutoFile blkdat(fileIn, SER_DISK, CLIENT_VERSION);
+
+        CTxDB txdb;
+        txdb.TxnBegin();
+
+        unsigned int nPos = 0;
+        while (nPos != (unsigned int)-1 && blkdat.good() && !fRequestShutdown)
+        {
+            // Find message start bytes (same scan as LoadExternalBlockFile)
+            unsigned char pchData[65536];
+            do {
+                fseek(blkdat, nPos, SEEK_SET);
+                int nRead = fread(pchData, 1, sizeof(pchData), blkdat);
+                if (nRead <= 8)
+                {
+                    nPos = (unsigned int)-1;
+                    break;
+                }
+                void* nFind = memchr(pchData, pchMessageStart[0], nRead+1-sizeof(pchMessageStart));
+                if (nFind)
+                {
+                    if (memcmp(nFind, pchMessageStart, sizeof(pchMessageStart))==0)
+                    {
+                        nPos += ((unsigned char*)nFind - pchData) + sizeof(pchMessageStart);
+                        break;
+                    }
+                    nPos += ((unsigned char*)nFind - pchData) + 1;
+                }
+                else
+                    nPos += sizeof(pchData) - sizeof(pchMessageStart) + 1;
+            } while(!fRequestShutdown);
+
+            if (nPos == (unsigned int)-1)
+                break;
+
+            fseek(blkdat, nPos, SEEK_SET);
+            unsigned int nSize;
+            blkdat >> nSize;
+
+            if (nSize == 0 || nSize > MAX_BLOCK_SIZE)
+            {
+                nPos += 4 + nSize;
+                continue;
+            }
+
+            // nBlockPos = file position where the block data starts
+            // (after 4-byte message start + 4-byte size)
+            unsigned int nBlockPos = nPos + 4;
+
+            CBlock block;
+            blkdat >> block;
+
+            uint256 hash = block.GetHash();
+            if (mapBlockIndex.count(hash))
+            {
+                nPos += 4 + nSize;
+                continue; // already indexed
+            }
+
+            // Create CBlockIndex
+            CBlockIndex* pindexNew = new CBlockIndex(1, nBlockPos, block);
+            if (!pindexNew)
+                break;
+
+            // Link to previous block
+            map<uint256, CBlockIndex*>::iterator miPrev = mapBlockIndex.find(block.hashPrevBlock);
+            if (miPrev != mapBlockIndex.end())
+            {
+                pindexNew->pprev = (*miPrev).second;
+                pindexNew->nHeight = pindexNew->pprev->nHeight + 1;
+            }
+
+            // Chain trust
+            pindexNew->nChainTrust = (pindexNew->pprev ? pindexNew->pprev->nChainTrust : 0) + pindexNew->GetBlockTrust();
+
+            // Stake entropy bit
+            pindexNew->SetStakeEntropyBit(block.GetStakeEntropyBit());
+
+            // Stake modifier (minimal for blocks far below checkpoint)
+            int nCheckpointHeight = Checkpoints::GetTotalBlocksEstimate();
+            if (pindexNew->nHeight >= nCheckpointHeight - 1000)
+            {
+                uint64_t nStakeModifier = 0;
+                bool fGeneratedStakeModifier = false;
+                ComputeNextStakeModifier(pindexNew->pprev, nStakeModifier, fGeneratedStakeModifier);
+                pindexNew->SetStakeModifier(nStakeModifier, fGeneratedStakeModifier);
+            }
+            else
+            {
+                pindexNew->SetStakeModifier(0, pindexNew->nHeight == 0);
+            }
+            pindexNew->nStakeModifierChecksum = GetStakeModifierChecksum(pindexNew);
+
+            // Money supply tracking
+            pindexNew->nMint = 0;
+            pindexNew->nMoneySupply = (pindexNew->pprev ? pindexNew->pprev->nMoneySupply : 0);
+
+            // PoS stake seen set
+            if (pindexNew->IsProofOfStake())
+                setStakeSeen.insert(make_pair(pindexNew->prevoutStake, pindexNew->nStakeTime));
+
+            // Insert into mapBlockIndex
+            map<uint256, CBlockIndex*>::iterator mi = mapBlockIndex.insert(make_pair(hash, pindexNew)).first;
+            pindexNew->phashBlock = &((*mi).first);
+
+            // Link pnext for previous block
+            if (pindexNew->pprev)
+                pindexNew->pprev->pnext = pindexNew;
+
+            // Write block index to batch
+            txdb.WriteBlockIndex(CDiskBlockIndex(pindexNew));
+
+            // Build tx index entries
+            unsigned int nTxPos = nBlockPos + ::GetSerializeSize(CBlock(), SER_DISK, CLIENT_VERSION)
+                                - (2 * GetSizeOfCompactSize(0)) + GetSizeOfCompactSize(block.vtx.size());
+            for (unsigned int i = 0; i < block.vtx.size(); i++)
+            {
+                const CTransaction& tx = block.vtx[i];
+                CDiskTxPos posThisTx(1, nBlockPos, nTxPos);
+                txdb.UpdateTxIndex(tx.GetHash(), CTxIndex(posThisTx, tx.vout.size()));
+                nTxPos += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
+            }
+
+            // Update best chain
+            if (pindexNew->nChainTrust > nBestChainTrust)
+            {
+                hashBestChain = hash;
+                pindexBest = pindexNew;
+                pblockindexFBBHLast = NULL;
+                nBestHeight = pindexNew->nHeight;
+                nBestChainTrust = pindexNew->nChainTrust;
+                nTimeBestReceived = GetTime();
+            }
+
+            // Set genesis block
+            if (pindexGenesisBlock == NULL && pindexNew->nHeight == 0)
+                pindexGenesisBlock = pindexNew;
+
+            nLoaded++;
+            nPos += 4 + nSize;
+
+            // Batch commit every 200K blocks for LevelDB efficiency
+            if (nLoaded % 200000 == 0)
+            {
+                txdb.WriteHashBestChain(hashBestChain);
+                txdb.TxnCommit();
+                txdb.TxnBegin();
+            }
+
+            // Report progress every 5000 blocks to keep GUI responsive.
+            // AppInit2 runs on the GUI thread, so uiInterface.InitMessage
+            // triggers processEvents() which prevents the window from freezing.
+            if (nLoaded % 5000 == 0)
+            {
+                int pct = (nFileSize > 0) ? (int)((int64_t)nPos * 100 / nFileSize) : 0;
+                printf("FastImport: %d blocks indexed (%d%%)\n", nLoaded, pct);
+                uiInterface.InitMessage(strprintf(_("Importing blocks... %d indexed (%d%%)"), nLoaded, pct));
+            }
+        }
+
+        // Final commit
+        if (pindexBest)
+        {
+            txdb.WriteHashBestChain(hashBestChain);
+
+            // Write sync checkpoint
+            Checkpoints::WriteSyncCheckpoint(hashBestChain);
+        }
+        txdb.TxnCommit();
+    }
+
+    nTransactionsUpdated++;
+    printf("FastImportBlockFile: indexed %d blocks in %"PRId64"ms\n", nLoaded, GetTimeMillis() - nStart);
     return nLoaded > 0;
 }
 
@@ -3497,11 +3722,12 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
                     // Trigger them to send a getblocks request for the next batch of inventory
                     if (inv.hash == pfrom->hashContinue)
                     {
-                        // triangles: send latest proof-of-work block to allow the
-                        // download node to accept as orphan (proof-of-stake
-                        // block might be rejected by stake connection check)
+                        // Send the best block hash to trigger the next getblocks.
+                        // Original code sent the last PoW block, but since PoW ended
+                        // at block 9000, that always sent an ancient block causing
+                        // thousands of redundant round-trips through known blocks.
                         vector<CInv> vInv;
-                        vInv.push_back(CInv(MSG_BLOCK, GetLastBlockIndex(pindexBest, false)->GetBlockHash()));
+                        vInv.push_back(CInv(MSG_BLOCK, hashBestChain));
                         pfrom->PushMessage("inv", vInv);
                         pfrom->hashContinue = 0;
                     }
@@ -3549,7 +3775,11 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         // Send the rest of the chain
         if (pindex)
             pindex = pindex->pnext;
-        int nLimit = IsInitialBlockDownload() ? 20000 : 500;
+        // Send larger batches when the requester is far behind (syncing).
+        // The original check used our own IBD state, but we're the seed node
+        // (fully synced), so it always returned 500. Check how far behind
+        // the requester is instead.
+        int nLimit = (pindex && pindexBest && pindexBest->nHeight - pindex->nHeight > 1000) ? 10000 : 500;
         printf("IBD-DIAG: getblocks request from peer %s: start=%d stop=%s limit=%d\n",
             pfrom->addr.ToString().c_str(), (pindex ? pindex->nHeight : -1),
             hashStop.ToString().substr(0,20).c_str(), nLimit);
@@ -3775,7 +4005,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             if (IsInitialBlockDownload())
             {
                 static int nBlocksSinceRequest = 0;
-                if (++nBlocksSinceRequest >= 100)
+                if (++nBlocksSinceRequest >= 5000)
                 {
                     nBlocksSinceRequest = 0;
                     pfrom->pindexLastGetBlocksBegin = NULL;
@@ -4231,7 +4461,7 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
 
 
         //
-        // Stall detection: if IBD and no new blocks for 5 seconds, re-request
+        // Stall detection: if IBD and no new blocks for 10 seconds, re-request
         //
         if (IsInitialBlockDownload() && !pto->fClient)
         {
@@ -4241,8 +4471,8 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
             if (nBestHeight > nLastHeight) {
                 nLastHeight = nBestHeight;
                 nLastBlockReceived = GetTime();
-            } else if (nLastBlockReceived > 0 && GetTime() - nLastBlockReceived > 2) {
-                if (GetTime() - nLastStallLog >= 10) { // log every 10s max
+            } else if (nLastBlockReceived > 0 && GetTime() - nLastBlockReceived > 10) {
+                if (GetTime() - nLastStallLog >= 30) { // log every 30s max
                     printf("IBD-DIAG: STALL at height %d for %ds, peer=%s askfor_queue=%d send_size=%d\n",
                         nBestHeight, (int)(GetTime() - nLastBlockReceived),
                         pto->addr.ToString().c_str(),

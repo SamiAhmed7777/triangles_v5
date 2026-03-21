@@ -559,6 +559,16 @@ void StakeMiner(CWallet *pwallet)
         }
 
         //
+        // Update cached stake weight for UI display (avoids heavy work on UI thread)
+        //
+        {
+            uint64_t nMinWeight = 0, nMaxWeight = 0, nWeight = 0;
+            pwallet->GetStakeWeight(*pwallet, nMinWeight, nMaxWeight, nWeight);
+            pwallet->nCachedStakeWeight = nWeight;
+            pwallet->nCachedStakeWeightTime = GetTime();
+        }
+
+        //
         // Create new block
         //
         int64_t nFees;

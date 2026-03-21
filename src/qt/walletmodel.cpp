@@ -92,10 +92,10 @@ void WalletModel::pollBalanceChanged()
 
 void WalletModel::checkBalanceChanged()
 {
-    qint64 newBalance = getBalance();
-    qint64 newStake = getStake();
-    qint64 newUnconfirmedBalance = getUnconfirmedBalance();
-    qint64 newImmatureBalance = getImmatureBalance();
+    // Get all balances in a single lock acquisition + single pass
+    // instead of 4 separate lock+iterate cycles
+    qint64 newBalance = 0, newStake = 0, newUnconfirmedBalance = 0, newImmatureBalance = 0;
+    wallet->GetAllBalances(newBalance, newStake, newUnconfirmedBalance, newImmatureBalance);
 
     if(cachedBalance != newBalance || cachedStake != newStake || cachedUnconfirmedBalance != newUnconfirmedBalance || cachedImmatureBalance != newImmatureBalance)
     {

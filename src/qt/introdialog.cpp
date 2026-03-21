@@ -231,62 +231,45 @@ bool IntroDialog::pickDataDirectory()
         {
             std::string host = Bootstrap::DEFAULT_HOST;
             std::string strError;
-            std::vector<std::string> files;
 
-            // Fetch file list (try domain first, then fallback to IP)
-            if (!Bootstrap::FetchFileList(host, files, strError)) {
-                host = Bootstrap::FALLBACK_HOST;
-                if (!Bootstrap::FetchFileList(host, files, strError)) {
-                    QMessageBox::warning(0, "Triangles",
-                        QString("Could not reach bootstrap server:\n%1\n\n"
-                                "The wallet will sync from the network instead.")
-                        .arg(QString::fromStdString(strError)));
-                    return true;
-                }
-            }
-
-            // Show progress dialog
-            QProgressDialog progress("Downloading blockchain data...", "Cancel",
-                                     0, (int)files.size(), 0);
+            QProgressDialog progress("Downloading blockchain snapshot...", "Cancel",
+                                     0, 100, 0);
             progress.setWindowTitle("Triangles - Bootstrap");
             progress.setWindowModality(Qt::ApplicationModal);
             progress.setMinimumDuration(0);
             progress.setValue(0);
 
-            bool failed = false;
-            for (int i = 0; i < (int)files.size(); i++) {
-                if (progress.wasCanceled())
-                    break;
-
-                QString filename = QString::fromStdString(files[i]);
-                progress.setLabelText(
-                    QString("Downloading %1 (%2 of %3)...")
-                    .arg(filename).arg(i + 1).arg((int)files.size()));
-                progress.setValue(i);
-                QApplication::processEvents();
-
-                // Create subdirectories if needed (e.g. txleveldb/)
-                fs::path destPath = dataDirPath / files[i];
-                fs::create_directories(destPath.parent_path());
-
-                // Download this file
-                std::string urlPath = std::string(Bootstrap::BASE_PATH) + files[i];
-                if (!Bootstrap::DownloadFile(host, urlPath, destPath,
-                    [](int64_t, int64_t) {
-                        QApplication::processEvents();
-                    }, strError))
-                {
-                    QMessageBox::warning(0, "Triangles",
-                        QString("Download failed for %1:\n%2\n\n"
-                                "The wallet will sync remaining data from the network.")
-                        .arg(filename).arg(QString::fromStdString(strError)));
-                    failed = true;
-                    break;
+            auto progressFn = [&progress](int64_t bytesDownloaded, int64_t totalBytes) {
+                if (totalBytes > 0) {
+                    int pct = (int)((bytesDownloaded * 100) / totalBytes);
+                    progress.setValue(pct);
+                    progress.setLabelText(
+                        QString("Downloading blockchain snapshot... %1 MB / %2 MB")
+                        .arg(bytesDownloaded / (1024*1024))
+                        .arg(totalBytes / (1024*1024)));
+                } else {
+                    progress.setLabelText(
+                        QString("Downloading blockchain snapshot... %1 MB")
+                        .arg(bytesDownloaded / (1024*1024)));
                 }
+                QApplication::processEvents();
+            };
+
+            bool success = Bootstrap::DownloadBootstrap(host, dataDirPath, progressFn, strError);
+            if (!success) {
+                host = Bootstrap::FALLBACK_HOST;
+                progress.setValue(0);
+                success = Bootstrap::DownloadBootstrap(host, dataDirPath, progressFn, strError);
             }
 
-            if (!failed)
-                progress.setValue((int)files.size());
+            if (!success) {
+                QMessageBox::warning(0, "Triangles",
+                    QString("Could not download blockchain snapshot:\n%1\n\n"
+                            "The wallet will sync from the network instead.")
+                    .arg(QString::fromStdString(strError)));
+            } else {
+                progress.setValue(100);
+            }
         }
     }
 

@@ -1476,6 +1476,31 @@ int64_t CWallet::GetNewMint() const
     return nTotal;
 }
 
+void CWallet::GetAllBalances(int64_t& nBalance, int64_t& nStake, int64_t& nUnconfirmed, int64_t& nImmature) const
+{
+    nBalance = 0;
+    nStake = 0;
+    nUnconfirmed = 0;
+    nImmature = 0;
+    LOCK(cs_wallet);
+    for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it)
+    {
+        const CWalletTx& pcoin = (*it).second;
+
+        if (pcoin.IsCoinStake() && pcoin.GetBlocksToMaturity() > 0 && pcoin.GetDepthInMainChain() > 0)
+            nStake += CWallet::GetCredit(pcoin);
+
+        if (pcoin.IsCoinBase() && pcoin.GetBlocksToMaturity() > 0 && pcoin.IsInMainChain())
+            nImmature += GetCredit(pcoin);
+
+        if (pcoin.IsTrusted())
+            nBalance += pcoin.GetAvailableCredit();
+
+        if (!pcoin.IsFinal() || !pcoin.IsTrusted())
+            nUnconfirmed += pcoin.GetAvailableCredit();
+    }
+}
+
 bool CWallet::SelectCoinsMinConf(int64_t nTargetValue, unsigned int nSpendTime, int nConfMine, int nConfTheirs, vector<COutput> vCoins, set<pair<const CWalletTx*,unsigned int> >& setCoinsRet, int64_t& nValueRet) const
 {
     setCoinsRet.clear();
