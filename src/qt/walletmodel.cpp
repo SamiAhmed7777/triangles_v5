@@ -246,7 +246,10 @@ WalletModel::SendCoinsReturn WalletModel::sendCoins(const QList<SendCoinsRecipie
 
         if(!fCreated)
         {
-            if((total + nFeeRequired) > nBalance) // FIXME: could cause collisions in the future
+            // NOTE: Potential edge case in fee calculation. The term "collisions" is unclear
+            // from original comment - may refer to transaction conflicts or UTXO selection issues.
+            // Consider reviewing Bitcoin Core's current implementation of this balance check.
+            if((total + nFeeRequired) > nBalance)
             {
                 return SendCoinsReturn(AmountWithFeeExceedsBalance, nFeeRequired);
             }
