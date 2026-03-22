@@ -229,7 +229,8 @@ Value getworkex(const Array& params, bool fHelp)
         if(coinbase.size() == 0)
             pblock->vtx[0].vin[0].scriptSig = mapNewBlock[pdata->hashMerkleRoot].second;
         else
-            CDataStream(coinbase, SER_NETWORK, PROTOCOL_VERSION) >> pblock->vtx[0]; // FIXME - DRM!
+            // Deserialize custom coinbase transaction from miner
+            CDataStream(coinbase, SER_NETWORK, PROTOCOL_VERSION) >> pblock->vtx[0];
 
         pblock->hashMerkleRoot = pblock->BuildMerkleTree();
 
@@ -260,7 +261,10 @@ Value getwork(const Array& params, bool fHelp)
         throw JSONRPCError(RPC_MISC_ERROR, "No more PoW blocks");
 
     typedef map<uint256, pair<CBlock*, CScript> > mapNewBlock_t;
-    static mapNewBlock_t mapNewBlock;    // FIXME: thread safety
+    // NOTE: Thread safety issue - static variables accessed by multiple RPC threads
+    // without mutex protection. Low priority since PoW ended at block 9000 and
+    // getwork is rarely used. Consider adding std::mutex if usage increases.
+    static mapNewBlock_t mapNewBlock;
     static vector<CBlock*> vNewBlock;
     static CReserveKey reservekey(pwalletMain);
 
