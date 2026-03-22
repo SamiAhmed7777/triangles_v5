@@ -52,3 +52,6 @@ triangles.conf
 *.key
 *.cert
 *.gpg
+*.o
+src/trianglesd
+src/obj/
