@@ -1476,13 +1476,15 @@ int64_t CWallet::GetNewMint() const
     return nTotal;
 }
 
-void CWallet::GetAllBalances(int64_t& nBalance, int64_t& nStake, int64_t& nUnconfirmed, int64_t& nImmature) const
+bool CWallet::GetAllBalances(int64_t& nBalance, int64_t& nStake, int64_t& nUnconfirmed, int64_t& nImmature) const
 {
     nBalance = 0;
     nStake = 0;
     nUnconfirmed = 0;
     nImmature = 0;
-    LOCK(cs_wallet);
+    TRY_LOCK(cs_wallet, lockWallet);
+    if (!lockWallet)
+        return false;
     for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it)
     {
         const CWalletTx& pcoin = (*it).second;
@@ -1499,6 +1501,7 @@ void CWallet::GetAllBalances(int64_t& nBalance, int64_t& nStake, int64_t& nUncon
         if (!pcoin.IsFinal() || !pcoin.IsTrusted())
             nUnconfirmed += pcoin.GetAvailableCredit();
     }
+    return true;
 }
 
 bool CWallet::SelectCoinsMinConf(int64_t nTargetValue, unsigned int nSpendTime, int nConfMine, int nConfTheirs, vector<COutput> vCoins, set<pair<const CWalletTx*,unsigned int> >& setCoinsRet, int64_t& nValueRet) const
