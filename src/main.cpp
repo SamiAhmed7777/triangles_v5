@@ -18,6 +18,7 @@
 #endif
 #include "notificationqueue.h"
 #include "addressindex.h"
+#include <algorithm>
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -92,6 +93,255 @@ int64_t nReserveBalance = 0;
 int64_t nMinimumInputValue = 0;
 
 extern enum Checkpoints::CPMode CheckpointsMode;
+
+namespace
+{
+
+struct CHeaderSyncNode
+{
+    CBlock header;
+    int nHeight;
+    uint256 nChainTrust;
+    bool fRequested;
+    int64_t nLastRequestTime;
+};
+
+static std::map<uint256, CHeaderSyncNode> mapHeaderSync;
+static uint256 hashBestHeaderSync = 0;
+
+static const unsigned int MAX_HEADER_SYNC_CACHE = 50000;
+static const unsigned int HEADER_DOWNLOAD_WINDOW = 128;
+static const int64_t HEADER_REQUEST_TIMEOUT_MICROS = 30 * 1000000;
+
+static uint256 GetHeaderSyncTrust(unsigned int nBits)
+{
+    CBigNum bnTarget;
+    bnTarget.SetCompact(nBits);
+
+    if (bnTarget <= 0)
+        return 0;
+
+    return ((CBigNum(1) << 256) / (bnTarget + 1)).getuint256();
+}
+
+static bool GetKnownHeaderState(const uint256& hash, int& nHeight, uint256& nChainTrust)
+{
+    std::map<uint256, CBlockIndex*>::const_iterator miBlock = mapBlockIndex.find(hash);
+    if (miBlock != mapBlockIndex.end())
+    {
+        nHeight = miBlock->second->nHeight;
+        nChainTrust = miBlock->second->nChainTrust;
+        return true;
+    }
+
+    std::map<uint256, CHeaderSyncNode>::const_iterator miHeader = mapHeaderSync.find(hash);
+    if (miHeader != mapHeaderSync.end())
+    {
+        nHeight = miHeader->second.nHeight;
+        nChainTrust = miHeader->second.nChainTrust;
+        return true;
+    }
+
+    return false;
+}
+
+static bool GetHeaderSyncPrevHash(const uint256& hash, uint256& hashPrev)
+{
+    std::map<uint256, CHeaderSyncNode>::const_iterator miHeader = mapHeaderSync.find(hash);
+    if (miHeader != mapHeaderSync.end())
+    {
+        hashPrev = miHeader->second.header.hashPrevBlock;
+        return true;
+    }
+
+    std::map<uint256, CBlockIndex*>::const_iterator miBlock = mapBlockIndex.find(hash);
+    if (miBlock != mapBlockIndex.end() && miBlock->second->pprev)
+    {
+        hashPrev = miBlock->second->pprev->GetBlockHash();
+        return true;
+    }
+
+    return false;
+}
+
+static void RecomputeBestHeaderSync()
+{
+    hashBestHeaderSync = 0;
+    uint256 nBestTrust = 0;
+
+    for (std::map<uint256, CHeaderSyncNode>::const_iterator it = mapHeaderSync.begin(); it != mapHeaderSync.end(); ++it)
+    {
+        if (hashBestHeaderSync == 0 || it->second.nChainTrust > nBestTrust)
+        {
+            hashBestHeaderSync = it->first;
+            nBestTrust = it->second.nChainTrust;
+        }
+    }
+}
+
+static void PruneHeaderSync()
+{
+    if (mapHeaderSync.size() <= MAX_HEADER_SYNC_CACHE)
+        return;
+
+    printf("IBD-DIAG: header sync cache exceeded %u entries, clearing planner state\n", MAX_HEADER_SYNC_CACHE);
+    mapHeaderSync.clear();
+    hashBestHeaderSync = 0;
+}
+
+static bool AddHeaderSyncNode(const CBlock& header, const uint256& hashHeader)
+{
+    if (mapBlockIndex.count(hashHeader) || mapHeaderSync.count(hashHeader))
+        return true;
+
+    if (!header.vtx.empty())
+        return false;
+
+    if (header.GetBlockTime() > FutureDrift(GetAdjustedTime()))
+        return false;
+
+    int nPrevHeight = -1;
+    uint256 nPrevChainTrust = 0;
+    if (!GetKnownHeaderState(header.hashPrevBlock, nPrevHeight, nPrevChainTrust))
+        return false;
+
+    const int nHeight = nPrevHeight + 1;
+    if (nHeight <= CUTOFF_POW_BLOCK && !CheckProofOfWork(hashHeader, header.nBits))
+        return false;
+
+    CHeaderSyncNode node;
+    node.header = header;
+    node.nHeight = nHeight;
+    node.nChainTrust = nPrevChainTrust + GetHeaderSyncTrust(header.nBits);
+    node.fRequested = false;
+    node.nLastRequestTime = 0;
+
+    mapHeaderSync.insert(std::make_pair(hashHeader, node));
+
+    if (hashBestHeaderSync == 0 || node.nChainTrust > mapHeaderSync[hashBestHeaderSync].nChainTrust)
+        hashBestHeaderSync = hashHeader;
+
+    PruneHeaderSync();
+    return true;
+}
+
+static CBlockLocator BuildHeaderSyncLocator(uint256 hashTip)
+{
+    if (hashTip == 0)
+        return CBlockLocator(pindexBest);
+
+    std::vector<uint256> vHave;
+    int nStep = 1;
+
+    while (hashTip != 0)
+    {
+        vHave.push_back(hashTip);
+
+        for (int i = 0; i < nStep && hashTip != 0; ++i)
+        {
+            uint256 hashPrev = 0;
+            if (!GetHeaderSyncPrevHash(hashTip, hashPrev))
+                hashTip = 0;
+            else
+                hashTip = hashPrev;
+        }
+
+        if (vHave.size() > 10)
+            nStep *= 2;
+    }
+
+    vHave.push_back(!fTestNet ? hashGenesisBlockOfficial : hashGenesisBlockTestNet);
+    return CBlockLocator(vHave);
+}
+
+static std::vector<uint256> GetHeaderSyncDownloadPath(uint256 hashTip)
+{
+    std::vector<uint256> vPath;
+
+    while (hashTip != 0 && !mapBlockIndex.count(hashTip))
+    {
+        std::map<uint256, CHeaderSyncNode>::const_iterator mi = mapHeaderSync.find(hashTip);
+        if (mi == mapHeaderSync.end())
+            break;
+
+        vPath.push_back(hashTip);
+        hashTip = mi->second.header.hashPrevBlock;
+    }
+
+    std::reverse(vPath.begin(), vPath.end());
+    return vPath;
+}
+
+static unsigned int CountHeaderSyncInFlight()
+{
+    const int64_t nNow = GetTime() * 1000000;
+    unsigned int nInFlight = 0;
+    for (std::map<uint256, CHeaderSyncNode>::const_iterator it = mapHeaderSync.begin(); it != mapHeaderSync.end(); ++it)
+    {
+        if (it->second.fRequested && nNow - it->second.nLastRequestTime < HEADER_REQUEST_TIMEOUT_MICROS)
+            ++nInFlight;
+    }
+    return nInFlight;
+}
+
+static unsigned int QueueHeaderSyncBlocks(CNode* pfrom, unsigned int nWindow)
+{
+    if (!pfrom || hashBestHeaderSync == 0)
+        return 0;
+
+    const std::vector<uint256> vPath = GetHeaderSyncDownloadPath(hashBestHeaderSync);
+    if (vPath.empty())
+        return 0;
+
+    const int64_t nNow = GetTime() * 1000000;
+    unsigned int nInFlight = CountHeaderSyncInFlight();
+    unsigned int nQueued = 0;
+
+    for (std::vector<uint256>::const_iterator it = vPath.begin(); it != vPath.end(); ++it)
+    {
+        if (nInFlight + nQueued >= nWindow)
+            break;
+
+        std::map<uint256, CHeaderSyncNode>::iterator mi = mapHeaderSync.find(*it);
+        if (mi == mapHeaderSync.end())
+            continue;
+
+        if (mi->second.fRequested && nNow - mi->second.nLastRequestTime < HEADER_REQUEST_TIMEOUT_MICROS)
+            continue;
+
+        pfrom->AskFor(CInv(MSG_BLOCK, *it));
+        mi->second.fRequested = true;
+        mi->second.nLastRequestTime = nNow;
+        ++nQueued;
+    }
+
+    return nQueued;
+}
+
+static void MarkHeaderSyncBlockAccepted(const uint256& hashBlock)
+{
+    std::map<uint256, CHeaderSyncNode>::iterator mi = mapHeaderSync.find(hashBlock);
+    if (mi == mapHeaderSync.end())
+        return;
+
+    mapHeaderSync.erase(mi);
+    if (hashBestHeaderSync == hashBlock)
+        RecomputeBestHeaderSync();
+}
+
+static void ContinueHeaderSync(CNode* pfrom, const uint256& hashTip)
+{
+    if (!pfrom || hashTip == 0)
+        return;
+
+    CBlockLocator locator = BuildHeaderSyncLocator(hashTip);
+    if (locator.IsNull())
+        return;
+
+    pfrom->PushMessage("getheaders", locator, uint256(0));
+}
+
+} // namespace
 
 //////////////////////////////////////////////////////////////////////////////
 //
@@ -2296,13 +2546,19 @@ bool CBlock::AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const u
     if (!txdb.TxnBegin())
         return false;
     txdb.WriteBlockIndex(CDiskBlockIndex(pindexNew));
-    if (!txdb.TxnCommit())
-        return false;
 
-    // New best
+    // New best — keep the batch open so SetBestChain can add ConnectBlock
+    // writes to the same transaction, cutting the per-block commit count in half.
     if (pindexNew->nChainTrust > nBestChainTrust)
+    {
         if (!SetBestChain(txdb, pindexNew))
             return false;
+    }
+    else
+    {
+        if (!txdb.TxnCommit())
+            return false;
+    }
 
     if (pindexNew == pindexBest)
     {
@@ -2614,8 +2870,11 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         mapOrphanBlocks.insert(make_pair(hash, pblock2));
         mapOrphanBlocksByPrev.insert(make_pair(pblock2->hashPrevBlock, pblock2));
 
-        // Limit orphan blocks to prevent memory exhaustion
-        if (mapOrphanBlocks.size() > MAX_ORPHAN_BLOCKS)
+        // Limit orphan blocks to prevent memory exhaustion.
+        // Allow more orphans during IBD so out-of-order blocks from parallel
+        // downloads don't get evicted and re-requested.
+        unsigned int nMaxOrphans = IsInitialBlockDownload() ? MAX_ORPHAN_BLOCKS_IBD : MAX_ORPHAN_BLOCKS;
+        if (mapOrphanBlocks.size() > nMaxOrphans)
         {
             // Evict a random orphan
             uint256 randomhash = GetRandHash();
@@ -2655,6 +2914,8 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     if (!pblock->AcceptBlock())
         return error("ProcessBlock() : AcceptBlock FAILED");
 
+    MarkHeaderSyncBlockAccepted(hash);
+
     // Recursively process any orphan blocks that depended on this one
     vector<uint256> vWorkQueue;
     vWorkQueue.push_back(hash);
@@ -2667,7 +2928,10 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         {
             CBlock* pblockOrphan = (*mi).second;
             if (pblockOrphan->AcceptBlock())
+            {
                 vWorkQueue.push_back(pblockOrphan->GetHash());
+                MarkHeaderSyncBlockAccepted(pblockOrphan->GetHash());
+            }
             mapOrphanBlocks.erase(pblockOrphan->GetHash());
             setStakeSeenOrphan.erase(pblockOrphan->GetProofOfStake());
             delete pblockOrphan;
@@ -2677,6 +2941,14 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
 
     if (nBestHeight % 5000 == 0 || !IsInitialBlockDownload())
         printf("ProcessBlock: ACCEPTED block %d\n", nBestHeight);
+
+    if (pfrom && hashBestHeaderSync != 0)
+    {
+        const unsigned int nQueued = QueueHeaderSyncBlocks(pfrom, HEADER_DOWNLOAD_WINDOW);
+        if (nQueued > 0)
+            printf("IBD-DIAG: queued %u more blocks from header planner after accepting %s\n",
+                nQueued, hash.ToString().substr(0,20).c_str());
+    }
 
     // triangles: if responsible for sync-checkpoint send it
     if (pfrom && !CSyncCheckpoint::strMasterPrivKey.empty())
@@ -3513,22 +3785,33 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             }
         }
 
-        // Ask connected nodes for block updates
-        // During IBD, always request blocks from any valid peer (critical for reconnection)
+        // Ask connected nodes for block updates.
+        // During IBD, request blocks from every valid peer to maximize download
+        // parallelism. Multiple peers sending overlapping inv ranges is harmless
+        // (AlreadyHave filters duplicates) but ensures we discover and download
+        // blocks from the fastest available source.
         static int nAskedForBlocks = 0;
+        bool fIBD = IsInitialBlockDownload();
         bool fShouldAsk = !pfrom->fClient && !pfrom->fOneShot &&
             (pfrom->nStartingHeight > (nBestHeight - 144)) &&
             (pfrom->nVersion < NOBLKS_VERSION_START ||
              pfrom->nVersion >= NOBLKS_VERSION_END) &&
-             (IsInitialBlockDownload() || nAskedForBlocks < 1 || vNodes.size() <= 1);
+             (fIBD || nAskedForBlocks < 1 || vNodes.size() <= 1);
         printf("IBD-DIAG: version handler: peer=%s height=%d ourHeight=%d fClient=%d fOneShot=%d shouldAsk=%d nAskedForBlocks=%d IBD=%d\n",
             pfrom->addr.ToString().c_str(), pfrom->nStartingHeight, nBestHeight,
-            pfrom->fClient, pfrom->fOneShot, fShouldAsk, nAskedForBlocks, IsInitialBlockDownload());
+            pfrom->fClient, pfrom->fOneShot, fShouldAsk, nAskedForBlocks, fIBD);
         if (fShouldAsk)
         {
             nAskedForBlocks++;
             pfrom->PushGetBlocks(pindexBest, uint256(0));
-            printf("IBD-DIAG: sent getblocks from height %d to peer %s\n", nBestHeight, pfrom->addr.ToString().c_str());
+            // During IBD, also send getheaders to scout the chain structure.
+            // Headers are ~80 bytes each (vs full blocks at ~1-2KB for PoS),
+            // so we learn about future blocks much faster. The headers handler
+            // will AskFor each unknown block, pre-populating the download queue.
+            if (fIBD)
+                pfrom->PushGetHeaders(pindexBest, uint256(0));
+            printf("IBD-DIAG: sent getblocks%s from height %d to peer %s\n",
+                fIBD ? "+getheaders" : "", nBestHeight, pfrom->addr.ToString().c_str());
         }
 
         // Relay alerts
@@ -3857,9 +4140,8 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             return error("message headers size() = %"PRIszu"", vHeaders.size());
         }
 
-        CTxDB txdb("r");
         uint256 hashChainTip = 0;
-        int nRequested = 0;
+        int nNewHeaders = 0;
         for (const CBlock& header : vHeaders)
         {
             if (!header.vtx.empty())
@@ -3869,7 +4151,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             }
 
             const uint256 hashHeader = header.GetHash();
-            if (mapBlockIndex.count(hashHeader))
+            if (mapBlockIndex.count(hashHeader) || mapHeaderSync.count(hashHeader))
             {
                 hashChainTip = hashHeader;
                 continue;
@@ -3886,27 +4168,39 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             else
             {
                 map<uint256, CBlockIndex*>::iterator miPrev = mapBlockIndex.find(header.hashPrevBlock);
-                if (miPrev == mapBlockIndex.end())
+                if (miPrev == mapBlockIndex.end() && !mapHeaderSync.count(header.hashPrevBlock))
                     break;
-                hashChainTip = header.hashPrevBlock;
             }
 
-            CInv inv(MSG_BLOCK, hashHeader);
-            if (!AlreadyHave(txdb, inv))
+            if (!AddHeaderSyncNode(header, hashHeader))
             {
-                pfrom->AskFor(inv);
-                nRequested++;
+                pfrom->Misbehaving(20);
+                return error("invalid header sequence");
             }
+
             hashChainTip = hashHeader;
+            nNewHeaders++;
         }
 
-        if (nRequested > 0 && fDebug)
-            printf("requested %d blocks from headers announcement\n", nRequested);
+        int nRequested = 0;
+        if (hashBestHeaderSync != 0)
+            nRequested = QueueHeaderSyncBlocks(pfrom, HEADER_DOWNLOAD_WINDOW);
 
-        // If we received a full batch, continue sync via getblocks
-        // (the getblocks/inv/orphan cycle handles chain continuation)
+        if (nNewHeaders > 0 || nRequested > 0)
+            printf("IBD-DIAG: accepted %d new headers, queued %d blocks from %zu headers (peer=%s bestHeader=%s)\n",
+                nNewHeaders, nRequested, vHeaders.size(), pfrom->addr.ToString().c_str(),
+                hashBestHeaderSync.ToString().substr(0,20).c_str());
+
+        // If we received a full batch, continue fetching headers.
+        // During IBD, prefer getheaders over getblocks since headers are ~80 bytes
+        // vs full blocks, letting us discover the chain structure faster.
         if (vHeaders.size() >= 2000)
-            pfrom->PushGetBlocks(pindexBest, uint256(0));
+        {
+            if (IsInitialBlockDownload() && hashChainTip != 0)
+                ContinueHeaderSync(pfrom, hashChainTip);
+            else
+                pfrom->PushGetBlocks(pindexBest, uint256(0));
+        }
     }
 
 
@@ -4008,9 +4302,24 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
                 if (++nBlocksSinceRequest >= 5000)
                 {
                     nBlocksSinceRequest = 0;
-                    pfrom->pindexLastGetBlocksBegin = NULL;
-                    pfrom->PushGetBlocks(pindexBest, uint256(0));
-                    printf("IBD-DIAG: pipeline refill at height %d\n", nBestHeight);
+                    // Pipeline refill: request from ALL connected full-node peers,
+                    // not just the one that sent us this block. This spreads block
+                    // download across multiple peers for better throughput.
+                    // Also send getheaders to scout ahead faster than full blocks.
+                    {
+                        LOCK(cs_vNodes);
+                        for (CNode* pnode : vNodes)
+                        {
+                            if (!pnode->fClient && pnode->nVersion != 0)
+                            {
+                                pnode->pindexLastGetBlocksBegin = NULL;
+                                pnode->PushGetBlocks(pindexBest, uint256(0));
+                                pnode->pindexLastGetHeadersBegin = NULL;
+                                pnode->PushGetHeaders(pindexBest, uint256(0));
+                            }
+                        }
+                    }
+                    printf("IBD-DIAG: pipeline refill to all peers at height %d\n", nBestHeight);
                 }
             }
         }
@@ -4461,7 +4770,8 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
 
 
         //
-        // Stall detection: if IBD and no new blocks for 10 seconds, re-request
+        // Stall detection: if IBD and no new blocks for 5 seconds, re-request.
+        // Tighter than the old 10s to rotate away from slow peers faster.
         //
         if (IsInitialBlockDownload() && !pto->fClient)
         {
@@ -4471,7 +4781,7 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
             if (nBestHeight > nLastHeight) {
                 nLastHeight = nBestHeight;
                 nLastBlockReceived = GetTime();
-            } else if (nLastBlockReceived > 0 && GetTime() - nLastBlockReceived > 10) {
+            } else if (nLastBlockReceived > 0 && GetTime() - nLastBlockReceived > 5) {
                 if (GetTime() - nLastStallLog >= 30) { // log every 30s max
                     printf("IBD-DIAG: STALL at height %d for %ds, peer=%s askfor_queue=%d send_size=%d\n",
                         nBestHeight, (int)(GetTime() - nLastBlockReceived),
@@ -4501,6 +4811,9 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
         vector<CInv> vGetData;
         int64_t nNow = GetTime() * 1000000;
         CTxDB txdb("r");
+        // During IBD, send larger getdata batches since PoS blocks are small
+        // and the bottleneck is round-trip latency, not bandwidth.
+        unsigned int nGetDataBatchSize = IsInitialBlockDownload() ? 4000 : 1000;
         while (!pto->mapAskFor.empty() && (*pto->mapAskFor.begin()).first <= nNow)
         {
             const CInv& inv = (*pto->mapAskFor.begin()).second;
@@ -4509,7 +4822,7 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
                 if (fDebugNet)
                     printf("sending getdata: %s\n", inv.ToString().c_str());
                 vGetData.push_back(inv);
-                if (vGetData.size() >= 1000)
+                if (vGetData.size() >= nGetDataBatchSize)
                 {
                     pto->PushMessage("getdata", vGetData);
                     vGetData.clear();
