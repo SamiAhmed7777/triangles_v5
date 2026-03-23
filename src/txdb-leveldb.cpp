@@ -34,6 +34,12 @@ static leveldb::Options GetOptions() {
     int nCacheSizeMB = GetArg("-dbcache", 2048);
     options.block_cache = leveldb::NewLRUCache(nCacheSizeMB * 1048576);
     options.filter_policy = leveldb::NewBloomFilterPolicy(10);
+    // Larger write buffer (64MB vs default 4MB) reduces the frequency of
+    // memtable flushes and compactions, which is a big win during IBD
+    // when millions of tx index entries are written sequentially.
+    options.write_buffer_size = 64 * 1048576;
+    // Allow more open files for better read performance on large chains
+    options.max_open_files = 1000;
     return options;
 }
 
@@ -138,7 +144,11 @@ void CTxDB::Close()
 
 bool CTxDB::TxnBegin()
 {
-    assert(!activeBatch);
+    // Allow calling TxnBegin when a batch is already active (no-op).
+    // This lets callers like SetBestChain share a batch that was opened
+    // earlier by AddToBlockIndex, merging two commits into one.
+    if (activeBatch)
+        return true;
     activeBatch = new leveldb::WriteBatch();
     return true;
 }
