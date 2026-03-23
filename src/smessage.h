@@ -109,7 +109,7 @@ public:
 class SecMsgToken
 {
 public:
-    SecMsgToken(int64_t ts, unsigned char* p, int np, long int o)
+    SecMsgToken(int64_t ts, unsigned char* p, int np, long int o, uint32_t nFile = 1)
     {
         timestamp = ts;
         
@@ -117,10 +117,17 @@ public:
             memset(sample, 0, 8);
         else
             memcpy(sample, p, 8);
+        fileIndex = nFile;
         offset = o;
     };
     
-    SecMsgToken() {};
+    SecMsgToken()
+    {
+        timestamp = 0;
+        memset(sample, 0, 8);
+        fileIndex = 1;
+        offset = 0;
+    };
     
     ~SecMsgToken() {};
     
@@ -134,6 +141,7 @@ public:
     
     int64_t                     timestamp;    // doesn't need to be full 64 bytes?
     unsigned char               sample[8];    // first 8 bytes of payload - a hash
+    uint32_t                    fileIndex;    // rotated bucket file suffix, eg _02.dat
     int64_t                     offset;       // offset
     
 };
