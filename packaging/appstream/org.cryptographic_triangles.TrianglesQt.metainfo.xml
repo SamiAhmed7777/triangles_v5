@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.cryptographic_triangles.TrianglesQt</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Cryptographic Triangles</name>
+  <summary>TRI cryptocurrency wallet with staking and encrypted messaging</summary>
+
+  <description>
+    <p>
+      Cryptographic Triangles is a privacy-focused cryptocurrency wallet featuring
+      Proof-of-Stake consensus, Tor v3 onion routing, and built-in encrypted messaging.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Proof-of-Stake with 33% annual staking rewards</li>
+      <li>Hash9 algorithm (13-step hash cascade)</li>
+      <li>Encrypted peer-to-peer messaging (SmsgMessage)</li>
+      <li>Tor v3 integration for anonymous transactions</li>
+      <li>Full node with built-in block explorer</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">org.cryptographic_triangles.TrianglesQt.desktop</launchable>
+
+  <icon type="stock">org.cryptographic_triangles.TrianglesQt</icon>
+
+  <categories>
+    <category>Finance</category>
+    <category>Network</category>
+    <category>P2P</category>
+  </categories>
+
+  <url type="homepage">https://cryptographic-triangles.org</url>
+  <url type="bugtracker">https://github.com/SamiAhmed7777/triangles_v5/issues</url>
+  <url type="vcs-browser">https://github.com/SamiAhmed7777/triangles_v5</url>
+
+  <provides>
+    <binary>triangles-qt</binary>
+    <binary>trianglesd</binary>
+  </provides>
+
+  <releases>
+    <release version="5.3.6" date="2026-03-23">
+      <description>
+        <p>IBD sync optimizations, Linux build fixes, and modern compiler support.</p>
+      </description>
+    </release>
+    <release version="5.2.0" date="2025-01-01">
+      <description>
+        <p>Tor v3 embedded support, OpenSSL 3.x compatibility, and Boost 1.90+ support.</p>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1" />
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+</component>

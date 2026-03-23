@@ -1,6 +1,6 @@
 name: triangles
 base: core22
-version: '5.1.5'
+version: '5.3.6'
 summary: Cryptographic Triangles (TRI) cryptocurrency wallet
 description: |
   Privacy-focused cryptocurrency featuring Proof-of-Stake consensus,
@@ -51,10 +51,10 @@ apps:
 parts:
   triangles:
     plugin: dump
-    source: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.1.5/triangles-qt-linux
+    source: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.3.6/Cryptographic-Triangles-v5.3.6-linux-x64-qt
     source-type: file
     organize:
-      triangles-qt-linux: bin/triangles-qt
+      Cryptographic-Triangles-v5.3.6-linux-x64-qt: bin/triangles-qt
     stage-packages:
       - libqt5widgets5
       - libqt5gui5
@@ -73,13 +73,19 @@ parts:
 
   trianglesd:
     plugin: dump
-    source: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.1.5/trianglesd-linux
+    source: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.3.6/Cryptographic-Triangles-v5.3.6-linux-x64-daemon
     source-type: file
     organize:
-      trianglesd-linux: bin/trianglesd
+      Cryptographic-Triangles-v5.3.6-linux-x64-daemon: bin/trianglesd
 
   desktop-entry:
     plugin: dump
     source: snap/gui
     organize:
       triangles-qt.desktop: share/applications/triangles-qt.desktop
+
+  appstream:
+    plugin: dump
+    source: packaging/appstream
+    organize:
+      org.cryptographic_triangles.TrianglesQt.metainfo.xml: share/metainfo/org.cryptographic_triangles.TrianglesQt.metainfo.xml

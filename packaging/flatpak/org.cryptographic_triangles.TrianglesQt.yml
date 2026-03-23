@@ -19,13 +19,28 @@ modules:
     build-commands:
       - install -Dm755 triangles-qt-linux /app/bin/triangles-qt
       - install -Dm644 triangles-qt.desktop /app/share/applications/org.cryptographic_triangles.TrianglesQt.desktop
+      - install -Dm644 triangles.svg /app/share/icons/hicolor/scalable/apps/org.cryptographic_triangles.TrianglesQt.svg
+      - install -Dm644 triangles-128.png /app/share/icons/hicolor/128x128/apps/org.cryptographic_triangles.TrianglesQt.png
+      - install -Dm644 triangles-256.png /app/share/icons/hicolor/256x256/apps/org.cryptographic_triangles.TrianglesQt.png
+      - install -Dm644 org.cryptographic_triangles.TrianglesQt.metainfo.xml /app/share/metainfo/org.cryptographic_triangles.TrianglesQt.metainfo.xml
     sources:
       - type: file
-        url: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.1.5/triangles-qt-linux
-        sha256: 19eaadfdf18b899ce8434fe714e690e2db0546597e36037de37a29854fc23aeb
+        url: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.3.6/Cryptographic-Triangles-v5.3.6-linux-x64-qt
+        sha256: PLACEHOLDER_UPDATE_AFTER_RELEASE
         dest-filename: triangles-qt-linux
       - type: file
         path: triangles-qt.desktop
+      - type: file
+        path: ../../src/qt/res/src/triangles.svg
+        dest-filename: triangles.svg
+      - type: file
+        path: ../../src/qt/res/icons/triangles-128.png
+        dest-filename: triangles-128.png
+      - type: file
+        path: ../../src/qt/res/icons/triangles.png
+        dest-filename: triangles-256.png
+      - type: file
+        path: ../../packaging/appstream/org.cryptographic_triangles.TrianglesQt.metainfo.xml
 
   - name: trianglesd
     buildsystem: simple
@@ -33,6 +48,6 @@ modules:
       - install -Dm755 trianglesd-linux /app/bin/trianglesd
     sources:
       - type: file
-        url: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.1.5/trianglesd-linux
-        sha256: 6f5c19d34a2e1f6cdadee095d9e11b25d18b41a0d1602a163ffca7ec80b3da37
+        url: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.3.6/Cryptographic-Triangles-v5.3.6-linux-x64-daemon
+        sha256: PLACEHOLDER_UPDATE_AFTER_RELEASE
         dest-filename: trianglesd-linux
