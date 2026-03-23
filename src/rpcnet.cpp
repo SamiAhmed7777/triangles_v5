@@ -8,19 +8,62 @@
 #include "wallet.h"
 #include "db.h"
 #include "walletdb.h"
+#include "net_bootstrap.h"
 
 using namespace json_spirit;
 using namespace std;
+
+namespace {
+
+const char* BootstrapModeToString(NetBootstrap::BootstrapMode mode)
+{
+    switch (mode)
+    {
+    case NetBootstrap::BOOTSTRAP_LEGACY:
+        return "legacy";
+    case NetBootstrap::BOOTSTRAP_TOR_MIXED:
+        return "tor_mixed";
+    case NetBootstrap::BOOTSTRAP_TOR_ONLY:
+        return "tor_only";
+    }
+
+    return "unknown";
+}
+
+NetBootstrap::BootstrapMode GetBootstrapModeForRPC()
+{
+    const bool torEnabled = GetBoolArg("-tor", false) || GetBoolArg("-proxy", false);
+    const bool onlyTor = GetBoolArg("-onlynet", false) && GetArg("-onlynet", "") == "tor";
+
+    if (onlyTor)
+        return NetBootstrap::BOOTSTRAP_TOR_ONLY;
+    if (torEnabled)
+        return NetBootstrap::BOOTSTRAP_TOR_MIXED;
+    return NetBootstrap::BOOTSTRAP_LEGACY;
+}
+
+} // namespace
 
 Value getnetworkinfo(const Array& params, bool fHelp)
 {
     if (fHelp || params.size() != 0)
         throw runtime_error(
             "getnetworkinfo\n"
-            "Returns an object containing various state info regarding P2P networking.");
+            "Returns an object containing various state info regarding P2P networking,\n"
+            "including peer mix, bootstrap mode, and basic sync health.");
 
     proxyType proxy;
     GetProxy(NET_IPV4, proxy);
+    const NetBootstrap::NetworkHealth health = NetBootstrap::GetNetworkHealth();
+
+    Object healthObj;
+    healthObj.push_back(Pair("connectedpeers", health.connectedPeers));
+    healthObj.push_back(Pair("torpeers", health.torPeers));
+    healthObj.push_back(Pair("clearnetpeers", health.clearnetPeers));
+    healthObj.push_back(Pair("bootstrapped", health.isBootstrapped));
+    healthObj.push_back(Pair("syncing", health.isSyncing));
+    healthObj.push_back(Pair("lastblocktime", static_cast<boost::int64_t>(health.lastBlockTime)));
+    healthObj.push_back(Pair("bootstrapmode", BootstrapModeToString(GetBootstrapModeForRPC())));
 
     Object obj;
     obj.push_back(Pair("version",         FormatFullVersion()));
@@ -30,6 +73,7 @@ Value getnetworkinfo(const Array& params, bool fHelp)
     obj.push_back(Pair("ip",             addrSeenByPeer.ToStringIP()));
     obj.push_back(Pair("localservices",  strprintf("%016"PRIx64, nLocalServices)));
     obj.push_back(Pair("testnet",        fTestNet));
+    obj.push_back(Pair("networkhealth",  healthObj));
     obj.push_back(Pair("errors",         GetWarnings("statusbar")));
     return obj;
 }
