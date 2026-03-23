@@ -196,7 +196,7 @@ public:
     int64_t GetStake() const;
     int64_t GetNewMint() const;
     // Get all balances in a single lock acquisition + single pass (avoids 4x lock + 4x iteration)
-    void GetAllBalances(int64_t& nBalance, int64_t& nStake, int64_t& nUnconfirmed, int64_t& nImmature) const;
+    bool GetAllBalances(int64_t& nBalance, int64_t& nStake, int64_t& nUnconfirmed, int64_t& nImmature) const;
     bool CreateTransaction(const std::vector<std::pair<CScript, int64_t> >& vecSend, CWalletTx& wtxNew, CReserveKey& reservekey, int64_t& nFeeRet, const CCoinControl *coinControl=NULL);
     bool CreateTransaction(CScript scriptPubKey, int64_t nValue, std::string& sNarr, CWalletTx& wtxNew, CReserveKey& reservekey, int64_t& nFeeRet, const CCoinControl *coinControl=NULL);
     bool CommitTransaction(CWalletTx& wtxNew, CReserveKey& reservekey);

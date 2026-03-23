@@ -95,7 +95,9 @@ public:
     {
         OutputDebugStringF("updateWallet %s %i\n", hash.ToString().c_str(), status);
         {
-            LOCK(wallet->cs_wallet);
+            TRY_LOCK(wallet->cs_wallet, lockWallet);
+            if (!lockWallet)
+                return;
 
             // Find transaction in wallet
             std::map<uint256, CWalletTx>::iterator mi = wallet->mapWallet.find(hash);

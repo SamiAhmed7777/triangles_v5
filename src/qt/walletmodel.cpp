@@ -78,12 +78,6 @@ void WalletModel::pollBalanceChanged()
 {
     if(nBestHeight != cachedNumBlocks)
     {
-        // Don't block the UI thread waiting for cs_wallet - skip this
-        // update cycle if the lock is held by the block processing thread
-        TRY_LOCK(wallet->cs_wallet, lockWallet);
-        if(!lockWallet)
-            return;
-
         // Balance and number of transactions might have changed
         cachedNumBlocks = nBestHeight;
         checkBalanceChanged();
@@ -92,11 +86,12 @@ void WalletModel::pollBalanceChanged()
 
 void WalletModel::checkBalanceChanged()
 {
-    // Get all balances in a single lock acquisition + single pass
-    // instead of 4 separate lock+iterate cycles.
-    // Use int64_t locals to match GetAllBalances signature (qint64 differs on Linux).
+    // Get all balances in a single lock acquisition + single pass.
+    // Uses TRY_LOCK internally - if cs_wallet is busy (block processing),
+    // skip this cycle. The timer will retry in 2.5 seconds.
     int64_t newBalance = 0, newStake = 0, newUnconfirmedBalance = 0, newImmatureBalance = 0;
-    wallet->GetAllBalances(newBalance, newStake, newUnconfirmedBalance, newImmatureBalance);
+    if (!wallet->GetAllBalances(newBalance, newStake, newUnconfirmedBalance, newImmatureBalance))
+        return;
 
     if(cachedBalance != newBalance || cachedStake != newStake || cachedUnconfirmedBalance != newUnconfirmedBalance || cachedImmatureBalance != newImmatureBalance)
     {
@@ -113,14 +108,20 @@ void WalletModel::updateTransaction(const QString &hash, int status)
     if(transactionTableModel)
         transactionTableModel->updateTransaction(hash, status);
 
-    // Balance and number of transactions might have changed
-    checkBalanceChanged();
+    // Don't call checkBalanceChanged() here - it does LOCK(cs_wallet) + iterates
+    // all wallet transactions, blocking the UI thread. The pollBalanceChanged()
+    // timer already handles balance updates every 2.5 seconds with TRY_LOCK.
 
-    int newNumTransactions = getNumTransactions();
-    if(cachedNumTransactions != newNumTransactions)
+    // Same for getNumTransactions() - use cached count from the transaction model
+    // to avoid another LOCK(cs_wallet) on the UI thread.
+    if(transactionTableModel)
     {
-        cachedNumTransactions = newNumTransactions;
-        emit numTransactionsChanged(newNumTransactions);
+        int newNumTransactions = transactionTableModel->rowCount(QModelIndex());
+        if(cachedNumTransactions != newNumTransactions)
+        {
+            cachedNumTransactions = newNumTransactions;
+            emit numTransactionsChanged(newNumTransactions);
+        }
     }
 }
 
