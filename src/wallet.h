@@ -7,6 +7,7 @@
 
 #include <string>
 #include <vector>
+#include <atomic>
 
 #include <stdlib.h>
 
@@ -204,9 +205,8 @@ public:
     bool CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int64_t nSearchInterval, int64_t nFees, CTransaction& txNew, CKey& key);
 
     // Cached staking info - updated by the staking thread, read by the UI thread.
-    // Access is safe without locks: written atomically by the miner, read by UI for display only.
-    volatile uint64_t nCachedStakeWeight;
-    volatile int64_t  nCachedStakeWeightTime;  // GetTime() when last updated
+    std::atomic<uint64_t> nCachedStakeWeight;
+    std::atomic<int64_t>  nCachedStakeWeightTime;  // GetTime() when last updated
 
     std::string SendMoney(CScript scriptPubKey, int64_t nValue, std::string& sNarr, CWalletTx& wtxNew, bool fAskFee=false);
     std::string SendMoneyToDestination(const CTxDestination& address, int64_t nValue, std::string& sNarr, CWalletTx& wtxNew, bool fAskFee=false);

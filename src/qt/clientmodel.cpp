@@ -70,12 +70,20 @@ void ClientModel::updateTimer()
     int newNumBlocks = getNumBlocks();
     int newNumBlocksOfPeers = getNumBlocksOfPeers();
 
-    // Always emit during IBD so the speed/ETA display stays live
-    if(cachedNumBlocks != newNumBlocks || cachedNumBlocksOfPeers != newNumBlocksOfPeers
-       || newNumBlocks < newNumBlocksOfPeers)
+    // Always emit when values change or during IBD.
+    // Also emit every ~30 seconds even when idle so setNumBlocks() can
+    // re-evaluate sync status (e.g. when a new block arrives after a long gap).
+    static int64_t nLastEmit = 0;
+    int64_t nNow = GetTime();
+    bool fChanged = (cachedNumBlocks != newNumBlocks || cachedNumBlocksOfPeers != newNumBlocksOfPeers);
+    bool fCatchingUp = (newNumBlocks < newNumBlocksOfPeers);
+    bool fPeriodicRefresh = (nNow - nLastEmit >= 30);
+
+    if(fChanged || fCatchingUp || fPeriodicRefresh)
     {
         cachedNumBlocks = newNumBlocks;
         cachedNumBlocksOfPeers = newNumBlocksOfPeers;
+        nLastEmit = nNow;
 
         emit numBlocksChanged(newNumBlocks, newNumBlocksOfPeers);
     }

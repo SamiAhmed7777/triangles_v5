@@ -904,9 +904,10 @@ void TrianglesGUI::setNumBlocks(int count, int nTotalBlocks)
     }
 
     // Set icon state: spinning if catching up, tick otherwise.
-    // Use a generous threshold (6 hours) for PoS chains where block intervals
-    // can be long during difficulty adjustment with few stakers.
-    if(secs < 6*60*60 && count >= nTotalBlocks)
+    // For PoS chains with few stakers, blocks can be hours or days apart.
+    // Sync status is based purely on block count - NOT block timestamp.
+    // A stale chain (no recent blocks) is still "synced" if we have all blocks.
+    if(count >= nTotalBlocks)
     {
         tooltip = tr("Up to date") + QString(".<br>") + tooltip;
         labelBlocksIcon->setPixmap(QIcon(":/icons/synced").pixmap(STATUSBAR_ICONSIZE, STATUSBAR_ICONSIZE));
