@@ -199,13 +199,13 @@ ifdef USE_ZMQ
     OBJS += obj/zmqpublishnotifier.o
 endif
 
+all: trianglesd
+
 obj:
 	@mkdir -p obj
 
 obj-test:
 	@mkdir -p obj-test
-
-all: trianglesd
 
 test check: test_triangles FORCE
 	./test_triangles

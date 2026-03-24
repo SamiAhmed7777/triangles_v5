@@ -181,7 +181,7 @@ jobs:
         run: |
           cd src
           mkdir -p obj
-          make -f makefile.unix -j$(nproc)
+          make -f makefile.unix trianglesd -j$(nproc)
 
       - name: Strip binary
         run: strip --strip-all src/trianglesd
