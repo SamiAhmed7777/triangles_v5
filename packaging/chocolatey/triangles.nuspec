@@ -2,7 +2,7 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>triangles</id>
-    <version>5.1.5</version>
+    <version>5.3.6</version>
     <title>Cryptographic Triangles</title>
     <authors>Cryptographic Triangles Team</authors>
     <owners>SamiAhmed7777</owners>
@@ -25,6 +25,6 @@ featuring the unique Hash9 algorithm (13-step hash cascade).
 - Encrypted peer-to-peer messaging
 - Tor v3 integration for anonymous transactions
     </description>
-    <releaseNotes>https://github.com/SamiAhmed7777/triangles_v5/releases/tag/v5.1.5</releaseNotes>
+    <releaseNotes>https://github.com/SamiAhmed7777/triangles_v5/releases/tag/v5.3.6</releaseNotes>
   </metadata>
 </package>

@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  trianglesd:
+    build: .
+    image: cryptographic-triangles/trianglesd:5.3.6
+    container_name: trianglesd
+    restart: unless-stopped
+    ports:
+      - "24112:24112"
+      - "19112:19112"
+    volumes:
+      - triangles-data:/home/triangles/.triangles
+    command: ["-daemon=0", "-printtoconsole", "-rpcallowip=172.16.0.0/12"]
+
+volumes:
+  triangles-data:

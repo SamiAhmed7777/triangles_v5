@@ -3,7 +3,7 @@
 # Run from the packaging/debian directory
 set -e
 
-VERSION="5.1.5"
+VERSION="5.3.6"
 PKGDIR="triangles_${VERSION}-1_amd64"
 RELEASE_URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}"
 
@@ -20,8 +20,8 @@ cp DEBIAN/control "$PKGDIR/DEBIAN/"
 
 # Download binaries
 echo "Downloading binaries..."
-curl -L -o "$PKGDIR/usr/bin/triangles-qt" "${RELEASE_URL}/triangles-qt-linux"
-curl -L -o "$PKGDIR/usr/bin/trianglesd" "${RELEASE_URL}/trianglesd-linux"
+curl -L -o "$PKGDIR/usr/bin/triangles-qt" "${RELEASE_URL}/Cryptographic-Triangles-v${VERSION}-linux-x64-qt"
+curl -L -o "$PKGDIR/usr/bin/trianglesd" "${RELEASE_URL}/Cryptographic-Triangles-v${VERSION}-linux-x64-daemon"
 chmod 755 "$PKGDIR/usr/bin/triangles-qt" "$PKGDIR/usr/bin/trianglesd"
 
 # Create desktop entry
