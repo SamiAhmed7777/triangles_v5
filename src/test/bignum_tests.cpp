@@ -46,14 +46,14 @@ BOOST_AUTO_TEST_SUITE(bignum_tests)
 // Let's force this code not to be inlined, in order to actually
 // test a generic version of the function. This increases the chance
 // that -ftrapv will detect overflows.
-NOINLINE void mysetint64_t(CBigNum& num, int64_t n)
+NOINLINE void mysetint64(CBigNum& num, int64_t n)
 {
-    num.setint64_t(n);
+    num.setint64(n);
 }
 
 // For each number, we do 2 tests: one with inline code, then we reset the
 // value to 0, then the second one with a non-inlined function.
-BOOST_AUTO_TEST_CASE(bignum_setint64_t)
+BOOST_AUTO_TEST_CASE(bignum_setint64)
 {
     int64_t n;
 
@@ -63,7 +63,7 @@ BOOST_AUTO_TEST_CASE(bignum_setint64_t)
         BOOST_CHECK(num.ToString() == "0");
         num.setulong(0);
         BOOST_CHECK(num.ToString() == "0");
-        mysetint64_t(num, n);
+        mysetint64(num, n);
         BOOST_CHECK(num.ToString() == "0");
     }
     {
@@ -72,7 +72,7 @@ BOOST_AUTO_TEST_CASE(bignum_setint64_t)
         BOOST_CHECK(num.ToString() == "1");
         num.setulong(0);
         BOOST_CHECK(num.ToString() == "0");
-        mysetint64_t(num, n);
+        mysetint64(num, n);
         BOOST_CHECK(num.ToString() == "1");
     }
     {
@@ -81,7 +81,7 @@ BOOST_AUTO_TEST_CASE(bignum_setint64_t)
         BOOST_CHECK(num.ToString() == "-1");
         num.setulong(0);
         BOOST_CHECK(num.ToString() == "0");
-        mysetint64_t(num, n);
+        mysetint64(num, n);
         BOOST_CHECK(num.ToString() == "-1");
     }
     {
@@ -90,7 +90,7 @@ BOOST_AUTO_TEST_CASE(bignum_setint64_t)
         BOOST_CHECK(num.ToString() == "5");
         num.setulong(0);
         BOOST_CHECK(num.ToString() == "0");
-        mysetint64_t(num, n);
+        mysetint64(num, n);
         BOOST_CHECK(num.ToString() == "5");
     }
     {
@@ -99,7 +99,7 @@ BOOST_AUTO_TEST_CASE(bignum_setint64_t)
         BOOST_CHECK(num.ToString() == "-5");
         num.setulong(0);
         BOOST_CHECK(num.ToString() == "0");
-        mysetint64_t(num, n);
+        mysetint64(num, n);
         BOOST_CHECK(num.ToString() == "-5");
     }
     {
@@ -108,7 +108,7 @@ BOOST_AUTO_TEST_CASE(bignum_setint64_t)
         BOOST_CHECK(num.ToString() == "-9223372036854775808");
         num.setulong(0);
         BOOST_CHECK(num.ToString() == "0");
-        mysetint64_t(num, n);
+        mysetint64(num, n);
         BOOST_CHECK(num.ToString() == "-9223372036854775808");
     }
     {
@@ -117,7 +117,7 @@ BOOST_AUTO_TEST_CASE(bignum_setint64_t)
         BOOST_CHECK(num.ToString() == "9223372036854775807");
         num.setulong(0);
         BOOST_CHECK(num.ToString() == "0");
-        mysetint64_t(num, n);
+        mysetint64(num, n);
         BOOST_CHECK(num.ToString() == "9223372036854775807");
     }
 }
