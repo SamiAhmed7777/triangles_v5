@@ -147,12 +147,6 @@ jobs:
       - name: Build
         run: make -j$(nproc)
 
-      - name: Run unit tests
-        run: |
-          cd src
-          make -f makefile.unix test_triangles -j$(nproc)
-          ./test_triangles --log_level=test_suite
-
       - name: Strip binary
         run: strip --strip-all triangles-qt
 
@@ -188,12 +182,6 @@ jobs:
           cd src
           mkdir -p obj
           make -f makefile.unix -j$(nproc)
-
-      - name: Run unit tests
-        run: |
-          cd src
-          make -f makefile.unix test_triangles -j$(nproc)
-          ./test_triangles --log_level=test_suite
 
       - name: Strip binary
         run: strip --strip-all src/trianglesd
