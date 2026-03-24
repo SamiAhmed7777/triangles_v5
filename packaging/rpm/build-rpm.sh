@@ -4,7 +4,7 @@
 # Install build tools: sudo dnf install rpm-build rpmdevtools
 set -e
 
-VERSION="5.1.5"
+VERSION="5.3.6"
 RELEASE_URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}"
 
 echo "Building RPM for Triangles v${VERSION}..."
@@ -14,8 +14,8 @@ rpmdev-setuptree
 
 # Download sources into SOURCES
 echo "Downloading binaries..."
-curl -L -o ~/rpmbuild/SOURCES/triangles-qt-linux "${RELEASE_URL}/triangles-qt-linux"
-curl -L -o ~/rpmbuild/SOURCES/trianglesd-linux "${RELEASE_URL}/trianglesd-linux"
+curl -L -o ~/rpmbuild/SOURCES/Cryptographic-Triangles-v${VERSION}-linux-x64-qt "${RELEASE_URL}/Cryptographic-Triangles-v${VERSION}-linux-x64-qt"
+curl -L -o ~/rpmbuild/SOURCES/Cryptographic-Triangles-v${VERSION}-linux-x64-daemon "${RELEASE_URL}/Cryptographic-Triangles-v${VERSION}-linux-x64-daemon"
 cp triangles-qt.desktop ~/rpmbuild/SOURCES/
 
 # Copy spec file

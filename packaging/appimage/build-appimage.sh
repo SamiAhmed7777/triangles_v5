@@ -3,7 +3,7 @@
 # Run on a Linux x64 system with appimagetool installed
 set -e
 
-VERSION="5.1.5"
+VERSION="5.3.6"
 APPDIR="Triangles-x86_64.AppDir"
 RELEASE_URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}"
 
@@ -17,7 +17,7 @@ mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
 
 # Download binary
 echo "Downloading triangles-qt..."
-curl -L -o "$APPDIR/usr/bin/triangles-qt" "${RELEASE_URL}/triangles-qt-linux"
+curl -L -o "$APPDIR/usr/bin/triangles-qt" "${RELEASE_URL}/Cryptographic-Triangles-v${VERSION}-linux-x64-qt"
 chmod +x "$APPDIR/usr/bin/triangles-qt"
 
 # Create desktop entry

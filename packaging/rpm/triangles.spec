@@ -1,11 +1,11 @@
 Name:           triangles
-Version:        5.1.5
+Version:        5.3.6
 Release:        1%{?dist}
 Summary:        Cryptographic Triangles (TRI) cryptocurrency wallet
 License:        MIT
 URL:            https://cryptographic-triangles.org
-Source0:        https://github.com/SamiAhmed7777/triangles_v5/releases/download/v%{version}/triangles-qt-linux
-Source1:        https://github.com/SamiAhmed7777/triangles_v5/releases/download/v%{version}/trianglesd-linux
+Source0:        https://github.com/SamiAhmed7777/triangles_v5/releases/download/v%{version}/Cryptographic-Triangles-v%{version}-linux-x64-qt
+Source1:        https://github.com/SamiAhmed7777/triangles_v5/releases/download/v%{version}/Cryptographic-Triangles-v%{version}-linux-x64-daemon
 Source2:        triangles-qt.desktop
 
 BuildArch:      x86_64

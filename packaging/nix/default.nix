@@ -14,7 +14,7 @@
 }:
 
 let
-  version = "5.1.5";
+  version = "5.3.6";
 
   desktopItem = makeDesktopItem {
     name = "triangles-qt";
@@ -34,13 +34,13 @@ stdenv.mkDerivation {
 
   srcs = [
     (fetchurl {
-      url = "https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${version}/triangles-qt-linux";
-      sha256 = "19eaadfdf18b899ce8434fe714e690e2db0546597e36037de37a29854fc23aeb";
+      url = "https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${version}/Cryptographic-Triangles-v${version}-linux-x64-qt";
+      sha256 = "ed220eb8d0b403f62cdac28988541fd1a27864491e233216f9c00a4c2537b4a3";
       name = "triangles-qt-linux";
     })
     (fetchurl {
-      url = "https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${version}/trianglesd-linux";
-      sha256 = "6f5c19d34a2e1f6cdadee095d9e11b25d18b41a0d1602a163ffca7ec80b3da37";
+      url = "https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${version}/Cryptographic-Triangles-v${version}-linux-x64-daemon";
+      sha256 = "4d2ab25d61127d6aff3e6f3069556d04f4b823f8849e97629c12871ad4779517";
       name = "trianglesd-linux";
     })
   ];
