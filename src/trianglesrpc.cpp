@@ -430,7 +430,7 @@ static string HTTPReply(int nStatus, const string& strMsg, bool keepalive)
             "HTTP/1.1 %d %s\r\n"
             "Date: %s\r\n"
             "Connection: %s\r\n"
-            "Content-Length: %"PRIszu"\r\n"
+            "Content-Length: %" PRIszu "\r\n"
             "Content-Type: application/json\r\n"
             "Server: Triangles-json-rpc/%s\r\n"
             "\r\n"
@@ -1064,7 +1064,7 @@ static void HandleSSEConnection(AcceptedConnection* conn)
         // Send events
         for (size_t i = 0; i < vEvents.size(); i++)
         {
-            std::string strSSE = strprintf("id: %"PRIu64"\ndata: %s\n\n", nLastId - vEvents.size() + i + 1, vEvents[i].c_str());
+            std::string strSSE = strprintf("id: %" PRIu64 "\ndata: %s\n\n", nLastId - vEvents.size() + i + 1, vEvents[i].c_str());
             try {
                 conn->stream() << strSSE << std::flush;
             } catch (...) {
