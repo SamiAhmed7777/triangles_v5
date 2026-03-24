@@ -29,18 +29,25 @@ modules:
         sha256: PLACEHOLDER_UPDATE_AFTER_RELEASE
         dest-filename: triangles-qt-linux
       - type: file
-        path: triangles-qt.desktop
+        url: https://raw.githubusercontent.com/SamiAhmed7777/triangles_v5/master/packaging/flatpak/triangles-qt.desktop
+        sha256: f56c4be5870fed6d3f0fb74398241ea909bd3b6f3305fe06ef5f58fba25602ca
+        dest-filename: triangles-qt.desktop
       - type: file
-        path: ../../src/qt/res/src/triangles.svg
+        url: https://raw.githubusercontent.com/SamiAhmed7777/triangles_v5/master/src/qt/res/src/triangles.svg
+        sha256: c08d0731e209b1941606709d7236526c4334ee52d1cbda2173cad417d6169486
         dest-filename: triangles.svg
       - type: file
-        path: ../../src/qt/res/icons/triangles-128.png
+        url: https://raw.githubusercontent.com/SamiAhmed7777/triangles_v5/master/src/qt/res/icons/triangles-128.png
+        sha256: 3a9030b2141ba822059e1d32c29f004c5ed9a4d3c8fc1fba6188201cfdf4ccf5
         dest-filename: triangles-128.png
       - type: file
-        path: ../../src/qt/res/icons/triangles.png
+        url: https://raw.githubusercontent.com/SamiAhmed7777/triangles_v5/master/src/qt/res/icons/triangles.png
+        sha256: eebe5b1890c4cf43b8ae3160f81bac93a2a10cd221c99815de9fcd850f225f4e
         dest-filename: triangles-256.png
       - type: file
-        path: ../../packaging/appstream/org.cryptographic_triangles.TrianglesQt.metainfo.xml
+        url: https://raw.githubusercontent.com/SamiAhmed7777/triangles_v5/master/packaging/appstream/org.cryptographic_triangles.TrianglesQt.metainfo.xml
+        sha256: dd5ecf9f4916cf0ef3d7ceec763dbbbcf7c4bf806be1e404a96dcfc9423c9fad
+        dest-filename: org.cryptographic_triangles.TrianglesQt.metainfo.xml
 
   - name: trianglesd
     buildsystem: simple
