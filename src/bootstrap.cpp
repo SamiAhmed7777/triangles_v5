@@ -10,10 +10,18 @@
 
 #include <zlib.h>
 
+#include "version.h"
+#include "uint256.h"
+
 #include <fstream>
 #include <sstream>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
+
+// Forward declarations to avoid pulling in heavy consensus headers
+extern bool fTestNet;
+namespace Checkpoints { bool IsKnownCheckpoint(int nHeight, const uint256& hash); }
 
 namespace fs = boost::filesystem;
 using boost::asio::ip::tcp;
@@ -311,6 +319,112 @@ static bool ExtractTarGz(const fs::path& tarGzPath,
 
 } // anonymous namespace
 
+bool ParseManifest(const fs::path& manifestPath,
+                   SnapshotManifest& manifest,
+                   std::string& strError)
+{
+    std::ifstream in(manifestPath.string().c_str());
+    if (!in.is_open()) {
+        strError = "Cannot open " + manifestPath.string();
+        return false;
+    }
+
+    manifest.format = 0;
+    manifest.network.clear();
+    manifest.height = -1;
+    manifest.hash.clear();
+    manifest.dbversion = 0;
+
+    std::string line;
+    while (std::getline(in, line)) {
+        boost::trim(line);
+        if (line.empty() || line[0] == '#')
+            continue;
+
+        size_t eq = line.find('=');
+        if (eq == std::string::npos)
+            continue;
+
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+        boost::trim(key);
+        boost::trim(val);
+
+        if (key == "format")
+            manifest.format = std::atoi(val.c_str());
+        else if (key == "network")
+            manifest.network = val;
+        else if (key == "height")
+            manifest.height = std::atoi(val.c_str());
+        else if (key == "hash")
+            manifest.hash = val;
+        else if (key == "dbversion")
+            manifest.dbversion = std::atoi(val.c_str());
+    }
+    in.close();
+
+    if (manifest.format == 0) {
+        strError = "Manifest missing 'format' field";
+        return false;
+    }
+    if (manifest.network.empty()) {
+        strError = "Manifest missing 'network' field";
+        return false;
+    }
+    if (manifest.height < 0) {
+        strError = "Manifest missing or invalid 'height' field";
+        return false;
+    }
+    if (manifest.hash.empty()) {
+        strError = "Manifest missing 'hash' field";
+        return false;
+    }
+    if (manifest.dbversion == 0) {
+        strError = "Manifest missing 'dbversion' field";
+        return false;
+    }
+
+    return true;
+}
+
+bool VerifyManifest(const SnapshotManifest& manifest,
+                    std::string& strError)
+{
+    if (manifest.format != 1) {
+        strError = "Unsupported manifest format: " + std::to_string(manifest.format);
+        return false;
+    }
+
+    std::string expectedNetwork = fTestNet ? "test" : "main";
+    if (manifest.network != expectedNetwork) {
+        strError = "Network mismatch: manifest says '" + manifest.network
+                 + "', expected '" + expectedNetwork + "'";
+        return false;
+    }
+
+    if (manifest.dbversion != DATABASE_VERSION) {
+        strError = "DB version mismatch: manifest says "
+                 + std::to_string(manifest.dbversion)
+                 + ", binary expects " + std::to_string(DATABASE_VERSION);
+        return false;
+    }
+
+    uint256 manifestHash(manifest.hash);
+    if (manifestHash == 0) {
+        strError = "Invalid hash in manifest: " + manifest.hash;
+        return false;
+    }
+
+    if (!Checkpoints::IsKnownCheckpoint(manifest.height, manifestHash)) {
+        strError = "Height " + std::to_string(manifest.height)
+                 + " / hash " + manifest.hash
+                 + " is not a known checkpoint";
+        return false;
+    }
+
+    return true;
+}
+
 bool DownloadBootstrap(const std::string& host,
                        const fs::path& dataDir,
                        ProgressCallback progressFn,
@@ -362,15 +476,54 @@ bool DownloadBootstrap(const std::string& host,
         return false;
     }
 
-    // Remove any extracted txleveldb/ and database/ - they were built on
-    // a different machine and won't work here. FastImportBlockFile() will
-    // rebuild the index directly from blk0001.dat on next startup.
+    // Check if the archive included a trusted pre-built index (txleveldb/)
+    // with a valid snapshot.manifest. If verified, keep it to skip the
+    // multi-hour FastImportBlockFile() rebuild.
     fs::path txleveldb = dataDir / "txleveldb";
-    fs::path database = dataDir / "database";
-    if (fs::exists(txleveldb))
-        fs::remove_all(txleveldb);
+    fs::path database  = dataDir / "database";
+    fs::path manifestPath = dataDir / "snapshot.manifest";
+
+    bool keepIndex = false;
+
+    if (fs::exists(manifestPath) && fs::exists(txleveldb)) {
+        SnapshotManifest manifest;
+        std::string manifestError;
+
+        if (ParseManifest(manifestPath, manifest, manifestError)) {
+            printf("Bootstrap: snapshot.manifest found (format=%d, network=%s, "
+                   "height=%d, dbversion=%d)\n",
+                   manifest.format, manifest.network.c_str(),
+                   manifest.height, manifest.dbversion);
+
+            if (VerifyManifest(manifest, manifestError)) {
+                printf("Bootstrap: manifest verified - keeping pre-built index "
+                       "(height %d, checkpoint match)\n", manifest.height);
+                keepIndex = true;
+            } else {
+                printf("Bootstrap: manifest verification failed: %s\n",
+                       manifestError.c_str());
+            }
+        } else {
+            printf("Bootstrap: cannot parse snapshot.manifest: %s\n",
+                   manifestError.c_str());
+        }
+    }
+
+    if (!keepIndex) {
+        // No valid manifest or verification failed - delete the index.
+        // FastImportBlockFile() will rebuild from blk0001.dat on next startup.
+        printf("Bootstrap: removing extracted txleveldb/ (will rebuild index from blk0001.dat)\n");
+        if (fs::exists(txleveldb))
+            fs::remove_all(txleveldb);
+    }
+
+    // Always remove BDB database/ dir (wallet environment from another machine)
     if (fs::exists(database))
         fs::remove_all(database);
+
+    // Clean up manifest file (not needed after verification)
+    if (fs::exists(manifestPath))
+        fs::remove(manifestPath);
 
     return true;
 }

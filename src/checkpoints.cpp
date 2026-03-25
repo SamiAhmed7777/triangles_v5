@@ -60,6 +60,14 @@ namespace Checkpoints
         return hash == i->second;
     }
 
+    bool IsKnownCheckpoint(int nHeight, const uint256& hash)
+    {
+        MapCheckpoints& checkpoints = (fTestNet ? mapCheckpointsTestnet : mapCheckpoints);
+        MapCheckpoints::const_iterator i = checkpoints.find(nHeight);
+        if (i == checkpoints.end()) return false;
+        return hash == i->second;
+    }
+
     int GetTotalBlocksEstimate()
     {
         MapCheckpoints& checkpoints = (fTestNet ? mapCheckpointsTestnet : mapCheckpoints);

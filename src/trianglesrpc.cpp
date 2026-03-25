@@ -787,10 +787,16 @@ static void RPCAcceptHandler(boost::shared_ptr< basic_socket_acceptor<Protocol, 
 
     AcceptedConnectionImpl<ip::tcp>* tcp_conn = dynamic_cast< AcceptedConnectionImpl<ip::tcp>* >(conn);
 
-    // TODO: Actually handle errors
     if (error)
     {
+        if (error != asio::error::operation_aborted)
+            printf("RPC accept error from %s: %s (%d)\n",
+                   tcp_conn ? tcp_conn->peer.address().to_string().c_str() : "unknown peer",
+                   error.message().c_str(),
+                   error.value());
         delete conn;
+        vnThreadsRunning[THREAD_RPCLISTENER]--;
+        return;
     }
 
     // Restrict callers by IP.  It is important to

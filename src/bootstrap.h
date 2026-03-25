@@ -41,6 +41,24 @@ namespace Bootstrap {
                            ProgressCallback progressFn,
                            std::string& strError);
 
+    // Snapshot manifest (parsed from snapshot.manifest in bootstrap archive)
+    struct SnapshotManifest {
+        int format;            // format version, must be 1
+        std::string network;   // "main" or "test"
+        int height;            // block height of the snapshot tip
+        std::string hash;      // block hash at that height (hex, no 0x prefix)
+        int dbversion;         // DATABASE_VERSION the txleveldb was built with
+    };
+
+    // Parse a snapshot.manifest file into a SnapshotManifest struct.
+    bool ParseManifest(const boost::filesystem::path& manifestPath,
+                       SnapshotManifest& manifest,
+                       std::string& strError);
+
+    // Verify a parsed manifest against compiled-in checkpoints and config.
+    bool VerifyManifest(const SnapshotManifest& manifest,
+                        std::string& strError);
+
 } // namespace Bootstrap
 
 #endif // TRIANGLES_BOOTSTRAP_H

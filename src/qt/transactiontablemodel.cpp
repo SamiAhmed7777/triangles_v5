@@ -52,11 +52,13 @@ class TransactionTablePriv
 public:
     TransactionTablePriv(CWallet *wallet, TransactionTableModel *parent):
             wallet(wallet),
-            parent(parent)
+            parent(parent),
+            fInitialLoadDone(false)
     {
     }
     CWallet *wallet;
     TransactionTableModel *parent;
+    bool fInitialLoadDone;
 
     /* Local cache of wallet.
      * As it is in the same order as the CWallet, by definition
@@ -68,22 +70,19 @@ public:
      */
     void refreshWallet()
     {
-        OutputDebugStringF("refreshWallet\n");
+        OutputDebugStringF("refreshWallet: fInitialLoadDone=%d mapWallet.size=%u\n",
+               (int)fInitialLoadDone, (unsigned)wallet->mapWallet.size());
         cachedWallet.clear();
         {
-            TRY_LOCK(wallet->cs_wallet, lockWallet);
-            if(!lockWallet)
-            {
-                // Lock busy (block processing), retry in 500ms
-                QTimer::singleShot(500, parent, SLOT(refreshWallet()));
-                return;
-            }
+            LOCK(wallet->cs_wallet);
             for(std::map<uint256, CWalletTx>::iterator it = wallet->mapWallet.begin(); it != wallet->mapWallet.end(); ++it)
             {
                 if(TransactionRecord::showTransaction(it->second))
                     cachedWallet.append(TransactionRecord::decomposeTransaction(wallet, it->second));
             }
+            fInitialLoadDone = true;
         }
+        OutputDebugStringF("refreshWallet: loaded %d transaction records\n", cachedWallet.size());
     }
 
     /* Update our model of the wallet incrementally, to synchronize our model of the wallet
@@ -97,7 +96,12 @@ public:
         {
             TRY_LOCK(wallet->cs_wallet, lockWallet);
             if (!lockWallet)
+            {
+                // Lock busy - schedule a full refresh to pick up missed updates.
+                // This avoids silently dropping CT_NEW notifications.
+                QTimer::singleShot(500, parent, SLOT(refreshWallet()));
                 return;
+            }
 
             // Find transaction in wallet
             std::map<uint256, CWalletTx>::iterator mi = wallet->mapWallet.find(hash);
@@ -243,7 +247,12 @@ TransactionTableModel::TransactionTableModel(CWallet* wallet, WalletModel *paren
         cachedNumBlocks(0)
 {
     columns << QString() << tr("Date") << tr("Type") << tr("Address") << tr("Amount");
-    QTimer::singleShot(0, this, SLOT(refreshWallet()));
+
+    // Load transactions synchronously in the constructor so they're
+    // available before the event loop starts. The deferred QTimer approach
+    // was never firing because queued updateTransaction events from sync
+    // would flood the event queue first.
+    priv->refreshWallet();
 
     QTimer *timer = new QTimer(this);
     connect(timer, SIGNAL(timeout()), this, SLOT(updateConfirmations()));
@@ -267,8 +276,10 @@ void TransactionTableModel::updateTransaction(const QString &hash, int status)
 
 void TransactionTableModel::refreshWallet()
 {
+    beginResetModel();
     priv->refreshWallet();
-    reset();
+    endResetModel();
+    OutputDebugStringF("TransactionTableModel::refreshWallet: rowCount=%d\n", priv->size());
 }
 
 void TransactionTableModel::updateConfirmations()

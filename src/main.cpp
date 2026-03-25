@@ -60,6 +60,8 @@ int nCoinbaseMaturity = 7; //overall maturity: currently 7 blocks, maybe subject
 
 CBlockIndex* pindexGenesisBlock = NULL;
 int nBestHeight = -1;
+int nHighestInvWalk = 0;         // height of walk-forward progress through already-have inv
+uint256 hashHighestInvWalk = 0;  // hash of that block
 
 uint256 nBestChainTrust = 0;
 uint256 nBestInvalidTrust = 0;
@@ -3941,7 +3943,8 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             nBlockInv, nTxInv, pfrom->addr.ToString().c_str(), nBestHeight);
 
         CTxDB txdb("r");
-        int nNew = 0, nAlready = 0;
+        int nNew = 0, nAlready = 0, nAboveBest = 0;
+        int nFirstInvHeight = -1, nLastInvHeight = -1;
         for (unsigned int nInv = 0; nInv < vInv.size(); nInv++)
         {
             const CInv &inv = vInv[nInv];
@@ -3952,7 +3955,18 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
             bool fAlreadyHave = AlreadyHave(txdb, inv);
             if (inv.type == MSG_BLOCK) {
-                if (fAlreadyHave) nAlready++; else nNew++;
+                if (fAlreadyHave) {
+                    nAlready++;
+                    std::map<uint256, CBlockIndex*>::iterator mi = mapBlockIndex.find(inv.hash);
+                    if (mi != mapBlockIndex.end()) {
+                        int h = mi->second->nHeight;
+                        if (nFirstInvHeight == -1) nFirstInvHeight = h;
+                        nLastInvHeight = h;
+                        if (h > nBestHeight) nAboveBest++;
+                    }
+                } else {
+                    nNew++;
+                }
             }
 
             if (!fAlreadyHave)
@@ -3960,15 +3974,30 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             else if (inv.type == MSG_BLOCK && mapOrphanBlocks.count(inv.hash)) {
                 pfrom->PushGetBlocks(pindexBest, GetOrphanRoot(mapOrphanBlocks[inv.hash]));
             } else if (nInv == nLastBlock) {
+                // Continuation: walk forward from the last inv block.
+                // Don't jump to pindexBest — its CBlockLocator exponential
+                // spacing can map back to the same old match point, looping.
+                // Walking from the last inv block progresses linearly through
+                // the "already have" zone until we reach new blocks.
+                int nInvH = mapBlockIndex[inv.hash]->nHeight;
+                if (nInvH > nHighestInvWalk) {
+                    nHighestInvWalk = nInvH;
+                    hashHighestInvWalk = inv.hash;
+                }
+                pfrom->pindexLastGetBlocksBegin = NULL; // reset dedup
                 pfrom->PushGetBlocks(mapBlockIndex[inv.hash], uint256(0));
-                printf("IBD-DIAG: inv last block already known, pushing getblocks from %d\n",
-                    mapBlockIndex[inv.hash]->nHeight);
+                printf("SYNC-DIAG: inv walk-forward from %d (best=%d, walk=%d)\n",
+                    nInvH, nBestHeight, nHighestInvWalk);
             }
 
             Inventory(inv.hash);
         }
-        if (nBlockInv > 0)
-            printf("IBD-DIAG: inv result: %d new blocks requested, %d already have\n", nNew, nAlready);
+        if (nBlockInv > 0) {
+            printf("SYNC-DIAG: inv result: %d new, %d already have (%d above best=%d), range=%d..%d\n",
+                nNew, nAlready, nAboveBest, nBestHeight, nFirstInvHeight, nLastInvHeight);
+            if (nNew > 0 && nAlready > 0)
+                printf("SYNC-DIAG: *** FORK POINT CROSSED *** - downloading %d new blocks from canonical chain\n", nNew);
+        }
     }
 
 
@@ -4770,27 +4799,43 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
 
 
         //
-        // Stall detection: if IBD and no new blocks for 5 seconds, re-request.
-        // Tighter than the old 10s to rotate away from slow peers faster.
+        // Stall detection: if we're still catching up and no new blocks for
+        // a while, re-request. Active during IBD (5s timeout) and also
+        // post-IBD when we're behind peers (30s timeout) to handle the case
+        // where IBD flips to false during a transient download gap.
         //
-        if (IsInitialBlockDownload() && !pto->fClient)
+        if (!pto->fClient && nBestHeight < GetNumBlocksOfPeers())
         {
             static int64_t nLastBlockReceived = 0;
             static int nLastHeight = 0;
             static int64_t nLastStallLog = 0;
+            int nStallTimeout = IsInitialBlockDownload() ? 5 : 15;
             if (nBestHeight > nLastHeight) {
                 nLastHeight = nBestHeight;
                 nLastBlockReceived = GetTime();
-            } else if (nLastBlockReceived > 0 && GetTime() - nLastBlockReceived > 5) {
-                if (GetTime() - nLastStallLog >= 30) { // log every 30s max
-                    printf("IBD-DIAG: STALL at height %d for %ds, peer=%s askfor_queue=%d send_size=%d\n",
-                        nBestHeight, (int)(GetTime() - nLastBlockReceived),
+            } else if (nLastBlockReceived > 0 && GetTime() - nLastBlockReceived > nStallTimeout) {
+                if (GetTime() - nLastStallLog >= 15) { // log every 15s max
+                    printf("SYNC-DIAG: STALL at height %d/%d for %ds (IBD=%d walk=%d), peer=%s askfor_queue=%d\n",
+                        nBestHeight, GetNumBlocksOfPeers(),
+                        (int)(GetTime() - nLastBlockReceived),
+                        IsInitialBlockDownload(), nHighestInvWalk,
                         pto->addr.ToString().c_str(),
-                        (int)pto->mapAskFor.size(), (int)pto->nSendSize);
+                        (int)pto->mapAskFor.size());
                     nLastStallLog = GetTime();
                 }
+                // Use the walk-forward progress point if available, to avoid
+                // restarting from pindexBest (which hits the CBlockLocator
+                // exponential gap and starts the walk-forward from scratch).
                 pto->pindexLastGetBlocksBegin = NULL;
-                pto->PushGetBlocks(pindexBest, uint256(0));
+                if (nHighestInvWalk > nBestHeight && hashHighestInvWalk != 0 &&
+                    mapBlockIndex.count(hashHighestInvWalk))
+                {
+                    pto->PushGetBlocks(mapBlockIndex[hashHighestInvWalk], uint256(0));
+                    printf("SYNC-DIAG: stall re-request from walk=%d (not best=%d)\n",
+                        nHighestInvWalk, nBestHeight);
+                } else {
+                    pto->PushGetBlocks(pindexBest, uint256(0));
+                }
                 nLastBlockReceived = GetTime();
             }
         }
