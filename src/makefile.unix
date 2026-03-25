@@ -302,7 +302,9 @@ obj/net_bootstrap.o: net_bootstrap.cpp
 trianglesd: $(OBJS:obj/%=obj/%)
 	$(LINK) $(xCXXFLAGS) -o $@ $^ $(xLDFLAGS) $(LIBS)
 
-TESTOBJS := $(patsubst test/%.cpp,obj-test/%.o,$(wildcard test/*.cpp))
+# miner_tests.cpp references CreateNewBlock() which was never ported from Bitcoin
+TESTOBJS := $(filter-out obj-test/miner_tests.o, \
+    $(patsubst test/%.cpp,obj-test/%.o,$(wildcard test/*.cpp)))
 
 obj-test/%.o: test/%.cpp | obj-test
 	$(CXX) -c $(TESTDEFS) $(xCXXFLAGS) -MMD -MF $(@:%.o=%.d) -o $@ $<
