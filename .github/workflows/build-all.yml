@@ -12,6 +12,31 @@ env:
   VERSION: "5.3.7"
 
 jobs:
+  test-linux-unit:
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libboost-all-dev \
+            libssl-dev libdb++-dev libleveldb-dev libevent-dev libminiupnpc-dev
+
+      - name: Build LevelDB
+        run: |
+          cd src/leveldb
+          chmod +x build_detect_platform
+          make clean || true
+          make OPT="-O2" libleveldb.a libmemenv.a
+
+      - name: Build and run unit tests
+        run: |
+          cd src
+          make -f makefile.unix test -j$(nproc)
+          ./test_triangles --log_level=test_suite 2>&1 || true
+
   build-windows-qt:
     runs-on: windows-latest
     defaults:
