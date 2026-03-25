@@ -192,8 +192,12 @@ public:
             // simply re-use the cached status.
             if(rec->statusUpdateNeeded())
             {
+                // Never block the GUI thread while the core is holding cs_wallet.
+                // If the lock is busy, keep showing the cached status and refresh
+                // it on a later paint/update cycle.
+                TRY_LOCK(wallet->cs_wallet, lockWallet);
+                if (lockWallet)
                 {
-                    LOCK(wallet->cs_wallet);
                     std::map<uint256, CWalletTx>::iterator mi = wallet->mapWallet.find(rec->hash);
 
                     if(mi != wallet->mapWallet.end())
@@ -212,8 +216,14 @@ public:
 
     QString describe(TransactionRecord *rec)
     {
+        // Transaction details are generated on demand from wallet/db state.
+        // If the wallet is busy, return a lightweight placeholder instead of
+        // freezing the UI until the lock becomes available.
+        TRY_LOCK(wallet->cs_wallet, lockWallet);
+        if (!lockWallet)
+            return parent->tr("Transaction details are temporarily unavailable while the wallet is busy.");
+
         {
-            LOCK(wallet->cs_wallet);
             std::map<uint256, CWalletTx>::iterator mi = wallet->mapWallet.find(rec->hash);
             if(mi != wallet->mapWallet.end())
             {

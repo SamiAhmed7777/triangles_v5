@@ -5,12 +5,18 @@
 *.so
 *.dylib
 *.a
+/dist/
 build/
 release/
 debug/
+/Makefile
 Makefile.Debug
 Makefile.Release
 .qmake.stash
+object_script.triangles-qt.Debug
+object_script.triangles-qt.Release
+/*.zip
+/*.tar.gz
 
 # Qt
 moc_*.cpp
