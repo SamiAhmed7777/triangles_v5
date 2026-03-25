@@ -37,7 +37,7 @@ No building required. Download the pre-built Linux binary from GitHub:
 
 ```bash
 cd /tmp
-curl -L -o trianglesd https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.3.6/Cryptographic-Triangles-v5.3.6-linux-x64-daemon
+curl -L -o trianglesd https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.3.7/Cryptographic-Triangles-v5.3.7-linux-x64-daemon
 chmod +x trianglesd
 sudo mv trianglesd /usr/local/bin/
 ```

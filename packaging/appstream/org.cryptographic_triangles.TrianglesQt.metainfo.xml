@@ -41,6 +41,11 @@
   </provides>
 
   <releases>
+    <release version="5.3.7" date="2026-03-24">
+      <description>
+        <p>Version 5.3.7 release.</p>
+      </description>
+    </release>
     <release version="5.3.6" date="2026-03-23">
       <description>
         <p>IBD sync optimizations, Linux build fixes, and modern compiler support.</p>

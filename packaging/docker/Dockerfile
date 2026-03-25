@@ -2,9 +2,9 @@ FROM ubuntu:22.04
 
 LABEL maintainer="Cryptographic Triangles Team"
 LABEL description="Cryptographic Triangles (TRI) headless daemon"
-LABEL version="5.3.6"
+LABEL version="5.3.7"
 
-ARG VERSION=5.3.6
+ARG VERSION=5.3.7
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \

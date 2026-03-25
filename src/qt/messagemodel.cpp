@@ -19,6 +19,7 @@
 #include <QMenu>
 #include <QFont>
 #include <QColor>
+#include <QTextDocument>
 
 Q_DECLARE_METATYPE(std::vector<unsigned char>);
 
@@ -26,6 +27,24 @@ QList<QString> ambiguous; /**< Specifies Ambiguous addresses */
 
 const QString MessageModel::Sent = "Sent";
 const QString MessageModel::Received = "Received";
+
+namespace {
+
+static QString FormatShortMessage(const QString& message)
+{
+    static const int kMaxPreviewChars = 80;
+
+    QTextDocument doc;
+    doc.setHtml(message);
+
+    QString preview = doc.toPlainText().simplified();
+    if (preview.length() <= kMaxPreviewChars)
+        return preview;
+
+    return preview.left(kMaxPreviewChars - 3) + "...";
+}
+
+} // namespace
 
 struct MessageTableEntryLessThan
 {
@@ -485,7 +504,7 @@ QVariant MessageModel::data(const QModelIndex &index, int role) const
     case FilterAddressRole: return (rec->type == MessageTableEntry::Sent ? rec->to_address + rec->from_address : rec->from_address + rec->to_address);
     case LabelRole:         return rec->label;
     case MessageRole:       return rec->message;
-    case ShortMessageRole:  return rec->message; // TODO: Short message
+    case ShortMessageRole:  return FormatShortMessage(rec->message);
     case HTMLRole:          return rec->received_datetime.toString() + "<br>"  + (rec->label.isEmpty() ? rec->from_address : rec->label)  + "<br>" + rec->message;
     case Ambiguous:
         int it;

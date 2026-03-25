@@ -78,20 +78,22 @@ void WalletModel::pollBalanceChanged()
 {
     if(nBestHeight != cachedNumBlocks)
     {
-        // Balance and number of transactions might have changed
-        cachedNumBlocks = nBestHeight;
-        checkBalanceChanged();
+        // Balance and number of transactions might have changed.
+        // Only update cachedNumBlocks AFTER a successful balance check,
+        // otherwise a TRY_LOCK failure loses the update permanently.
+        if(checkBalanceChanged())
+            cachedNumBlocks = nBestHeight;
     }
 }
 
-void WalletModel::checkBalanceChanged()
+bool WalletModel::checkBalanceChanged()
 {
     // Get all balances in a single lock acquisition + single pass.
     // Uses TRY_LOCK internally - if cs_wallet is busy (block processing),
     // skip this cycle. The timer will retry in 2.5 seconds.
     int64_t newBalance = 0, newStake = 0, newUnconfirmedBalance = 0, newImmatureBalance = 0;
     if (!wallet->GetAllBalances(newBalance, newStake, newUnconfirmedBalance, newImmatureBalance))
-        return;
+        return false;
 
     if(cachedBalance != newBalance || cachedStake != newStake || cachedUnconfirmedBalance != newUnconfirmedBalance || cachedImmatureBalance != newImmatureBalance)
     {
@@ -101,6 +103,7 @@ void WalletModel::checkBalanceChanged()
         cachedImmatureBalance = newImmatureBalance;
         emit balanceChanged(newBalance, newStake, newUnconfirmedBalance, newImmatureBalance);
     }
+    return true;
 }
 
 void WalletModel::updateTransaction(const QString &hash, int status)

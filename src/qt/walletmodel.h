@@ -152,7 +152,7 @@ private:
 
     void subscribeToCoreSignals();
     void unsubscribeFromCoreSignals();
-    void checkBalanceChanged();
+    bool checkBalanceChanged();
 
 
 public slots:

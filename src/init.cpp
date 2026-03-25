@@ -880,6 +880,22 @@ bool AppInit2()
     }
     printf(" block index %15" PRId64 "ms\n", GetTimeMillis() - nStart);
 
+    // Diagnostic: check for blocks in mapBlockIndex above pindexBest
+    {
+        int nMaxIndexHeight = 0;
+        int nAboveBest = 0;
+        for (std::map<uint256, CBlockIndex*>::iterator it = mapBlockIndex.begin();
+             it != mapBlockIndex.end(); ++it)
+        {
+            if (it->second->nHeight > nMaxIndexHeight)
+                nMaxIndexHeight = it->second->nHeight;
+            if (it->second->nHeight > nBestHeight)
+                nAboveBest++;
+        }
+        printf("SYNC-DIAG: mapBlockIndex=%d entries, maxHeight=%d, bestHeight=%d, aboveBest=%d\n",
+            (int)mapBlockIndex.size(), nMaxIndexHeight, nBestHeight, nAboveBest);
+    }
+
     if (GetBoolArg("-printblockindex") || GetBoolArg("-printblocktree"))
     {
         PrintBlockTree();
