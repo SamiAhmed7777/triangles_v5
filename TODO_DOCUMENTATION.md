@@ -51,14 +51,13 @@ nOrderPos = -1; // TODO: calculate elsewhere
 **Status:** Deferred - no functional issue.
 **Fix:** Move calculation to WalletDB when transaction is added.
 
-### src/rpcwallet.cpp - SecureString Operator
-```cpp
-// Lines 1474, 1513, 1569: "TODO: get rid of this .c_str()"
-```
-**Issue:** SecureString missing operator=(std::string).
-**Impact:** Forced to use .c_str() which exposes password temporarily.
-**Status:** Deferred - would require SecureString class modification.
-**Fix:** Add `SecureString& operator=(const std::string&)` method.
+### src/rpcwallet.cpp / src/qt/askpassphrasedialog.cpp - SecureString Conversion
+**Issue:** Password-handling paths were converting through `.c_str()` because `SecureString`
+did not have a convenient conversion helper from `std::string`.
+**Impact:** Unnecessary C-string shims in sensitive code paths.
+**Status:** Resolved.
+**Fix:** Added `MakeSecureString(const std::string&)` in `src/allocators.h` and updated
+the wallet RPC and passphrase dialog call sites to use it directly.
 
 ## Low Priority (Nice-to-Have)
 
