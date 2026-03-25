@@ -55,6 +55,11 @@ make -j$(nproc) -f makefile.unix USE_UPNP=0
 strip trianglesd
 ```
 
+Run the unit test suite:
+```bash
+make -C src -f makefile.unix test
+```
+
 ### Linux (AlmaLinux 9 / RHEL 9)
 
 Install dependencies:
