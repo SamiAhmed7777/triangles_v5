@@ -221,7 +221,7 @@ BOOST_AUTO_TEST_CASE(is)
 
 BOOST_AUTO_TEST_CASE(switchover)
 {
-    // Test switch over code
+    // Triangles always enforces P2SH; verify that an invalid inner script fails
     CScript notValid;
     notValid << OP_11 << OP_12 << OP_EQUALVERIFY;
     CScript scriptSig;
@@ -230,10 +230,7 @@ BOOST_AUTO_TEST_CASE(switchover)
     CScript fund;
     fund.SetDestination(notValid.GetID());
 
-
-    // Validation should succeed under old rules (hash is correct):
-    BOOST_CHECK(Verify(scriptSig, fund, false));
-    // Fail under new:
+    // P2SH inner script is invalid (11 != 12), must fail:
     BOOST_CHECK(!Verify(scriptSig, fund, true));
 }
 
