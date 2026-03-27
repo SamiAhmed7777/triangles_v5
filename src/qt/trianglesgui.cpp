@@ -284,6 +284,7 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     createTrayIcon();
 
     // Create tabs
+    centralWidget = ui->stackedWidget;
     overviewPage = new OverviewPage();
     {
       transactionsPage = new QWidget(this);
@@ -296,15 +297,14 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
       vbox->addWidget(transactionView);
       frameMain->setLayout(vbox);
     }
-    addressBookPage = new AddressBookPage(AddressBookPage::ForEditing, AddressBookPage::SendingTab);
+    addressBookPage = new AddressBookPage(AddressBookPage::ForEditing, AddressBookPage::SendingTab, centralWidget);
 
-    receiveCoinsPage = new AddressBookPage(AddressBookPage::ForEditing, AddressBookPage::ReceivingTab);
+    receiveCoinsPage = new AddressBookPage(AddressBookPage::ForEditing, AddressBookPage::ReceivingTab, centralWidget);
 
     sendCoinsPage = 0;
     messagePage = 0;
 	signMessagePage = 0;
     verifyMessagePage = 0;
-    centralWidget = ui->stackedWidget;
     centralWidget->addWidget(overviewPage);
     centralWidget->addWidget(transactionsPage);
     centralWidget->addWidget(addressBookPage);
@@ -641,7 +641,7 @@ void TrianglesGUI::ensureSendCoinsPage()
     if (sendCoinsPage)
         return;
 
-    sendCoinsPage = new SendCoinsDialog(this);
+    sendCoinsPage = new SendCoinsDialog(centralWidget);
     if (walletModel)
         sendCoinsPage->setModel(walletModel);
     centralWidget->addWidget(sendCoinsPage);
@@ -652,7 +652,7 @@ void TrianglesGUI::ensureMessagePage()
     if (messagePage)
         return;
 
-    messagePage = new MessagePage(this);
+    messagePage = new MessagePage(centralWidget);
     if (messageModel)
         messagePage->setModel(messageModel);
     centralWidget->addWidget(messagePage);
@@ -663,7 +663,7 @@ void TrianglesGUI::ensureSignMessagePage()
     if (signMessagePage)
         return;
 
-    signMessagePage = new SignMessagePage(this);
+    signMessagePage = new SignMessagePage(centralWidget);
     if (walletModel)
         signMessagePage->setModel(walletModel);
     centralWidget->addWidget(signMessagePage);
@@ -674,7 +674,7 @@ void TrianglesGUI::ensureVerifyMessagePage()
     if (verifyMessagePage)
         return;
 
-    verifyMessagePage = new VerifyMessagePage(this);
+    verifyMessagePage = new VerifyMessagePage(centralWidget);
     if (walletModel)
         verifyMessagePage->setModel(walletModel);
     centralWidget->addWidget(verifyMessagePage);

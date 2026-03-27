@@ -40,7 +40,10 @@ TransactionView::TransactionView(QWidget *parent) :
     transactionSortOrder(Qt::DescendingOrder)
 {
     ui->setupUi(this);
-    setWindowFlags(Qt::CustomizeWindowHint | Qt::FramelessWindowHint | Qt::Window);
+    if (parent)
+        setWindowFlags(Qt::Widget);
+    else
+        setWindowFlags(Qt::CustomizeWindowHint | Qt::FramelessWindowHint | Qt::Window);
     // Build filter row
     dateWidget = ui->dateWidget;
     dateWidget->addItem(tr("All"), All);
