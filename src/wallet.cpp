@@ -486,7 +486,8 @@ void CWallet::WalletUpdateSpent(const CTransaction &tx, bool fBlock)
                     printf("WalletUpdateSpent found spent coin %s TRI %s\n", FormatMoney(wtx.GetCredit()).c_str(), wtx.GetHash().ToString().c_str());
                     wtx.MarkSpent(txin.prevout.n);
                     wtx.WriteToDisk();
-                    NotifyTransactionChanged(this, txin.prevout.hash, CT_UPDATED);
+                    if (!IsInitialBlockDownload())
+                        NotifyTransactionChanged(this, txin.prevout.hash, CT_UPDATED);
                 }
             }
         }
@@ -503,7 +504,8 @@ void CWallet::WalletUpdateSpent(const CTransaction &tx, bool fBlock)
                 {
                     wtx.MarkUnspent(&txout - &tx.vout[0]);
                     wtx.WriteToDisk();
-                    NotifyTransactionChanged(this, hash, CT_UPDATED);
+                    if (!IsInitialBlockDownload())
+                        NotifyTransactionChanged(this, hash, CT_UPDATED);
                 }
             }
         }
@@ -634,8 +636,9 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn)
         // since AddToWallet is called directly for self-originating transactions, check for consumption of own coins
         WalletUpdateSpent(wtx, (wtxIn.hashBlock != 0));
 
-        // Notify UI of new or updated transaction
-        NotifyTransactionChanged(this, hash, fInsertedNew ? CT_NEW : CT_UPDATED);
+        // Notify UI of new or updated transaction (skip during IBD to avoid flooding the event loop)
+        if (!IsInitialBlockDownload())
+            NotifyTransactionChanged(this, hash, fInsertedNew ? CT_NEW : CT_UPDATED);
 
         // notify an external script when a wallet transaction comes in or is updated
         std::string strCmd = GetArg("-walletnotify", "");
@@ -2775,7 +2778,7 @@ void CWallet::UpdatedTransaction(const uint256 &hashTx)
         LOCK(cs_wallet);
         // Only notify UI if this transaction is in this wallet
         map<uint256, CWalletTx>::const_iterator mi = mapWallet.find(hashTx);
-        if (mi != mapWallet.end())
+        if (mi != mapWallet.end() && !IsInitialBlockDownload())
             NotifyTransactionChanged(this, hashTx, CT_UPDATED);
     }
 }
