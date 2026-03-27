@@ -27,7 +27,10 @@ AddressBookPage::AddressBookPage(Mode mode, Tabs tab, QWidget *parent) :
     tab(tab)
 {
     ui->setupUi(this);
-    setWindowFlags(Qt::CustomizeWindowHint | Qt::FramelessWindowHint | Qt::Window);
+    if (mode == ForEditing && parent)
+        setWindowFlags(Qt::Widget);
+    else
+        setWindowFlags(Qt::CustomizeWindowHint | Qt::FramelessWindowHint | Qt::Window);
     ui->wAddressBookHeader->installEventFilter(new DialogMoveHandler(this));
 
 #ifdef Q_OS_MAC // Icons on push buttons are very uncommon on Mac
