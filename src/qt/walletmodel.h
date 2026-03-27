@@ -4,6 +4,8 @@
 #include <QObject>
 #include <vector>
 #include <map>
+#include <QMap>
+#include <QMutex>
 
 #include "allocators.h" /* for SecureString */
 
@@ -72,6 +74,7 @@ public:
     qint64 getImmatureBalance() const;
     int getNumTransactions() const;
     EncryptionStatus getEncryptionStatus() const;
+    bool isTransactionSyncing() const;
 
     // Check address for validity
     bool validateAddress(const QString &address);
@@ -160,10 +163,16 @@ public slots:
     void updateStatus();
     /* New transaction, or transaction changed status */
     void updateTransaction(const QString &hash, int status);
+    /* Queue a transaction update from a core thread without touching the UI directly */
+    void queueTransactionUpdate(const QString &hash, int status);
     /* New, updated or removed address book entry */
     void updateAddressBook(const QString &address, const QString &label, bool isMine, int status);
     /* Current, immature or unconfirmed balance might have changed - emit 'balanceChanged' if so */
     void pollBalanceChanged();
+    /* Start or restart the deferred transaction notification flush timer */
+    void startTransactionNotificationTimer();
+    /* Flush queued transaction notifications from core threads */
+    void flushTransactionNotifications();
 
 signals:
     // Signal that balance in wallet changed
@@ -182,6 +191,16 @@ signals:
 
     // Asynchronous error notification
     void error(const QString &title, const QString &message, bool modal);
+    void transactionSyncStateChanged(bool syncing);
+
+private:
+    QMutex transactionNotificationMutex;
+    QMap<QString, int> queuedTransactionNotifications;
+    bool transactionNotificationFlushQueued;
+    bool fullTransactionRefreshQueued;
+    bool transactionSyncing;
+    QTimer *transactionNotificationTimer;
+    qint64 lastFullTransactionRefreshTime;
 };
 
 

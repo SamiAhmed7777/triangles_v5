@@ -34,7 +34,10 @@ TransactionView::TransactionView(QWidget *parent) :
     QWidget(parent), model(0), transactionProxyModel(0),
     ui(new Ui::TransactionsPage),
     transactionView(0),
-    transactionsSortOrderDown(true)
+    transactionsSortOrderDown(true),
+    walletTransactionSyncing(false),
+    transactionSortColumn(TransactionTableModel::Status),
+    transactionSortOrder(Qt::DescendingOrder)
 {
     ui->setupUi(this);
     setWindowFlags(Qt::CustomizeWindowHint | Qt::FramelessWindowHint | Qt::Window);
@@ -150,7 +153,7 @@ void TransactionView::setModel(WalletModel *model)
         transactionView->setSelectionBehavior(QAbstractItemView::SelectRows);
         transactionView->setSelectionMode(QAbstractItemView::ExtendedSelection);
         transactionView->setSortingEnabled(true);
-        transactionView->sortByColumn(TransactionTableModel::Status, Qt::DescendingOrder);
+        transactionView->sortByColumn(transactionSortColumn, transactionSortOrder);
         transactionView->verticalHeader()->hide();
 
         transactionView->horizontalHeader()->resizeSection(TransactionTableModel::Status, 23);
@@ -162,6 +165,9 @@ void TransactionView::setModel(WalletModel *model)
         transactionView->horizontalHeader()->setSectionResizeMode(TransactionTableModel::ToAddress, QHeaderView::Stretch);
 #endif
         transactionView->horizontalHeader()->resizeSection(TransactionTableModel::Amount, 100);
+
+        connect(model, SIGNAL(transactionSyncStateChanged(bool)), this, SLOT(setTransactionSyncState(bool)));
+        setTransactionSyncState(model->isTransactionSyncing());
     }
 }
 
@@ -270,6 +276,30 @@ void TransactionView::exportClicked()
         QMessageBox::critical(this, tr("Error exporting"), tr("Could not write to file %1.").arg(filename),
                               QMessageBox::Abort, QMessageBox::Abort);
     }
+}
+
+void TransactionView::setTransactionSyncState(bool syncing)
+{
+    walletTransactionSyncing = syncing;
+    if (!transactionProxyModel || !transactionView)
+        return;
+
+    if (syncing)
+    {
+        transactionSortColumn = transactionView->horizontalHeader()->sortIndicatorSection();
+        transactionSortOrder = transactionView->horizontalHeader()->sortIndicatorOrder();
+        transactionProxyModel->setDynamicSortFilter(false);
+        transactionView->setSortingEnabled(false);
+        transactionView->setUpdatesEnabled(false);
+        return;
+    }
+
+    transactionProxyModel->setDynamicSortFilter(true);
+    transactionView->setUpdatesEnabled(true);
+    transactionView->setSortingEnabled(true);
+    transactionProxyModel->invalidate();
+    transactionView->sortByColumn(transactionSortColumn, transactionSortOrder);
+    transactionView->viewport()->update();
 }
 
 void TransactionView::contextualMenu(const QPoint &point)

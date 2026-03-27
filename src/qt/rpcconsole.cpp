@@ -17,9 +17,6 @@
 
 #include <openssl/crypto.h>
 
-// TODO: make it possible to filter out categories (esp debug messages when implemented)
-// TODO: receive errors and debug messages through ClientModel
-
 const int CONSOLE_SCROLLBACK = 50;
 const int CONSOLE_HISTORY = 50;
 
@@ -190,6 +187,7 @@ void RPCExecutor::request(const QString &command)
 RPCConsole::RPCConsole(QWidget *parent) :
     QDialog(parent),
     ui(new Ui::RPCConsole),
+    clientModel(0),
     historyPtr(0)
 {
     ui->setupUi(this);
@@ -259,12 +257,16 @@ bool RPCConsole::eventFilter(QObject* obj, QEvent *event)
 
 void RPCConsole::setClientModel(ClientModel *model)
 {
+    if (clientModel)
+        disconnect(clientModel, 0, this, 0);
+
     this->clientModel = model;
     if(model)
     {
         // Subscribe to information, replies, messages, errors
         connect(model, SIGNAL(numConnectionsChanged(int)), this, SLOT(setNumConnections(int)));
         connect(model, SIGNAL(numBlocksChanged(int,int)), this, SLOT(setNumBlocks(int,int)));
+        connect(model, SIGNAL(error(QString,QString,bool)), this, SLOT(showClientError(QString,QString,bool)));
 
         // Provide initial values
         ui->clientVersion->setText(model->formatFullVersion());
@@ -285,14 +287,16 @@ static QString categoryClass(int category)
     {
     case RPCConsole::CMD_REQUEST:  return "cmd-request"; break;
     case RPCConsole::CMD_REPLY:    return "cmd-reply"; break;
-    case RPCConsole::CMD_ERROR:    return "cmd-error"; break;
+    case RPCConsole::CMD_ERROR:
+    case RPCConsole::MC_ERROR:     return "cmd-error"; break;
     default:                       return "misc";
     }
 }
 
 void RPCConsole::clear()
 {
-    ui->messagesWidget->clear();
+    consoleEntries.clear();
+    refreshMessages();
     ui->lineEdit->clear();
     ui->lineEdit->setFocus();
 
@@ -323,18 +327,21 @@ void RPCConsole::clear()
 
 void RPCConsole::message(int category, const QString &message, bool html)
 {
-    QTime time = QTime::currentTime();
-    QString timeString = time.toString();
-    QString out;
-    out += "<table><tr><td class=\"time\" width=\"65\">" + timeString + "</td>";
-    out += "<td class=\"icon\" width=\"32\"><img src=\"" + categoryClass(category) + "\"></td>";
-    out += "<td class=\"message " + categoryClass(category) + "\" valign=\"middle\">";
-    if(html)
-        out += message;
-    else
-        out += GUIUtil::HtmlEscape(message, true);
-    out += "</td></tr></table>";
-    ui->messagesWidget->append(out);
+    ConsoleEntry entry;
+    entry.category = category;
+    entry.text = message;
+    entry.time = QTime::currentTime().toString();
+    entry.html = html;
+
+    consoleEntries.append(entry);
+    while (consoleEntries.size() > CONSOLE_SCROLLBACK)
+        consoleEntries.removeFirst();
+
+    if (categoryVisible(category))
+    {
+        ui->messagesWidget->append(formatEntry(entry));
+        scrollToEnd();
+    }
 }
 
 void RPCConsole::setNumConnections(int count)
@@ -438,4 +445,73 @@ void RPCConsole::on_showCLOptionsButton_clicked()
 {
     GUIUtil::HelpMessageBox help;
     help.exec();
+}
+
+bool RPCConsole::categoryVisible(int category) const
+{
+    switch (category)
+    {
+    case CMD_REQUEST:
+        return ui->showRequestsCheckBox->isChecked();
+    case CMD_ERROR:
+    case MC_ERROR:
+        return ui->showErrorsCheckBox->isChecked();
+    case CMD_REPLY:
+    case MC_DEBUG:
+    default:
+        return ui->showRepliesCheckBox->isChecked();
+    }
+}
+
+QString RPCConsole::formatEntry(const ConsoleEntry &entry) const
+{
+    QString out;
+    out += "<table><tr><td class=\"time\" width=\"65\">" + entry.time + "</td>";
+    out += "<td class=\"icon\" width=\"32\"><img src=\"" + categoryClass(entry.category) + "\"></td>";
+    out += "<td class=\"message " + categoryClass(entry.category) + "\" valign=\"middle\">";
+    if (entry.html)
+        out += entry.text;
+    else
+        out += GUIUtil::HtmlEscape(entry.text, true);
+    out += "</td></tr></table>";
+    return out;
+}
+
+void RPCConsole::refreshMessages()
+{
+    ui->messagesWidget->clear();
+    for (QList<ConsoleEntry>::const_iterator it = consoleEntries.begin(); it != consoleEntries.end(); ++it)
+    {
+        if (categoryVisible(it->category))
+            ui->messagesWidget->append(formatEntry(*it));
+    }
+    scrollToEnd();
+}
+
+void RPCConsole::on_showRequestsCheckBox_toggled(bool checked)
+{
+    Q_UNUSED(checked);
+    refreshMessages();
+}
+
+void RPCConsole::on_showRepliesCheckBox_toggled(bool checked)
+{
+    Q_UNUSED(checked);
+    refreshMessages();
+}
+
+void RPCConsole::on_showErrorsCheckBox_toggled(bool checked)
+{
+    Q_UNUSED(checked);
+    refreshMessages();
+}
+
+void RPCConsole::showClientError(const QString &title, const QString &message, bool modal)
+{
+    Q_UNUSED(modal);
+
+    if (title.isEmpty())
+        this->message(MC_ERROR, message);
+    else
+        this->message(MC_ERROR, title + ": " + message);
 }

@@ -8,9 +8,15 @@
 #include "wallet.h"
 #include "walletdb.h" // for BackupWallet
 #include "base58.h"
+#include "main.h"
 
 #include <QSet>
 #include <QTimer>
+#include <QMutexLocker>
+
+static const int MODEL_UPDATE_BATCH_THRESHOLD = 128;
+static const int MODEL_UPDATE_BATCH_DELAY_MS = 250;
+static const int MODEL_FULL_REFRESH_MIN_INTERVAL_MS = 1500;
 
 WalletModel::WalletModel(CWallet *wallet, OptionsModel *optionsModel, QObject *parent) :
     QObject(parent), wallet(wallet), optionsModel(optionsModel), addressTableModel(0),
@@ -18,7 +24,12 @@ WalletModel::WalletModel(CWallet *wallet, OptionsModel *optionsModel, QObject *p
     cachedBalance(0), cachedStake(0), cachedUnconfirmedBalance(0), cachedImmatureBalance(0),
     cachedNumTransactions(0),
     cachedEncryptionStatus(Unencrypted),
-    cachedNumBlocks(0)
+    cachedNumBlocks(0),
+    transactionNotificationFlushQueued(false),
+    fullTransactionRefreshQueued(false),
+    transactionSyncing(false),
+    transactionNotificationTimer(0),
+    lastFullTransactionRefreshTime(0)
 {
     addressTableModel = new AddressTableModel(wallet, this);
     transactionTableModel = new TransactionTableModel(wallet, this);
@@ -27,6 +38,10 @@ WalletModel::WalletModel(CWallet *wallet, OptionsModel *optionsModel, QObject *p
     pollTimer = new QTimer(this);
     connect(pollTimer, SIGNAL(timeout()), this, SLOT(pollBalanceChanged()));
     pollTimer->start(MODEL_UPDATE_DELAY);
+
+    transactionNotificationTimer = new QTimer(this);
+    transactionNotificationTimer->setSingleShot(true);
+    connect(transactionNotificationTimer, SIGNAL(timeout()), this, SLOT(flushTransactionNotifications()));
 
     subscribeToCoreSignals();
 }
@@ -64,6 +79,11 @@ int WalletModel::getNumTransactions() const
         numTransactions = wallet->mapWallet.size();
     }
     return numTransactions;
+}
+
+bool WalletModel::isTransactionSyncing() const
+{
+    return transactionSyncing;
 }
 
 void WalletModel::updateStatus()
@@ -108,8 +128,126 @@ bool WalletModel::checkBalanceChanged()
 
 void WalletModel::updateTransaction(const QString &hash, int status)
 {
+    queueTransactionUpdate(hash, status);
+}
+
+void WalletModel::queueTransactionUpdate(const QString &hash, int status)
+{
+    bool shouldScheduleFlush = false;
+    {
+        QMutexLocker locker(&transactionNotificationMutex);
+
+        int mergedStatus = status;
+        QMap<QString, int>::iterator it = queuedTransactionNotifications.find(hash);
+        if (it != queuedTransactionNotifications.end())
+        {
+            // Preserve insert/delete semantics when multiple updates arrive
+            // for the same transaction before the UI thread drains the queue.
+            if (it.value() == CT_DELETED || status == CT_DELETED)
+                mergedStatus = CT_DELETED;
+            else if (it.value() == CT_NEW || status == CT_NEW)
+                mergedStatus = CT_NEW;
+            else
+                mergedStatus = CT_UPDATED;
+            it.value() = mergedStatus;
+        }
+        else
+        {
+            queuedTransactionNotifications.insert(hash, mergedStatus);
+        }
+
+        if (IsInitialBlockDownload() || queuedTransactionNotifications.size() >= MODEL_UPDATE_BATCH_THRESHOLD)
+            fullTransactionRefreshQueued = true;
+
+        if (!transactionNotificationFlushQueued)
+        {
+            transactionNotificationFlushQueued = true;
+            shouldScheduleFlush = true;
+        }
+    }
+
+    if (shouldScheduleFlush)
+        QMetaObject::invokeMethod(this, "startTransactionNotificationTimer", Qt::QueuedConnection);
+}
+
+void WalletModel::startTransactionNotificationTimer()
+{
+    if (transactionNotificationTimer)
+        transactionNotificationTimer->start(MODEL_UPDATE_BATCH_DELAY_MS);
+}
+
+void WalletModel::flushTransactionNotifications()
+{
+    QMap<QString, int> pendingNotifications;
+    bool refreshAll = false;
+    bool shouldRescheduleRefresh = false;
+    {
+        QMutexLocker locker(&transactionNotificationMutex);
+        pendingNotifications.swap(queuedTransactionNotifications);
+        refreshAll = fullTransactionRefreshQueued;
+        fullTransactionRefreshQueued = false;
+        transactionNotificationFlushQueued = false;
+    }
+
+    const bool shouldSync = refreshAll ||
+                            IsInitialBlockDownload() ||
+                            pendingNotifications.size() >= MODEL_UPDATE_BATCH_THRESHOLD;
+    if (transactionSyncing != shouldSync)
+    {
+        transactionSyncing = shouldSync;
+        emit transactionSyncStateChanged(transactionSyncing);
+    }
+
     if(transactionTableModel)
-        transactionTableModel->updateTransaction(hash, status);
+    {
+        if (refreshAll)
+        {
+            const qint64 now = GetTimeMillis();
+            if (transactionSyncing &&
+                lastFullTransactionRefreshTime != 0 &&
+                now - lastFullTransactionRefreshTime < MODEL_FULL_REFRESH_MIN_INTERVAL_MS)
+            {
+                QMutexLocker locker(&transactionNotificationMutex);
+                fullTransactionRefreshQueued = true;
+                if (!transactionNotificationFlushQueued)
+                {
+                    transactionNotificationFlushQueued = true;
+                    shouldRescheduleRefresh = true;
+                }
+            }
+            else
+            {
+                transactionTableModel->refreshWallet();
+                lastFullTransactionRefreshTime = now;
+            }
+        }
+        else
+        {
+            for (QMap<QString, int>::const_iterator it = pendingNotifications.begin(); it != pendingNotifications.end(); ++it)
+                transactionTableModel->updateTransaction(it.key(), it.value());
+        }
+    }
+
+    if (shouldRescheduleRefresh && transactionNotificationTimer)
+        transactionNotificationTimer->start(MODEL_FULL_REFRESH_MIN_INTERVAL_MS);
+
+    bool stillPending = false;
+    {
+        QMutexLocker locker(&transactionNotificationMutex);
+        stillPending = transactionNotificationFlushQueued || !queuedTransactionNotifications.isEmpty();
+    }
+
+    if (!transactionSyncing && pendingNotifications.size() >= MODEL_UPDATE_BATCH_THRESHOLD)
+    {
+        transactionSyncing = true;
+        emit transactionSyncStateChanged(true);
+    }
+
+    if (transactionSyncing && !IsInitialBlockDownload() && !stillPending && pendingNotifications.size() < MODEL_UPDATE_BATCH_THRESHOLD)
+    {
+        transactionSyncing = false;
+        emit transactionSyncStateChanged(false);
+    }
 
     // Don't call checkBalanceChanged() here - it does LOCK(cs_wallet) + iterates
     // all wallet transactions, blocking the UI thread. The pollBalanceChanged()
@@ -392,9 +530,7 @@ static void NotifyAddressBookChanged(WalletModel *walletmodel, CWallet *wallet, 
 static void NotifyTransactionChanged(WalletModel *walletmodel, CWallet *wallet, const uint256 &hash, ChangeType status)
 {
     OutputDebugStringF("NotifyTransactionChanged %s status=%i\n", hash.GetHex().c_str(), status);
-    QMetaObject::invokeMethod(walletmodel, "updateTransaction", Qt::QueuedConnection,
-                              Q_ARG(QString, QString::fromStdString(hash.GetHex())),
-                              Q_ARG(int, status));
+    walletmodel->queueTransactionUpdate(QString::fromStdString(hash.GetHex()), status);
 }
 
 void WalletModel::subscribeToCoreSignals()

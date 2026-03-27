@@ -37,6 +37,10 @@ private slots:
     void on_openDebugLogfileButton_clicked();
     /** display messagebox with program parameters (same as triangles-qt --help) */
     void on_showCLOptionsButton_clicked();
+    void on_showRequestsCheckBox_toggled(bool checked);
+    void on_showRepliesCheckBox_toggled(bool checked);
+    void on_showErrorsCheckBox_toggled(bool checked);
+    void showClientError(const QString &title, const QString &message, bool modal);
 
 public slots:
     void clear();
@@ -55,11 +59,23 @@ signals:
     void cmdRequest(const QString &command);
 
 private:
+    struct ConsoleEntry
+    {
+        int category;
+        QString text;
+        QString time;
+        bool html;
+    };
+
     Ui::RPCConsole *ui;
     ClientModel *clientModel;
     QStringList history;
+    QList<ConsoleEntry> consoleEntries;
     int historyPtr;
 
+    bool categoryVisible(int category) const;
+    QString formatEntry(const ConsoleEntry &entry) const;
+    void refreshMessages();
     void startExecutor();
 };
 

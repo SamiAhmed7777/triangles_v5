@@ -92,6 +92,7 @@ OverviewPage::OverviewPage(QWidget *parent) :
     currentStake(0),
     currentUnconfirmedBalance(-1),
     currentImmatureBalance(-1),
+    walletTransactionSyncing(false),
     txdelegate(new TxViewDelegate()),
     filter(0)
 {
@@ -166,8 +167,10 @@ void OverviewPage::setModel(WalletModel *model)
         // Keep up to date with wallet
         setBalance(model->getBalance(), model->getStake(), model->getUnconfirmedBalance(), model->getImmatureBalance());
         connect(model, SIGNAL(balanceChanged(qint64, qint64, qint64, qint64)), this, SLOT(setBalance(qint64, qint64, qint64, qint64)));
+        connect(model, SIGNAL(transactionSyncStateChanged(bool)), this, SLOT(setTransactionSyncState(bool)));
 
         connect(model->getOptionsModel(), SIGNAL(displayUnitChanged(int)), this, SLOT(updateDisplayUnit()));
+        setTransactionSyncState(model->isTransactionSyncing());
     }
 
     // update the display unit, to not use the default ("TRI")
@@ -185,6 +188,23 @@ void OverviewPage::updateDisplayUnit()
         txdelegate->unit = model->getOptionsModel()->getDisplayUnit();
 
         ui->listTransactions->update();
+    }
+}
+
+void OverviewPage::setTransactionSyncState(bool syncing)
+{
+    walletTransactionSyncing = syncing;
+    if (!filter)
+        return;
+
+    filter->setDynamicSortFilter(!syncing);
+    ui->listTransactions->setUpdatesEnabled(!syncing);
+
+    if (!syncing)
+    {
+        filter->invalidate();
+        filter->sort(TransactionTableModel::Status, Qt::DescendingOrder);
+        ui->listTransactions->viewport()->update();
     }
 }
 

@@ -405,6 +405,96 @@ bool SetStartOnSystemStartup(bool fAutoStart)
     }
     return true;
 }
+#elif defined(Q_OS_MAC) || defined(MAC_OSX) || defined(__APPLE__)
+
+boost::filesystem::path static GetLaunchAgentsDir()
+{
+    const QString homeDir = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+    if (homeDir.isEmpty())
+        return boost::filesystem::path();
+    return boost::filesystem::path(homeDir.toStdString()) / "Library" / "LaunchAgents";
+}
+
+boost::filesystem::path static GetAutostartFilePath()
+{
+    return GetLaunchAgentsDir() / "org.triangles.triangles-qt.plist";
+}
+
+static std::string PlistEscape(const std::string& value)
+{
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (std::string::const_iterator it = value.begin(); it != value.end(); ++it)
+    {
+        switch (*it)
+        {
+        case '&': escaped += "&amp;"; break;
+        case '<': escaped += "&lt;"; break;
+        case '>': escaped += "&gt;"; break;
+        case '"': escaped += "&quot;"; break;
+        case '\'': escaped += "&apos;"; break;
+        default: escaped += *it; break;
+        }
+    }
+    return escaped;
+}
+
+bool GetStartOnSystemStartup()
+{
+    boost::filesystem::ifstream optionFile(GetAutostartFilePath());
+    if (!optionFile.good())
+        return false;
+
+    std::string contents;
+    std::string line;
+    while (getline(optionFile, line))
+        contents += line;
+    optionFile.close();
+
+    return contents.find("<key>RunAtLoad</key>") != std::string::npos &&
+           contents.find("<true/>") != std::string::npos &&
+           contents.find("<string>-min</string>") != std::string::npos;
+}
+
+bool SetStartOnSystemStartup(bool fAutoStart)
+{
+    if (!fAutoStart)
+        return !boost::filesystem::exists(GetAutostartFilePath()) || boost::filesystem::remove(GetAutostartFilePath());
+
+    const QString exePath = QApplication::applicationFilePath();
+    if (exePath.isEmpty())
+        return false;
+
+    const QString workingDir = QFileInfo(exePath).absolutePath();
+    boost::filesystem::create_directories(GetLaunchAgentsDir());
+
+    boost::filesystem::ofstream optionFile(GetAutostartFilePath(), std::ios_base::out|std::ios_base::trunc);
+    if (!optionFile.good())
+        return false;
+
+    optionFile
+        << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        << "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+        << "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+        << "<plist version=\"1.0\">\n"
+        << "<dict>\n"
+        << "    <key>Label</key>\n"
+        << "    <string>org.triangles.triangles-qt</string>\n"
+        << "    <key>ProgramArguments</key>\n"
+        << "    <array>\n"
+        << "        <string>" << PlistEscape(exePath.toStdString()) << "</string>\n"
+        << "        <string>-min</string>\n"
+        << "    </array>\n"
+        << "    <key>RunAtLoad</key>\n"
+        << "    <true/>\n"
+        << "    <key>WorkingDirectory</key>\n"
+        << "    <string>" << PlistEscape(workingDir.toStdString()) << "</string>\n"
+        << "</dict>\n"
+        << "</plist>\n";
+    optionFile.close();
+
+    return optionFile.good();
+}
 #else
 
 // TODO: OSX startup stuff; see:

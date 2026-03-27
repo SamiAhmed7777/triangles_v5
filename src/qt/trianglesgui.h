@@ -143,6 +143,7 @@ private:
     QMovie *syncIconMovie;
     /** Keep track of previous number of blocks, to detect progress */
     int prevBlocks;
+    bool walletTransactionSyncing;
 
     /** Create the main UI actions. */
     void createActions(bool fIsTestnet);
@@ -169,6 +170,7 @@ public slots:
        @see WalletModel::EncryptionStatus
     */
     void setEncryptionStatus(int status);
+    void setWalletTransactionSyncState(bool syncing);
 
     /** Notify the user of an error in the network or transaction handling code. */
     void error(const QString &title, const QString &message, bool modal);
