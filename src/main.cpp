@@ -197,19 +197,36 @@ static bool AddHeaderSyncNode(const CBlock& header, const uint256& hashHeader)
         return true;
 
     if (!header.vtx.empty())
+    {
+        printf("IBD-DIAG: header rejected (has vtx) hash=%s\n", hashHeader.ToString().substr(0,20).c_str());
         return false;
+    }
 
     if (header.GetBlockTime() > FutureDrift(GetAdjustedTime()))
+    {
+        printf("IBD-DIAG: header rejected (future time) hash=%s time=%u\n",
+            hashHeader.ToString().substr(0,20).c_str(), header.nTime);
         return false;
+    }
 
     int nPrevHeight = -1;
     uint256 nPrevChainTrust = 0;
     if (!GetKnownHeaderState(header.hashPrevBlock, nPrevHeight, nPrevChainTrust))
+    {
+        printf("IBD-DIAG: header rejected (prev unknown) hash=%s prevHash=%s\n",
+            hashHeader.ToString().substr(0,20).c_str(),
+            header.hashPrevBlock.ToString().substr(0,20).c_str());
         return false;
+    }
 
     const int nHeight = nPrevHeight + 1;
     if (nHeight <= CUTOFF_POW_BLOCK && !CheckProofOfWork(hashHeader, header.nBits))
+    {
+        printf("IBD-DIAG: header PoW FAILED at height %d hash=%s nBits=%08x prevHash=%s\n",
+            nHeight, hashHeader.ToString().substr(0,20).c_str(), header.nBits,
+            header.hashPrevBlock.ToString().substr(0,20).c_str());
         return false;
+    }
 
     CHeaderSyncNode node;
     node.header = header;
