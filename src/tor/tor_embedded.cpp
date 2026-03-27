@@ -52,6 +52,7 @@ CTorEmbedded::CTorEmbedded()
     : running(false)
     , socksPort(19099)
     , hiddenServicePort(24112)
+    , hiddenServiceEnabled(true)
 {
 }
 
@@ -109,20 +110,24 @@ static void TorThreadFunc(std::vector<std::string> argv_strings)
     CTorEmbedded::GetInstance()->SetRunning(false);
 }
 
-bool CTorEmbedded::Start(int socks, int hsPort)
+bool CTorEmbedded::Start(int socks, int hsPort, bool enableHiddenService)
 {
     if (running.load()) return true;
 
     socksPort = socks;
-    hiddenServicePort = hsPort;
+    hiddenServiceEnabled = enableHiddenService;
+    hiddenServicePort = hiddenServiceEnabled ? hsPort : 0;
+    onionHostname.clear();
 
     // Prepare Tor data directory under the wallet's data dir
     torDataDir = (::GetDataDir() / "tor_data").string();
     fs::create_directories(torDataDir);
 
-    // Hidden service directory
-    std::string hsDir = (fs::path(torDataDir) / "hidden_service").string();
-    fs::create_directories(hsDir);
+    std::string hsDir;
+    if (hiddenServiceEnabled) {
+        hsDir = (fs::path(torDataDir) / "hidden_service").string();
+        fs::create_directories(hsDir);
+    }
 
     // Build the argv for tor_run_main
     std::vector<std::string> argv;
@@ -131,12 +136,14 @@ bool CTorEmbedded::Start(int socks, int hsPort)
     argv.push_back(std::to_string(socksPort));
     argv.push_back("--DataDirectory");
     argv.push_back(torDataDir);
-    argv.push_back("--HiddenServiceDir");
-    argv.push_back(hsDir);
-    argv.push_back("--HiddenServiceVersion");
-    argv.push_back("3");
-    argv.push_back("--HiddenServicePort");
-    argv.push_back(std::to_string(hiddenServicePort) + " 127.0.0.1:" + std::to_string(hiddenServicePort));
+    if (hiddenServiceEnabled) {
+        argv.push_back("--HiddenServiceDir");
+        argv.push_back(hsDir);
+        argv.push_back("--HiddenServiceVersion");
+        argv.push_back("3");
+        argv.push_back("--HiddenServicePort");
+        argv.push_back(std::to_string(hiddenServicePort) + " 127.0.0.1:" + std::to_string(hiddenServicePort));
+    }
     argv.push_back("--AvoidDiskWrites");
     argv.push_back("1");
     argv.push_back("--Log");
@@ -175,13 +182,15 @@ bool CTorEmbedded::Start(int socks, int hsPort)
                 printf("Embedded Tor SOCKS proxy ready on port %d (took %ds)\n", socksPort, i + 1);
 
                 // Read .onion hostname if available
-                fs::path hostnameFile = fs::path(hsDir) / "hostname";
-                if (fs::exists(hostnameFile)) {
-                    std::ifstream f(hostnameFile.string().c_str());
-                    if (f.is_open())
-                        std::getline(f, onionHostname);
-                    if (!onionHostname.empty())
-                        printf("Tor hidden service: %s\n", onionHostname.c_str());
+                if (hiddenServiceEnabled) {
+                    fs::path hostnameFile = fs::path(hsDir) / "hostname";
+                    if (fs::exists(hostnameFile)) {
+                        std::ifstream f(hostnameFile.string().c_str());
+                        if (f.is_open())
+                            std::getline(f, onionHostname);
+                        if (!onionHostname.empty())
+                            printf("Tor hidden service: %s\n", onionHostname.c_str());
+                    }
                 }
                 return true;
             }
@@ -219,14 +228,16 @@ void CTorEmbedded::Stop()
 
 #include "tor_process.h"
 
-bool CTorEmbedded::Start(int socks, int hsPort)
+bool CTorEmbedded::Start(int socks, int hsPort, bool enableHiddenService)
 {
     printf("Embedded Tor not compiled in. Using external Tor process.\n");
     // Delegate to the external process manager
     socksPort = socks;
-    hiddenServicePort = hsPort;
+    hiddenServiceEnabled = enableHiddenService;
+    hiddenServicePort = hiddenServiceEnabled ? hsPort : 0;
+    onionHostname.clear();
     torDataDir = (::GetDataDir() / "tor_data").string();
-    running.store(StartTorProcess(torDataDir, socksPort, hiddenServicePort));
+    running.store(StartTorProcess(torDataDir, socksPort, hiddenServicePort, hiddenServiceEnabled));
     return running.load();
 }
 
@@ -249,10 +260,11 @@ bool StartEmbeddedTor()
         return false;
     }
 
+    bool enableHiddenService = GetBoolArg("-torhiddenservice", true);
     int socksPort = GetArg("-torsocks", 19099);
-    int hsPort    = GetArg("-torhsport", GetListenPort());
+    int hsPort    = enableHiddenService ? GetArg("-torhsport", GetListenPort()) : 0;
 
-    return CTorEmbedded::GetInstance()->Start(socksPort, hsPort);
+    return CTorEmbedded::GetInstance()->Start(socksPort, hsPort, enableHiddenService);
 }
 
 void StopEmbeddedTor()

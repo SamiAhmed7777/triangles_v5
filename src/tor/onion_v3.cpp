@@ -18,6 +18,7 @@
 #endif
 
 #include "onion_v3.h"
+#include "tor_embedded.h"
 #include "tor_crypto_compat.h"
 #include "../util.h"
 #include "../net.h"
@@ -58,6 +59,53 @@ extern CWallet* pwalletMain;
 // Static instance
 CTorV3Manager* CTorV3Manager::instance = nullptr;
 static TorV3Config torV3Config;
+
+static boost::filesystem::path GetBackendHiddenServiceDir(const std::string& torDataDir)
+{
+    return boost::filesystem::path(torDataDir) / "hidden_service";
+}
+
+static bool ReadTrimmedFirstLine(const boost::filesystem::path& path, std::string& valueOut)
+{
+    valueOut.clear();
+
+    std::ifstream file(path.string().c_str());
+    if (!file.is_open() || !std::getline(file, valueOut)) {
+        return false;
+    }
+
+    while (!valueOut.empty()) {
+        const char ch = valueOut[valueOut.size() - 1];
+        if (ch != '\n' && ch != '\r' && ch != ' ' && ch != '\t') {
+            break;
+        }
+        valueOut.erase(valueOut.size() - 1);
+    }
+
+    return !valueOut.empty();
+}
+
+static std::string GetEffectiveTorProxy()
+{
+    proxyType proxy;
+    if (GetProxy(NET_TOR, proxy)) {
+        return proxy.first.ToStringIPPort();
+    }
+
+    if (mapArgs.count("-tor") && mapArgs["-tor"] != "0") {
+        CService torProxy(mapArgs["-tor"], GetArg("-torsocks", 19099));
+        if (torProxy.IsValid()) {
+            return torProxy.ToStringIPPort();
+        }
+    }
+
+    std::string explicitProxy = GetArg("-torproxy", "");
+    if (!explicitProxy.empty()) {
+        return explicitProxy;
+    }
+
+    return strprintf("127.0.0.1:%d", GetArg("-torsocks", 19099));
+}
 
 // Utility function for proper base32 encoding (RFC 4648) - Tor variant
 std::string EncodeBase32Proper(const unsigned char* data, size_t len)
@@ -503,40 +551,95 @@ bool CTorV3Service::LoadFromPrivateKey(const std::string& privKey)
 
 bool CTorV3Service::StartOnionService()
 {
-    if (onionAddress.empty()) {
-        printf("ERROR: No onion address generated\n");
+    if (!torV3Config.enableTor || !torV3Config.enableHiddenService) {
+        printf("ERROR: Tor hidden service backend is disabled\n");
         return false;
     }
 
-    // Use data directory for Tor service files
-    boost::filesystem::path serviceDir = GetDataDir() / "tor_data" / "triangles_v3";
-    boost::filesystem::create_directories(serviceDir);
+    return AttachToBackendService(torV3Config.torDataDirectory, port);
+}
 
-    // Create Tor configuration for hidden service
-    std::string torrcContent = strprintf(
-        "HiddenServiceDir %s\n"
-        "HiddenServiceVersion 3\n"
-        "HiddenServicePort %d 127.0.0.1:%d\n",
-        serviceDir.string().c_str(), port, port
-    );
-
-    // Write torrc file
-    std::ofstream torrcFile((serviceDir / "torrc").string().c_str());
-    if (torrcFile.is_open()) {
-        torrcFile << torrcContent;
-        torrcFile.close();
+bool CTorV3Service::AttachToBackendService(const std::string& torDataDir, int servicePort, int waitSeconds)
+{
+    if (servicePort <= 0 || servicePort > 65535) {
+        printf("ERROR: Invalid backend hidden service port: %d\n", servicePort);
+        return false;
     }
 
-    // Write private key
-    std::ofstream keyFile((serviceDir / "hs_ed25519_secret_key").string().c_str());
-    if (keyFile.is_open()) {
-        keyFile << "== ed25519v1-secret: type0 ==\n";
-        keyFile << privateKey << "\n";
-        keyFile.close();
+    if (torDataDir.empty()) {
+        printf("ERROR: Tor data directory is empty\n");
+        return false;
     }
 
+    port = servicePort;
+
+    const boost::filesystem::path serviceDir = GetBackendHiddenServiceDir(torDataDir);
+    const boost::filesystem::path hostnamePath = serviceDir / "hostname";
+
+    std::string backendOnion;
+    for (int waited = 0; waited <= waitSeconds; ++waited) {
+        if (boost::filesystem::exists(hostnamePath) &&
+            ReadTrimmedFirstLine(hostnamePath, backendOnion)) {
+            break;
+        }
+
+        if (waited == waitSeconds) {
+            printf("ERROR: Timed out waiting for Tor hidden service hostname at %s\n",
+                   hostnamePath.string().c_str());
+            return false;
+        }
+
+        if (fShutdown) {
+            printf("ERROR: Shutdown requested while waiting for Tor hidden service hostname\n");
+            return false;
+        }
+
+        MilliSleep(1000);
+    }
+
+    if (!ValidateOnionAddress(backendOnion)) {
+        printf("ERROR: Tor backend produced invalid onion address: %s\n", backendOnion.c_str());
+        return false;
+    }
+
+    if (!onionAddress.empty() && onionAddress != backendOnion) {
+        printf("WARNING: Replacing wallet-managed onion address %s with Tor backend address %s\n",
+               onionAddress.c_str(), backendOnion.c_str());
+    }
+
+    onionAddress = backendOnion;
     isActive = true;
-    printf("Started V3 onion service on %s:%d\n", onionAddress.c_str(), port);
+
+    if (pwalletMain) {
+        CWalletDB walletdb(pwalletMain->strWalletFile);
+        walletdb.WriteSetting("tor_v3_onion_address", onionAddress);
+
+        // Back up the Tor-generated secret key to wallet.dat so the onion
+        // identity survives deletion of the tor_data directory.
+        boost::filesystem::path secretKeyPath = serviceDir / "hs_ed25519_secret_key";
+        if (boost::filesystem::exists(secretKeyPath)) {
+            std::ifstream keyFile(secretKeyPath.string().c_str(), std::ios::binary);
+            if (keyFile.is_open()) {
+                std::vector<unsigned char> keyData(
+                    (std::istreambuf_iterator<char>(keyFile)),
+                    std::istreambuf_iterator<char>());
+                keyFile.close();
+
+                if (keyData.size() == 96) {
+                    walletdb.WriteSetting("tor_v3_hs_secret_key_backup", keyData);
+                    printf("Backed up Tor hidden service secret key to wallet (%d bytes)\n",
+                           (int)keyData.size());
+                } else {
+                    printf("WARNING: hs_ed25519_secret_key has unexpected size %d (expected 96), not backing up\n",
+                           (int)keyData.size());
+                }
+
+                OPENSSL_cleanse(keyData.data(), keyData.size());
+            }
+        }
+    }
+
+    printf("Attached V3 onion service to Tor backend at %s:%d\n", onionAddress.c_str(), port);
     return true;
 }
 
@@ -1142,20 +1245,10 @@ void CTorV3Manager::ShutdownTor()
 bool CTorV3Manager::CreateWalletHiddenService(int port)
 {
     CTorV3Service* service = new CTorV3Service();
-    
-    // Try to load existing service first
-    if (!service->LoadFromWallet()) {
-        // Generate new service
-        if (!service->GenerateV3Service(port)) {
-            delete service;
-            return false;
-        }
-        service->SaveToWallet();
-    }
-    
-    if (service->StartOnionService()) {
+
+    if (service->AttachToBackendService(torDataDir, port)) {
         services[port] = service;
-        printf("Wallet hidden service created: %s\n", service->GetOnionAddress().c_str());
+        printf("Wallet hidden service attached: %s\n", service->GetOnionAddress().c_str());
         
         // If seeder mode is enabled, automatically register as seeder
         if (torV3Config.enableSeederMode) {
@@ -1968,12 +2061,12 @@ void CTorV3Manager::UpdateDiscoveryStats(int connected, int attempted)
 bool LoadTorV3Config()
 {
     // Tor V3 identity is innate to Triangles — enabled by default
-    torV3Config.enableTor = GetBoolArg("-tor", true);
-    torV3Config.enableHiddenService = GetBoolArg("-torhiddenservice", true);
+    torV3Config.enableTor = !GetBoolArg("-notor", false);
+    torV3Config.enableHiddenService = torV3Config.enableTor && GetBoolArg("-torhiddenservice", true);
     torV3Config.enableSeederMode = GetBoolArg("-torseeder", false);
-    torV3Config.hiddenServicePort = GetArg("-torhiddenserviceport", GetDefaultPort());
+    torV3Config.hiddenServicePort = GetArg("-torhsport", GetListenPort());
     torV3Config.torDataDirectory = GetArg("-tordatadir", (GetDataDir() / "tor_data").string());
-    torV3Config.socksProxy = GetArg("-torproxy", "127.0.0.1:9050");
+    torV3Config.socksProxy = GetEffectiveTorProxy();
     torV3Config.maxConnections = GetArg("-tormaxconnections", 8);
 
     printf("Loaded Tor V3 configuration: enabled=%s, hidden_service=%s, seeder=%s, proxy=%s\n",
@@ -2093,13 +2186,101 @@ void CTorV3Manager::RequestSeederListFromPeer(const std::string& peerAddress)
 // Schedule periodic seeder re-announcements
 void CTorV3Manager::ScheduleSeederReannouncement()
 {
-    // This would typically be handled by a timer or scheduler
-    // For now, we'll just update the last announcement time
     if (pwalletMain) {
         CWalletDB walletdb(pwalletMain->strWalletFile);
         walletdb.WriteSetting("seeder_last_announcement", (int64_t)GetTime());
-        printf("Scheduled seeder re-announcement\n");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Background thread: Tor health monitoring + seeder maintenance
+// ---------------------------------------------------------------------------
+void ThreadTorMaintenance(void* parg)
+{
+    RenameThread("Triangles-tormaint");
+    printf("Tor maintenance thread started\n");
+
+    int restartBackoffSec = 30;
+    int64_t lastSeederMaint = GetTime();
+    static const int SEEDER_INTERVAL = 1800; // 30 minutes
+
+    while (!fShutdown)
+    {
+        MilliSleep(30000); // check every 30 seconds
+        if (fShutdown) break;
+
+        // --- Tor health check & auto-restart ---
+        if (!CTorEmbedded::GetInstance()->IsRunning())
+        {
+            printf("WARNING: Tor process is no longer running, attempting restart...\n");
+
+            if (StartEmbeddedTor())
+            {
+                printf("Tor restarted successfully\n");
+                restartBackoffSec = 30;
+
+                // Re-attach the hidden service identity
+                TorV3Config& torConfig = GetTorV3Config();
+                std::string torDataPath = CTorEmbedded::GetInstance()->GetDataDir();
+                if (torDataPath.empty())
+                    torDataPath = torConfig.torDataDirectory;
+
+                torConfig.enableTor = true;
+                torConfig.enableHiddenService = CTorEmbedded::GetInstance()->IsHiddenServiceEnabled();
+                torConfig.hiddenServicePort = CTorEmbedded::GetInstance()->GetHiddenServicePort();
+                torConfig.torDataDirectory = torDataPath;
+
+                if (torConfig.enableHiddenService && InitTorV3())
+                {
+                    std::string onionAddr = CTorV3Manager::GetInstance()->GetWalletOnionAddress();
+                    if (!onionAddr.empty())
+                    {
+                        AddLocal(CService(onionAddr, torConfig.hiddenServicePort), LOCAL_MANUAL);
+                        printf("Re-registered Tor V3 identity after restart: %s\n", onionAddr.c_str());
+                    }
+                }
+            }
+            else
+            {
+                printf("WARNING: Tor restart failed, retrying in %d seconds\n", restartBackoffSec);
+                MilliSleep(restartBackoffSec * 1000);
+                if (restartBackoffSec < 300)
+                    restartBackoffSec *= 2;
+            }
+            continue;
+        }
+
+        // --- Seeder maintenance (every 30 minutes) ---
+        TorV3Config& cfg = GetTorV3Config();
+        if (cfg.enableSeederMode && (GetTime() - lastSeederMaint) >= SEEDER_INTERVAL)
+        {
+            CTorV3Manager* mgr = CTorV3Manager::GetInstance();
+            std::string ownAddr = mgr->GetWalletOnionAddress();
+
+            if (!ownAddr.empty())
+            {
+                // Re-announce ourselves as a seeder to all peers
+                {
+                    LOCK(cs_vNodes);
+                    for (CNode* pnode : vNodes)
+                    {
+                        try {
+                            pnode->PushMessage("seeder", ownAddr, cfg.hiddenServicePort);
+                        } catch (...) {}
+                    }
+                }
+                printf("Seeder re-announcement sent to %d peers\n", (int)vNodes.size());
+            }
+
+            // Refresh our knowledge of other seeders
+            mgr->RequestSeederListFromPeers();
+
+            mgr->ScheduleSeederReannouncement();
+            lastSeederMaint = GetTime();
+        }
+    }
+
+    printf("Tor maintenance thread exited\n");
 }
 
 // Global functions
