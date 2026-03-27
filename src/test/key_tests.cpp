@@ -10,17 +10,17 @@
 
 using namespace std;
 
-static const string strSecret1     ("VgbPo2gxpQ9Wv3ukSKZyaYqaYE1gCtzpdZtLBSL4Vax17Gk9QWtr");
-static const string strSecret2     ("VZK4HxH5ThQPZjkMVGRb7GHPBhrfwvNCQxYpTsTL7zHtcK5Xmu56");
-static const string strSecret1C    ("VaGAFqyHzPVbXmLRVEfNBCjGoFfkdk5us5RkxdNVu9GKzk1UKdW4");
-static const string strSecret2C    ("VbGMJ5R3znfmv3harEnjEfa9to9hnAp3vGqahGLq12hF3L2aa9vr");
-static const CTrianglesAddress addr1 ("TBUTdKJg53PmmwjyzdPgXjABq2MJrz7sdC");
-static const CTrianglesAddress addr2 ("TV7guKExCcH65B5oKFhtYiVo5M59md24MZ");
-static const CTrianglesAddress addr1C("TM1W8XP18TM2zEqeRo76gXSkaM6UGppfFG");
-static const CTrianglesAddress addr2C("TD4n8bbK75ufLRT5kraXVty6MwN6FXGwai");
+static const string strSecret1     ("7VwGSZW25FEoG5zehJeaemXrwmPXrHPZYJ6zyffvHj4nNxMp54C");
+static const string strSecret2     ("7UZQX91FxJYGc4WeGd8krh2jTmuKP53goPcJ2FWdAJ6dRYZqh85");
+static const string strSecret1C    ("VgiX9pT5jjquBb3TNttsXhZDSivTAXLad8VUu7gnCpfhHjiSogsy");
+static const string strSecret2C    ("Vae2p2L916R1skVqVxVEaKgeRBBv8Qrrfknn8X3kc2TqmL7EH9sp");
+static const CTrianglesAddress addr1 ("TKQV7fkoFN947MkFm17NNXgm7tEiPUTa2z");
+static const CTrianglesAddress addr2 ("TBJRAJXnQxT7B6bM11emAfPSmj4xCqyw8B");
+static const CTrianglesAddress addr1C("TEjXKeQNxb8efkAXK9H7U5uKvMpcGVCqWX");
+static const CTrianglesAddress addr2C("TQe4pNNxnZWD3SNHyL13DuxJZJXFjtE76E");
 
 
-static const string strAddressBad("TNLwP8QiuFTWntVCrmswefDetZkgTLXeG8");
+static const string strAddressBad("TJQ5ap67UnQRQbaK8LqZbTgMkEuJ8SRZMA");
 
 
 #ifdef KEY_TESTS_DUMPINFO
