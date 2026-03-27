@@ -51,6 +51,21 @@ enum Checkpoints::CPMode CheckpointsMode;
 static CCriticalSection cs_DeferredStartup;
 static bool fDeferredStartupRunning = false;
 
+static void StartupPerfLog(const char* phase, int64_t elapsedMs)
+{
+    printf("STARTUP-PERF: %s %" PRId64 "ms\n", phase, elapsedMs);
+}
+
+static void StartupPerfLog(const char* phase, int64_t elapsedMs, const std::string& detail)
+{
+    if (detail.empty())
+    {
+        StartupPerfLog(phase, elapsedMs);
+        return;
+    }
+    printf("STARTUP-PERF: %s %" PRId64 "ms %s\n", phase, elapsedMs, detail.c_str());
+}
+
 //////////////////////////////////////////////////////////////////////////////
 //
 // Shutdown
@@ -96,6 +111,7 @@ void ThreadDeferredStartup(void* parg)
             int64_t nStart = GetTimeMillis();
             SecureMsgStart(fNoSmsg, GetBoolArg("-smsgscanchain"));
             printf(" securemsg   %15" PRId64 "ms\n", GetTimeMillis() - nStart);
+            StartupPerfLog("deferred.securemsg", GetTimeMillis() - nStart);
         }
 
         if (!fShutdown && pwalletMain)
@@ -103,9 +119,11 @@ void ThreadDeferredStartup(void* parg)
             int64_t nStart = GetTimeMillis();
             pwalletMain->ReacceptWalletTransactions();
             printf(" reaccept    %15" PRId64 "ms\n", GetTimeMillis() - nStart);
+            StartupPerfLog("deferred.reaccept_wallet_transactions", GetTimeMillis() - nStart);
         }
 
         printf("Deferred startup tasks finished %" PRId64 "ms\n", GetTimeMillis() - nTotalStart);
+        StartupPerfLog("deferred.total", GetTimeMillis() - nTotalStart);
     }
     catch (std::exception& e)
     {
@@ -449,6 +467,7 @@ bool InitSanityCheck(void)
  */
 bool AppInit2()
 {
+    const int64_t nAppInitStart = GetTimeMillis();
     // ********************************************************* Step 1: setup
 #ifdef _MSC_VER
     // Turn off Microsoft heap dump noise
@@ -672,6 +691,7 @@ bool AppInit2()
     // ********************************************************* Step 5: verify database integrity
 
     uiInterface.InitMessage(_("Verifying database integrity..."));
+    nStart = GetTimeMillis();
 
     if (!bitdb.Open(GetDataDir()))
     {
@@ -702,8 +722,10 @@ bool AppInit2()
         if (r == CDBEnv::RECOVER_FAIL)
             return InitError(_("wallet.dat corrupt, salvage failed"));
     }
+    StartupPerfLog("verify_db", GetTimeMillis() - nStart, strprintf("wallet=%s", strWalletFileName.c_str()));
 
     // ********************************************************* Step 6: network initialization
+    nStart = GetTimeMillis();
 
     //int nSocksVersion = GetArg("-socks", 5);
     //
@@ -797,11 +819,13 @@ bool AppInit2()
 
     for (string strDest : mapMultiArgs["-seednode"])
         AddOneShot(strDest);
+    StartupPerfLog("network_init", GetTimeMillis() - nStart, strprintf("listen=%d seednodes=%" PRIszu, !fNoListen, mapMultiArgs["-seednode"].size()));
 
     // ********************************************************* Step 6b: bootstrap download (daemon)
 #ifndef QT_GUI
     if (GetBoolArg("-bootstrap", false))
     {
+        int64_t nBootstrapStart = GetTimeMillis();
         fs::path dataPath = GetDataDir();
         std::string host = Bootstrap::DEFAULT_HOST;
         std::string strError;
@@ -832,6 +856,8 @@ bool AppInit2()
         } else {
             printf("\nBootstrap: done.\n");
         }
+        StartupPerfLog("bootstrap_download", GetTimeMillis() - nBootstrapStart,
+            strprintf("host=%s success=%d", host.c_str(), success));
     }
 #endif
 
@@ -867,7 +893,9 @@ bool AppInit2()
     {
         uiInterface.InitMessage(_("Importing bootstrap blocks..."));
         printf("Block index empty but blk0001.dat exists - running fast import...\n");
+        int64_t nFastImportStart = GetTimeMillis();
         FastImportBlockFile();
+        StartupPerfLog("bootstrap_fast_import", GetTimeMillis() - nFastImportStart, strprintf("bestheight=%d", nBestHeight));
     }
 
     // as LoadBlockIndex can take several minutes, it's possible the user
@@ -879,6 +907,7 @@ bool AppInit2()
         return false;
     }
     printf(" block index %15" PRId64 "ms\n", GetTimeMillis() - nStart);
+    StartupPerfLog("block_index", GetTimeMillis() - nStart, strprintf("bestheight=%d indexsize=%" PRIszu, nBestHeight, mapBlockIndex.size()));
 
     // Diagnostic: check for blocks in mapBlockIndex above pindexBest
     {
@@ -989,6 +1018,7 @@ bool AppInit2()
 
     printf("%s", strErrors.str().c_str());
     printf(" wallet      %15" PRId64 "ms\n", GetTimeMillis() - nStart);
+    StartupPerfLog("wallet_load", GetTimeMillis() - nStart, strprintf("firstrun=%d", fFirstRun));
 
     RegisterWallet(pwalletMain);
 
@@ -997,10 +1027,12 @@ bool AppInit2()
         pindexRescan = pindexGenesisBlock;
     else
     {
+        int64_t nWalletLocatorStart = GetTimeMillis();
         CWalletDB walletdb(strWalletFileName);
         CBlockLocator locator;
         if (walletdb.ReadBestBlock(locator))
             pindexRescan = locator.GetBlockIndex();
+        StartupPerfLog("wallet_bestblock_locator", GetTimeMillis() - nWalletLocatorStart);
     }
     if (pindexBest != pindexRescan && pindexBest && pindexRescan && pindexBest->nHeight > pindexRescan->nHeight)
     {
@@ -1033,6 +1065,12 @@ bool AppInit2()
             pwalletMain->ScanForWalletTransactions(pindexRescan, true);
 
         printf(" rescan      %15" PRId64 "ms\n", GetTimeMillis() - nStart);
+        StartupPerfLog("wallet_rescan", GetTimeMillis() - nStart,
+            strprintf("from=%d to=%d indexed=%d", pindexRescan->nHeight, pindexBest->nHeight, fScannedWithIndex));
+    }
+    else
+    {
+        StartupPerfLog("wallet_rescan", 0, "skipped");
     }
 
     // ********************************************************* Step 8.5: start Tor and initialize V3 identity
@@ -1040,7 +1078,9 @@ bool AppInit2()
         uiInterface.InitMessage(_("Starting Tor..."));
         printf("Starting Tor process...\n");
 
+        int64_t nTorStart = GetTimeMillis();
         bool torStarted = StartEmbeddedTor();
+        StartupPerfLog("tor_start", GetTimeMillis() - nTorStart, strprintf("started=%d", torStarted));
         std::string torDataPath = CTorEmbedded::GetInstance()->GetDataDir();
         if (torDataPath.empty())
             torDataPath = (GetDataDir() / "tor_data").string();
@@ -1057,6 +1097,7 @@ bool AppInit2()
         uiInterface.InitMessage(_("Initializing Tor V3 identity..."));
         printf("Initializing Tor V3 onion identity...\n");
 
+        int64_t nTorIdentityStart = GetTimeMillis();
         LoadTorV3Config();
         TorV3Config& torConfig = GetTorV3Config();
         torConfig.enableTor = true;
@@ -1085,6 +1126,7 @@ bool AppInit2()
         } else {
             printf("WARNING: Failed to initialize Tor V3 identity\n");
         }
+        StartupPerfLog("tor_v3_identity", GetTimeMillis() - nTorIdentityStart);
 
         // Also check if Tor gave us a hidden service hostname
         if (torStarted) {
@@ -1103,6 +1145,7 @@ bool AppInit2()
                 }
             }
         }
+        StartupPerfLog("tor_setup_total", GetTimeMillis() - nTorStart);
     }
 
     // ********************************************************* Step 9: import blocks
@@ -1113,9 +1156,11 @@ bool AppInit2()
 
         for (string strFile : mapMultiArgs["-loadblock"])
         {
+            int64_t nLoadBlockStart = GetTimeMillis();
             FILE *file = fopen(strFile.c_str(), "rb");
             if (file)
                 LoadExternalBlockFile(file);
+            StartupPerfLog("loadblock_import", GetTimeMillis() - nLoadBlockStart, strprintf("file=%s", strFile.c_str()));
         }
         exit(0);
     }
@@ -1124,12 +1169,14 @@ bool AppInit2()
     if (fs::exists(pathBootstrap)) {
         uiInterface.InitMessage(_("Importing bootstrap blockchain data file."));
 
+        int64_t nBootstrapImportStart = GetTimeMillis();
         FILE *file = fopen(pathBootstrap.string().c_str(), "rb");
         if (file) {
             fs::path pathBootstrapOld = GetDataDir() / "bootstrap.dat.old";
             LoadExternalBlockFile(file);
             RenameOver(pathBootstrap, pathBootstrapOld);
         }
+        StartupPerfLog("bootstrap_dat_import", GetTimeMillis() - nBootstrapImportStart, strprintf("file=%s", pathBootstrap.string().c_str()));
     }
 
     // ********************************************************* Step 10: load peers
@@ -1146,9 +1193,11 @@ bool AppInit2()
 
     printf("Loaded %i addresses from peers.dat  %" PRId64 "ms\n",
            addrman.size(), GetTimeMillis() - nStart);
+    StartupPerfLog("peers_load", GetTimeMillis() - nStart, strprintf("count=%d", addrman.size()));
     
     
     // ********************************************************* Step 11: start node
+    nStart = GetTimeMillis();
 
     if (!CheckDiskSpace())
         return false;
@@ -1177,6 +1226,7 @@ bool AppInit2()
         printf("Warning: deferred startup thread could not be started, running inline\n");
         ThreadDeferredStartup(NULL);
     }
+    StartupPerfLog("start_services", GetTimeMillis() - nStart);
 
     // ********************************************************* Step 11.5: ZMQ notifications
 #ifdef ENABLE_ZMQ
@@ -1215,6 +1265,7 @@ bool AppInit2()
 
     uiInterface.InitMessage(_("Done loading"));
     printf("Done loading\n");
+    StartupPerfLog("appinit_total", GetTimeMillis() - nAppInitStart);
 
     if (!strErrors.str().empty())
         return InitError(strErrors.str());

@@ -144,6 +144,7 @@ private:
     /** Keep track of previous number of blocks, to detect progress */
     int prevBlocks;
     bool walletTransactionSyncing;
+    int walletTransactionSyncPending;
 
     /** Create the main UI actions. */
     void createActions(bool fIsTestnet);
@@ -159,6 +160,7 @@ private:
     void saveWindowGeometry();
     /** Restore window size and position */
     void restoreWindowGeometry();
+    void refreshSyncStatusDisplay();
 
 public slots:
     /** Set number of connections shown in the UI */
@@ -171,6 +173,7 @@ public slots:
     */
     void setEncryptionStatus(int status);
     void setWalletTransactionSyncState(bool syncing);
+    void setWalletTransactionSyncProgress(bool syncing, int pendingNotifications);
 
     /** Notify the user of an error in the network or transaction handling code. */
     void error(const QString &title, const QString &message, bool modal);

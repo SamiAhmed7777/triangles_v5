@@ -107,7 +107,8 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     notificator(0),
     rpcConsole(0),
     prevBlocks(0),
-    walletTransactionSyncing(false)
+    walletTransactionSyncing(false),
+    walletTransactionSyncPending(0)
 {
 
     ui->setupUi(this);
@@ -594,6 +595,7 @@ void TrianglesGUI::setWalletModel(WalletModel *walletModel)
         setEncryptionStatus(walletModel->getEncryptionStatus());
         connect(walletModel, SIGNAL(encryptionStatusChanged(int)), this, SLOT(setEncryptionStatus(int)));
         connect(walletModel, SIGNAL(transactionSyncStateChanged(bool)), this, SLOT(setWalletTransactionSyncState(bool)));
+        connect(walletModel, SIGNAL(transactionSyncProgressChanged(bool,int)), this, SLOT(setWalletTransactionSyncProgress(bool,int)));
         setWalletTransactionSyncState(walletModel->isTransactionSyncing());
 
         // Balloon pop-up for new transaction
@@ -769,6 +771,32 @@ void TrianglesGUI::restoreWindowGeometry()
     move(pos);
 }
 
+void TrianglesGUI::refreshSyncStatusDisplay()
+{
+    if (clientModel)
+    {
+        setNumBlocks(clientModel->getNumBlocks(), clientModel->getNumBlocksOfPeers());
+        return;
+    }
+
+    if (!walletTransactionSyncing)
+    {
+        progressBarLabel->setVisible(false);
+        progressBar->setVisible(false);
+        ui->label_blocks->setVisible(false);
+        return;
+    }
+
+    progressBarLabel->setText(walletTransactionSyncPending > 0
+        ? tr("Updating wallet history... %n change(s) queued", "", walletTransactionSyncPending)
+        : tr("Updating wallet history..."));
+    progressBarLabel->setVisible(true);
+    progressBar->setRange(0, 0);
+    progressBar->setValue(0);
+    progressBar->setVisible(true);
+    ui->label_blocks->setVisible(false);
+}
+
 void TrianglesGUI::optionsClicked()
 {
     if(!clientModel || !clientModel->getOptionsModel())
@@ -806,19 +834,10 @@ void TrianglesGUI::setNumBlocks(int count, int nTotalBlocks)
         return;
 
     int nConnections = clientModel->getNumConnections();
-
-    // Hide progress bar when disconnected, but don't return early -
-    // we still need to update sync state and the out-of-sync warning
-    if (nConnections == 0)
-    {
-        progressBarLabel->setVisible(false);
-        progressBar->setVisible(false);
-        ui->label_blocks->setVisible(false);
-    }
-
+    const bool blockSyncActive = nConnections > 0 && count < nTotalBlocks;
     QString tooltip;
 
-    if(nConnections > 0 && count < nTotalBlocks)
+    if(blockSyncActive)
     {
         // Calculate blocks/sec - only update rate when new blocks arrive
         static int lastCount = 0;
@@ -870,10 +889,25 @@ void TrianglesGUI::setNumBlocks(int count, int nTotalBlocks)
 
         tooltip = tr("Downloaded %1 of %2 blocks of transaction history (%3% done).").arg(count).arg(nTotalBlocks).arg(nPercentageDone, 0, 'f', 2);
     }
+    else if (walletTransactionSyncing)
+    {
+        progressBarLabel->setText(walletTransactionSyncPending > 0
+            ? tr("Updating wallet history... %n change(s) queued", "", walletTransactionSyncPending)
+            : tr("Updating wallet history..."));
+        progressBarLabel->setVisible(true);
+        progressBar->setRange(0, 0);
+        progressBar->setValue(0);
+        progressBar->setVisible(true);
+        ui->label_blocks->setVisible(false);
+
+        tooltip = tr("Wallet history is catching up to recent transactions and stakes.");
+        tooltip += QString("<br>") + (walletTransactionSyncPending > 0
+            ? tr("%n wallet update(s) are queued for the UI.", "", walletTransactionSyncPending)
+            : tr("Finalizing the latest wallet updates."));
+    }
     else
     {
         progressBarLabel->setVisible(false);
-
         progressBar->setVisible(false);
         ui->label_blocks->setVisible(false);
         tooltip = tr("Processed %1 blocks of transaction history.").arg(count);
@@ -1078,6 +1112,16 @@ void TrianglesGUI::incomingTransaction(const QModelIndex & parent, int start, in
 void TrianglesGUI::setWalletTransactionSyncState(bool syncing)
 {
     walletTransactionSyncing = syncing;
+    if (!syncing)
+        walletTransactionSyncPending = 0;
+    refreshSyncStatusDisplay();
+}
+
+void TrianglesGUI::setWalletTransactionSyncProgress(bool syncing, int pendingNotifications)
+{
+    walletTransactionSyncing = syncing;
+    walletTransactionSyncPending = pendingNotifications;
+    refreshSyncStatusDisplay();
 }
 
 void TrianglesGUI::incomingMessage(const QModelIndex & parent, int start, int end)

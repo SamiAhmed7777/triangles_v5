@@ -192,6 +192,7 @@ signals:
     // Asynchronous error notification
     void error(const QString &title, const QString &message, bool modal);
     void transactionSyncStateChanged(bool syncing);
+    void transactionSyncProgressChanged(bool syncing, int pendingNotifications);
 
 private:
     QMutex transactionNotificationMutex;
