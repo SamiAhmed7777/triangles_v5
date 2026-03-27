@@ -8,9 +8,6 @@ on:
     branches: [master]
   workflow_dispatch:
 
-env:
-  VERSION: "5.3.9"
-
 jobs:
   test-linux-unit:
     runs-on: ubuntu-22.04
@@ -149,6 +146,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set VERSION from source
+        run: |
+          MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
+          MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
+          REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+          echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -189,6 +193,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set VERSION from source
+        run: |
+          MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
+          MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
+          REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+          echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -224,6 +235,13 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set VERSION from source
+        run: |
+          MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
+          MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
+          REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+          echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
 
       - name: Install dependencies
         run: |
@@ -289,6 +307,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Set VERSION from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
