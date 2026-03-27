@@ -93,7 +93,7 @@ static std::string GetEffectiveTorProxy()
     }
 
     if (mapArgs.count("-tor") && mapArgs["-tor"] != "0") {
-        CService torProxy(mapArgs["-tor"], GetArg("-torsocks", 19099));
+        CService torProxy(mapArgs["-tor"], (unsigned short)GetArg("-torsocks", 19099));
         if (torProxy.IsValid()) {
             return torProxy.ToStringIPPort();
         }
