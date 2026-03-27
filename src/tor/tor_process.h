@@ -21,6 +21,7 @@ private:
     std::string torrcPath;
     int socksPort;
     int hiddenServicePort;
+    bool hiddenServiceEnabled;
     bool running;
 
 #ifdef WIN32
@@ -45,7 +46,7 @@ public:
 
     // Start the Tor process
     // Returns true if Tor was started or is already running
-    bool Start(const std::string& dataDir, int socksPort = 19099, int hsPort = 24112);
+    bool Start(const std::string& dataDir, int socksPort = 19099, int hsPort = 24112, bool enableHiddenService = true);
 
     // Stop the Tor process
     void Stop();
@@ -64,7 +65,7 @@ public:
 };
 
 // Global convenience functions
-bool StartTorProcess(const std::string& dataDir, int socksPort = 19099, int hsPort = 24112);
+bool StartTorProcess(const std::string& dataDir, int socksPort = 19099, int hsPort = 24112, bool enableHiddenService = true);
 void StopTorProcess();
 
 #endif // TRIANGLES_TOR_PROCESS_H

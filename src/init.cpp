@@ -355,6 +355,7 @@ std::string HelpMessage()
         "  -tor=<ip:port>         " + _("Use proxy to reach tor hidden services (default: same as -proxy)") + "\n"
         "  -notor                 " + _("Disable Tor startup and .onion connectivity") + "\n" +
         "  -torsocks=<port>       " + _("Set embedded or managed Tor SOCKS proxy port (default: 19099)") + "\n" +
+        "  -torhiddenservice      " + _("Enable the managed Tor hidden service (default: 1)") + "\n" +
         "  -torhsport=<port>      " + _("Set embedded or managed Tor hidden service port (default: wallet listen port)") + "\n" +
         //"  -dns                   " + _("Allow DNS lookups for -addnode, -seednode and -connect") + "\n" +
         "  -port=<port>           " + _("Listen for connections on <port> (default: 24112 or testnet: 24111)") + "\n" +
@@ -752,7 +753,7 @@ bool AppInit2()
 
     // Tor proxy: always configured for .onion connectivity
     CService addrOnion;
-    unsigned short const onion_port = 19099;
+    unsigned short const onion_port = static_cast<unsigned short>(GetArg("-torsocks", 19099));
 
     if (mapArgs.count("-tor") && mapArgs["-tor"] != "0") {
         addrOnion = CService(mapArgs["-tor"], onion_port);
@@ -1078,6 +1079,37 @@ bool AppInit2()
         uiInterface.InitMessage(_("Starting Tor..."));
         printf("Starting Tor process...\n");
 
+        // Restore hidden service secret key from wallet backup if the key
+        // file is missing on disk.  This preserves the .onion identity even
+        // if the tor_data directory was deleted.
+        if (pwalletMain && !GetBoolArg("-notor", false)) {
+            std::string restoreDataPath = GetArg("-tordatadir", (GetDataDir() / "tor_data").string());
+            fs::path secretKeyPath = fs::path(restoreDataPath) / "hidden_service" / "hs_ed25519_secret_key";
+
+            if (!fs::exists(secretKeyPath)) {
+                CWalletDB walletdb(pwalletMain->strWalletFile);
+                std::vector<unsigned char> backedUpKey;
+
+                if (walletdb.ReadSetting("tor_v3_hs_secret_key_backup", backedUpKey) &&
+                    backedUpKey.size() == 96) {
+                    fs::create_directories(secretKeyPath.parent_path());
+
+                    std::ofstream keyFile(secretKeyPath.string().c_str(), std::ios::binary);
+                    if (keyFile.is_open()) {
+                        keyFile.write(reinterpret_cast<const char*>(backedUpKey.data()),
+                                      backedUpKey.size());
+                        keyFile.close();
+                        printf("Restored Tor hidden service secret key from wallet backup\n");
+                    } else {
+                        printf("WARNING: Failed to write restored hs_ed25519_secret_key to %s\n",
+                               secretKeyPath.string().c_str());
+                    }
+                }
+
+                OPENSSL_cleanse(backedUpKey.data(), backedUpKey.size());
+            }
+        }
+
         int64_t nTorStart = GetTimeMillis();
         bool torStarted = StartEmbeddedTor();
         StartupPerfLog("tor_start", GetTimeMillis() - nTorStart, strprintf("started=%d", torStarted));
@@ -1100,13 +1132,14 @@ bool AppInit2()
         int64_t nTorIdentityStart = GetTimeMillis();
         LoadTorV3Config();
         TorV3Config& torConfig = GetTorV3Config();
-        torConfig.enableTor = true;
-        torConfig.enableHiddenService = true;
-        torConfig.hiddenServicePort = GetListenPort();
+        torConfig.enableTor = torStarted;
+        torConfig.enableHiddenService = torStarted && CTorEmbedded::GetInstance()->IsHiddenServiceEnabled();
+        torConfig.hiddenServicePort = CTorEmbedded::GetInstance()->GetHiddenServicePort();
         torConfig.torDataDirectory = torDataPath;
+        std::string onionAddr;
 
-        if (InitTorV3()) {
-            string onionAddr = CTorV3Manager::GetInstance()->GetWalletOnionAddress();
+        if (torConfig.enableTor && torConfig.enableHiddenService && InitTorV3()) {
+            onionAddr = CTorV3Manager::GetInstance()->GetWalletOnionAddress();
             if (!onionAddr.empty()) {
                 // Write onion/hostname for compatibility with existing code paths
                 fs::path onionDir = GetDataDir() / "onion";
@@ -1118,11 +1151,15 @@ bool AppInit2()
                 }
 
                 // Register onion address as local address for peer discovery
-                AddLocal(CService(onionAddr, GetListenPort(), fNameLookup), LOCAL_MANUAL);
+                AddLocal(CService(onionAddr, torConfig.hiddenServicePort, fNameLookup), LOCAL_MANUAL);
                 printf("Tor V3 identity: %s\n", onionAddr.c_str());
             } else {
                 printf("WARNING: Tor V3 initialized but no onion address available\n");
             }
+        } else if (torStarted && !torConfig.enableHiddenService) {
+            printf("Tor hidden service disabled by configuration\n");
+        } else if (!torStarted) {
+            printf("Skipping Tor V3 identity because the Tor backend is unavailable\n");
         } else {
             printf("WARNING: Failed to initialize Tor V3 identity\n");
         }
@@ -1139,13 +1176,21 @@ bool AppInit2()
                     while (!torOnion.empty() && (torOnion.back() == '\n' || torOnion.back() == '\r' || torOnion.back() == ' '))
                         torOnion.pop_back();
                     if (!torOnion.empty()) {
-                        AddLocal(CService(torOnion, GetListenPort(), fNameLookup), LOCAL_MANUAL);
+                        if (torOnion != onionAddr) {
+                            AddLocal(CService(torOnion, torConfig.hiddenServicePort, fNameLookup), LOCAL_MANUAL);
+                        }
                         printf("Tor hidden service (from Tor process): %s\n", torOnion.c_str());
                     }
                 }
             }
         }
         StartupPerfLog("tor_setup_total", GetTimeMillis() - nTorStart);
+
+        // Launch background thread for Tor health monitoring and seeder maintenance
+        if (torStarted) {
+            if (!NewThread(ThreadTorMaintenance, NULL))
+                printf("Warning: ThreadTorMaintenance could not be started\n");
+        }
     }
 
     // ********************************************************* Step 9: import blocks

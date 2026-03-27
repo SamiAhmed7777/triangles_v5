@@ -16,6 +16,7 @@ private:
     std::atomic<bool> running;
     int socksPort;
     int hiddenServicePort;
+    bool hiddenServiceEnabled;
     std::string torDataDir;
     std::string onionHostname;
 
@@ -26,7 +27,7 @@ public:
     ~CTorEmbedded();
 
     // Start Tor in a background thread (blocks that thread until shutdown)
-    bool Start(int socksPort = 19099, int hsPort = 24112);
+    bool Start(int socksPort = 19099, int hsPort = 24112, bool enableHiddenService = true);
 
     // Request Tor to shut down
     void Stop();
@@ -45,6 +46,7 @@ public:
 
     // Get the hidden service port
     int GetHiddenServicePort() const { return hiddenServicePort; }
+    bool IsHiddenServiceEnabled() const { return hiddenServiceEnabled; }
 };
 
 // Global init/shutdown hooks (called from init.cpp)

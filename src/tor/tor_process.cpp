@@ -48,6 +48,7 @@ CTorProcess* CTorProcess::GetInstance()
 CTorProcess::CTorProcess()
     : socksPort(19099)
     , hiddenServicePort(24112)
+    , hiddenServiceEnabled(true)
     , running(false)
 #ifdef WIN32
     , hProcess(NULL)
@@ -198,11 +199,13 @@ bool CTorProcess::WriteTorrc()
     fs::create_directories(torStateDir);
     torrc << "DataDirectory " << torStateDir.string() << "\n";
 
-    // V3 hidden service so this node is reachable via .onion
-    torrc << "HiddenServiceDir " << hsDir.string() << "\n";
-    torrc << "HiddenServiceVersion 3\n";
-    torrc << "HiddenServicePort " << hiddenServicePort
-          << " 127.0.0.1:" << hiddenServicePort << "\n";
+    if (hiddenServiceEnabled) {
+        // V3 hidden service so this node is reachable via .onion
+        torrc << "HiddenServiceDir " << hsDir.string() << "\n";
+        torrc << "HiddenServiceVersion 3\n";
+        torrc << "HiddenServicePort " << hiddenServicePort
+              << " 127.0.0.1:" << hiddenServicePort << "\n";
+    }
 
     // Reduce bandwidth/resource usage for wallet use
     torrc << "ClientOnly 1\n";
@@ -213,15 +216,21 @@ bool CTorProcess::WriteTorrc()
 
     torrc.close();
 
-    printf("Wrote torrc to %s (SOCKS %d, HS port %d)\n",
-           torrcPath.c_str(), socksPort, hiddenServicePort);
+    if (hiddenServiceEnabled) {
+        printf("Wrote torrc to %s (SOCKS %d, HS port %d)\n",
+               torrcPath.c_str(), socksPort, hiddenServicePort);
+    } else {
+        printf("Wrote torrc to %s (SOCKS %d, hidden service disabled)\n",
+               torrcPath.c_str(), socksPort);
+    }
     return true;
 }
 
-bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort)
+bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool enableHiddenService)
 {
     socksPort = socks;
-    hiddenServicePort = hsPort;
+    hiddenServiceEnabled = enableHiddenService;
+    hiddenServicePort = hiddenServiceEnabled ? hsPort : 0;
     torDataDir = dataDir;
 
     // Check if something is already listening on our SOCKS port
@@ -314,12 +323,14 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort)
             printf("Tor SOCKS proxy ready on port %d (took %ds)\n", socksPort, i + 1);
 
             // Read and display the hidden service hostname if available
-            fs::path hsHostname = fs::path(torDataDir) / "hidden_service" / "hostname";
-            if (fs::exists(hsHostname)) {
-                std::ifstream f(hsHostname.string().c_str());
-                std::string hostname;
-                if (f.is_open() && std::getline(f, hostname)) {
-                    printf("Tor hidden service: %s\n", hostname.c_str());
+            if (hiddenServiceEnabled) {
+                fs::path hsHostname = fs::path(torDataDir) / "hidden_service" / "hostname";
+                if (fs::exists(hsHostname)) {
+                    std::ifstream f(hsHostname.string().c_str());
+                    std::string hostname;
+                    if (f.is_open() && std::getline(f, hostname)) {
+                        printf("Tor hidden service: %s\n", hostname.c_str());
+                    }
                 }
             }
             return true;
@@ -402,9 +413,9 @@ std::string CTorProcess::GetSocksProxy() const
 }
 
 // Global convenience functions
-bool StartTorProcess(const std::string& dataDir, int socksPort, int hsPort)
+bool StartTorProcess(const std::string& dataDir, int socksPort, int hsPort, bool enableHiddenService)
 {
-    return CTorProcess::GetInstance()->Start(dataDir, socksPort, hsPort);
+    return CTorProcess::GetInstance()->Start(dataDir, socksPort, hsPort, enableHiddenService);
 }
 
 void StopTorProcess()

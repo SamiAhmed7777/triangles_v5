@@ -34,7 +34,10 @@ public:
     
     // Start the onion service
     bool StartOnionService();
-    
+
+    // Attach to the hidden service managed by the running Tor backend
+    bool AttachToBackendService(const std::string& torDataDir, int servicePort, int waitSeconds = 30);
+
     // Stop the onion service
     bool StopService();
     
@@ -169,5 +172,6 @@ void ShutdownTorV3();
 TorV3Config& GetTorV3Config();
 bool SaveTorV3Config();
 bool LoadTorV3Config();
+void ThreadTorMaintenance(void* parg);
 
 #endif // TRIANGLES_TOR_ONION_V3_H
