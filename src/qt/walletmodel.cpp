@@ -232,22 +232,28 @@ void WalletModel::flushTransactionNotifications()
         transactionNotificationTimer->start(MODEL_FULL_REFRESH_MIN_INTERVAL_MS);
 
     bool stillPending = false;
+    int queuedNotificationCount = 0;
     {
         QMutexLocker locker(&transactionNotificationMutex);
         stillPending = transactionNotificationFlushQueued || !queuedTransactionNotifications.isEmpty();
+        queuedNotificationCount = queuedTransactionNotifications.size();
     }
-
     if (!transactionSyncing && pendingNotifications.size() >= MODEL_UPDATE_BATCH_THRESHOLD)
     {
         transactionSyncing = true;
         emit transactionSyncStateChanged(true);
     }
 
-    if (transactionSyncing && !IsInitialBlockDownload() && !stillPending && pendingNotifications.size() < MODEL_UPDATE_BATCH_THRESHOLD)
+    if (transactionSyncing && !IsInitialBlockDownload() && !stillPending)
     {
         transactionSyncing = false;
         emit transactionSyncStateChanged(false);
     }
+
+    const int pendingNotificationCount = transactionSyncing
+        ? pendingNotifications.size() + queuedNotificationCount
+        : queuedNotificationCount;
+    emit transactionSyncProgressChanged(transactionSyncing, pendingNotificationCount);
 
     // Don't call checkBalanceChanged() here - it does LOCK(cs_wallet) + iterates
     // all wallet transactions, blocking the UI thread. The pollBalanceChanged()
