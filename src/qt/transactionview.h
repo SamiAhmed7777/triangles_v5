@@ -48,9 +48,12 @@ public:
 private:
     WalletModel *model;
     TransactionFilterProxy *transactionProxyModel;
-	Ui::TransactionsPage *ui;
+    Ui::TransactionsPage *ui;
     QTableView *transactionView;
     bool transactionsSortOrderDown;
+    bool walletTransactionSyncing;
+    int transactionSortColumn;
+    Qt::SortOrder transactionSortOrder;
 
     QComboBox *dateWidget;
     QComboBox *typeWidget;
@@ -74,6 +77,7 @@ private slots:
     void copyLabel();
     void copyAmount();
     void copyTxID();
+    void setTransactionSyncState(bool syncing);
  
 signals:
     void doubleClicked(const QModelIndex&);

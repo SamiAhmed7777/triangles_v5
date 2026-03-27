@@ -106,7 +106,8 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     trayIcon(0),
     notificator(0),
     rpcConsole(0),
-    prevBlocks(0)
+    prevBlocks(0),
+    walletTransactionSyncing(false)
 {
 
     ui->setupUi(this);
@@ -592,6 +593,8 @@ void TrianglesGUI::setWalletModel(WalletModel *walletModel)
 
         setEncryptionStatus(walletModel->getEncryptionStatus());
         connect(walletModel, SIGNAL(encryptionStatusChanged(int)), this, SLOT(setEncryptionStatus(int)));
+        connect(walletModel, SIGNAL(transactionSyncStateChanged(bool)), this, SLOT(setWalletTransactionSyncState(bool)));
+        setWalletTransactionSyncState(walletModel->isTransactionSyncing());
 
         // Balloon pop-up for new transaction
         connect(walletModel->getTransactionTableModel(), SIGNAL(rowsInserted(QModelIndex,int,int)),
@@ -1039,6 +1042,8 @@ void TrianglesGUI::incomingTransaction(const QModelIndex & parent, int start, in
 {
     if(!walletModel || !clientModel)
         return;
+    if(walletTransactionSyncing)
+        return;
     TransactionTableModel *ttm = walletModel->getTransactionTableModel();
     qint64 amount = ttm->index(start, TransactionTableModel::Amount, parent)
                     .data(Qt::EditRole).toULongLong();
@@ -1068,6 +1073,11 @@ void TrianglesGUI::incomingTransaction(const QModelIndex & parent, int start, in
                               .arg(type)
                               .arg(address), icon);
     }
+}
+
+void TrianglesGUI::setWalletTransactionSyncState(bool syncing)
+{
+    walletTransactionSyncing = syncing;
 }
 
 void TrianglesGUI::incomingMessage(const QModelIndex & parent, int start, int end)

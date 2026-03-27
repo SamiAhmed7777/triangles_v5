@@ -1086,6 +1086,63 @@ QPushButton:!enabled {
            </widget>
           </item>
           <item>
+           <layout class="QHBoxLayout" name="filterLayout">
+            <property name="spacing">
+             <number>12</number>
+            </property>
+            <item>
+             <widget class="QLabel" name="showLabel">
+              <property name="text">
+               <string>Show:</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="showRequestsCheckBox">
+              <property name="text">
+               <string>Requests</string>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="showRepliesCheckBox">
+              <property name="text">
+               <string>Replies</string>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="showErrorsCheckBox">
+              <property name="text">
+               <string>Errors</string>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="horizontalSpacerFilters">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+           </layout>
+          </item>
+          <item>
            <layout class="QHBoxLayout" name="horizontalLayout">
             <property name="spacing">
              <number>3</number>
