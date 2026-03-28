@@ -946,9 +946,24 @@ void ThreadRPCServer2(void* parg)
 
     vnThreadsRunning[THREAD_RPCLISTENER]--;
     while (!fShutdown)
-        io_service.run_one();
+    {
+        // Use poll_one + sleep instead of blocking run_one so the thread
+        // remains responsive to fShutdown and can exit promptly.
+        if (!io_service.poll_one())
+        {
+            io_service.restart();
+            MilliSleep(50);
+        }
+    }
     vnThreadsRunning[THREAD_RPCLISTENER]++;
-    StopRequests();
+
+    // Safely shut down: close acceptors, then drain any remaining handlers
+    try {
+        StopRequests();
+    } catch (...) {
+        // Absorb bad_weak_ptr or other exceptions from stale tracked slots
+    }
+    io_service.poll();   // process cancellation callbacks so shared_ptrs are released
 }
 
 class JSONRequest

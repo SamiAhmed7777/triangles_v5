@@ -2206,7 +2206,9 @@ void ThreadTorMaintenance(void* parg)
 
     while (!fShutdown)
     {
-        MilliSleep(30000); // check every 30 seconds
+        // Sleep in short intervals so the thread exits promptly on shutdown
+        for (int i = 0; i < 60 && !fShutdown; i++)
+            MilliSleep(500);
         if (fShutdown) break;
 
         // --- Tor health check & auto-restart ---
@@ -2243,7 +2245,8 @@ void ThreadTorMaintenance(void* parg)
             else
             {
                 printf("WARNING: Tor restart failed, retrying in %d seconds\n", restartBackoffSec);
-                MilliSleep(restartBackoffSec * 1000);
+                for (int i = 0; i < restartBackoffSec * 2 && !fShutdown; i++)
+                    MilliSleep(500);
                 if (restartBackoffSec < 300)
                     restartBackoffSec *= 2;
             }
