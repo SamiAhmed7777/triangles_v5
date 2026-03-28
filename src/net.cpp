@@ -878,10 +878,19 @@ void ThreadSocketHandler2(void* parg)
                 }
             }
         }
-        if (vNodes.size() != nPrevNodeCount)
         {
-            nPrevNodeCount = vNodes.size();
-            uiInterface.NotifyNumConnectionsChanged(vNodes.size());
+            // Read vNodes.size() under the lock to avoid data race
+            unsigned int nNodeCount;
+            {
+                LOCK(cs_vNodes);
+                nNodeCount = vNodes.size();
+            }
+            if (nNodeCount != nPrevNodeCount)
+            {
+                nPrevNodeCount = nNodeCount;
+                if (!fShutdown)
+                    uiInterface.NotifyNumConnectionsChanged(nNodeCount);
+            }
         }
 
 
@@ -1013,7 +1022,7 @@ void ThreadSocketHandler2(void* parg)
         for (CNode* pnode : vNodesCopy)
         {
             if (fShutdown)
-                return;
+                break;
 
             //
             // Receive
@@ -1039,7 +1048,7 @@ void ThreadSocketHandler2(void* parg)
                             if (!pnode->ReceiveMsgBytes(pchBuf, nBytes))
                                 pnode->CloseSocketDisconnect();
                             pnode->nLastRecv = GetTime();
-                            pnode->nRecvBytes += nBytes;       
+                            pnode->nRecvBytes += nBytes;
                         }
                         else if (nBytes == 0)
                         {
@@ -1104,6 +1113,8 @@ void ThreadSocketHandler2(void* parg)
                 pnode->Release();
         }
 
+        if (fShutdown)
+            return;
         MilliSleep(10);
     }
 }
@@ -1832,6 +1843,9 @@ void ThreadMessageHandler2(void* parg)
             pnodeTrickle = vNodesCopy[GetRand(vNodesCopy.size())];
         for (CNode* pnode : vNodesCopy)
         {
+            if (fShutdown)
+                break;
+
             // Receive messages
             {
                 TRY_LOCK(pnode->cs_vRecvMsg, lockRecv);
@@ -1839,8 +1853,6 @@ void ThreadMessageHandler2(void* parg)
                     if (!ProcessMessages(pnode))
                         pnode->CloseSocketDisconnect();
             }
-            if (fShutdown)
-                return;
 
             // Send messages
             {
@@ -1848,8 +1860,6 @@ void ThreadMessageHandler2(void* parg)
                 if (lockSend)
                     SendMessages(pnode, pnode == pnodeTrickle);
             }
-            if (fShutdown)
-                return;
         }
 
         {
@@ -2180,6 +2190,18 @@ bool StopNode()
     }
     MilliSleep(50);
     DumpAddresses();
+
+    // Force-disconnect and clean up all remaining nodes now that threads have stopped.
+    // Close sockets first so any lingering I/O fails immediately.
+    {
+        LOCK(cs_vNodes);
+        for (CNode* pnode : vNodes)
+        {
+            pnode->CloseSocketDisconnect();
+            pnode->Cleanup();
+        }
+    }
+
     return true;
 }
 
@@ -2191,7 +2213,8 @@ public:
     }
     ~CNetCleanup()
     {
-        // Close sockets
+        // Close sockets - acquire lock in case other threads are still winding down
+        LOCK(cs_vNodes);
         for (CNode* pnode : vNodes)
             if (pnode->hSocket != INVALID_SOCKET)
                 closesocket(pnode->hSocket);

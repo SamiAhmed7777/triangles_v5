@@ -176,6 +176,12 @@ void Shutdown(void* parg)
         }
 
         SecureMsgShutdown();
+
+        // Stop network threads FIRST so nothing references Tor objects
+        nTransactionsUpdated++;
+        StopNode();
+
+        // NOW safe to destroy Tor state - all threads have stopped
         ShutdownTorV3();
         StopEmbeddedTor();
 
@@ -194,10 +200,8 @@ void Shutdown(void* parg)
             pNotificationQueue = NULL;
         }
 
-        nTransactionsUpdated++;
 //        CTxDB().Close();
         bitdb.Flush(false);
-        StopNode();
         bitdb.Flush(true);
         fs::remove(GetPidFile());
         UnregisterWallet(pwalletMain);
