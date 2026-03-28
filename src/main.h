@@ -29,6 +29,7 @@ class CNode;
 static const int CUTOFF_POW_BLOCK = 9000;
 static const int CRAPCHAIN_CUTOFF_BLOCK = 17691; // pre-Pharao (version 4) blockchain until block 17691
 static const int FORK_HEIGHT_V5 = 17651; // v5 hard fork: decentralization + Tor v3 (next block after last checkpoint)
+static const int FORK_HEIGHT_V5_4 = 2186941; // v5.4: tighter timestamps, deterministic fork resolution
 
 static const unsigned int MAX_BLOCK_SIZE = 1000000;
 static const unsigned int MAX_BLOCK_SIZE_GEN = MAX_BLOCK_SIZE/2;
@@ -56,8 +57,11 @@ static const int fHaveUPnP = false;
 
 static const uint256 hashGenesisBlockOfficial("0x7e7a6e4dd5fe895106fca912dfbacaeaf2a89e76c6a588df8ff96e0e18b96021");
 static const uint256 hashGenesisBlockTestNet ("0x7e7a6e4dd5fe895106fca912dfbacaeaf2a89e76c6a588df8ff96e0e18b96021");
-inline int64_t PastDrift(int64_t nTime)   { return nTime - 10 * 60; } // up to 10 minutes from the past
-inline int64_t FutureDrift(int64_t nTime) { return nTime + 10 * 60; } // up to 10 minutes from the future
+inline int64_t GetMaxTimeDrift(int nHeight) { return (nHeight >= FORK_HEIGHT_V5_4) ? 3 * 60 : 10 * 60; }
+inline int64_t PastDrift(int64_t nTime, int nHeight)   { return nTime - GetMaxTimeDrift(nHeight); }
+inline int64_t FutureDrift(int64_t nTime, int nHeight)  { return nTime + GetMaxTimeDrift(nHeight); }
+inline int64_t PastDrift(int64_t nTime)   { return PastDrift(nTime, nBestHeight); }
+inline int64_t FutureDrift(int64_t nTime) { return FutureDrift(nTime, nBestHeight); }
 
 
 extern CScript COINBASE_FLAGS;

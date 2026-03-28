@@ -2568,7 +2568,17 @@ bool CBlock::AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const u
 
     // New best — keep the batch open so SetBestChain can add ConnectBlock
     // writes to the same transaction, cutting the per-block commit count in half.
+    // v5.4: deterministic tiebreaker — when two chains have equal trust,
+    // all nodes agree on the one whose tip has the lower block hash.
+    // This prevents permanent forks from PoS blocks with identical difficulty.
+    bool fNewBest = false;
     if (pindexNew->nChainTrust > nBestChainTrust)
+        fNewBest = true;
+    else if (pindexNew->nChainTrust == nBestChainTrust && pindexBest &&
+             pindexNew->GetBlockHash() < pindexBest->GetBlockHash())
+        fNewBest = true;
+
+    if (fNewBest)
     {
         if (!SetBestChain(txdb, pindexNew))
             return false;
@@ -2719,7 +2729,7 @@ bool CBlock::AcceptBlock()
         if (nHeight % 10000 == 0 || nHeight > 2186900)
             printf("ProcessBlock(): Check proof-of-stake/work OK for block %d\n", nHeight);
     // Check timestamp against prev
-    if (GetBlockTime() <= pindexPrev->GetPastTimeLimit() || FutureDrift(GetBlockTime()) < pindexPrev->GetBlockTime())
+    if (GetBlockTime() <= pindexPrev->GetPastTimeLimit() || FutureDrift(GetBlockTime(), nHeight) < pindexPrev->GetBlockTime())
         return error("AcceptBlock() : block's timestamp is too early");
 
     // Check that all transactions are finalized
@@ -2999,13 +3009,13 @@ bool CBlock::SignBlock(CWallet& wallet, int64_t nFees)
     {
         if (wallet.CreateCoinStake(wallet, nBits, nSearchTime-nLastCoinStakeSearchTime, nFees, txCoinStake, key))
         {
-            if (txCoinStake.nTime >= max(pindexBest->GetPastTimeLimit()+1, PastDrift(pindexBest->GetBlockTime())))
+            if (txCoinStake.nTime >= max(pindexBest->GetPastTimeLimit()+1, PastDrift(pindexBest->GetBlockTime(), pindexBest->nHeight + 1)))
             {
                 // make sure coinstake would meet timestamp protocol
                 //    as it would be the same as the block timestamp
                 vtx[0].nTime = nTime = txCoinStake.nTime;
                 nTime = max(pindexBest->GetPastTimeLimit()+1, GetMaxTransactionTime());
-                nTime = max(GetBlockTime(), PastDrift(pindexBest->GetBlockTime()));
+                nTime = max(GetBlockTime(), PastDrift(pindexBest->GetBlockTime(), pindexBest->nHeight + 1));
 
                 // we have to make sure that we have no future timestamps in
                 //    our transactions set
