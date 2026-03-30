@@ -16,6 +16,8 @@
 
 #include <boost/filesystem.hpp>
 
+#include <set>
+
 IntroDialog::IntroDialog(QWidget *parent) :
     QDialog(parent)
 {
@@ -190,6 +192,24 @@ bool IntroDialog::pickDataDirectory()
         settings.setValue("strDataDir", dataDir);
     }
 
+    // Check for pending data directory migration
+    if (settings.value("fPendingDataDirMigration", false).toBool()) {
+        QString oldDir = settings.value("strDataDirPrevious", "").toString();
+        if (!oldDir.isEmpty() && oldDir != dataDir) {
+            if (!migrateDataDirectory(oldDir, dataDir)) {
+                // Migration failed - revert to old directory
+                QMessageBox::warning(0, "Triangles",
+                    QString("Data directory migration failed.\nContinuing with the previous directory:\n%1")
+                        .arg(oldDir));
+                dataDir = oldDir;
+                settings.setValue("strDataDir", oldDir);
+            }
+        }
+        // Clear migration state regardless
+        settings.remove("strDataDirPrevious");
+        settings.setValue("fPendingDataDirMigration", false);
+    }
+
     // If the saved path is the default, don't set -datadir (let normal defaults work)
     QString defaultDir = QString::fromStdString(GetDefaultDataDir().string());
     if (dataDir != defaultDir) {
@@ -273,5 +293,147 @@ bool IntroDialog::pickDataDirectory()
         }
     }
 
+    return true;
+}
+
+static void copyDirectoryRecursive(const boost::filesystem::path& src,
+                                   const boost::filesystem::path& dst)
+{
+    namespace fs = boost::filesystem;
+    fs::create_directories(dst);
+    for (fs::directory_iterator it(src), end; it != end; ++it) {
+        fs::path dstChild = dst / it->path().filename();
+        if (fs::is_directory(it->path())) {
+            copyDirectoryRecursive(it->path(), dstChild);
+        } else {
+            fs::copy_file(it->path(), dstChild, fs::copy_option::overwrite_if_exists);
+        }
+    }
+}
+
+bool IntroDialog::migrateDataDirectory(const QString& oldPath, const QString& newPath)
+{
+    namespace fs = boost::filesystem;
+
+    fs::path srcDir(oldPath.toStdString());
+    fs::path dstDir(newPath.toStdString());
+
+    if (!fs::exists(srcDir) || !fs::is_directory(srcDir))
+        return false;
+
+    // Create destination directory
+    try {
+        fs::create_directories(dstDir);
+    } catch (const fs::filesystem_error& e) {
+        printf("Migration: Cannot create destination directory: %s\n", e.what());
+        return false;
+    }
+
+    // Check free space
+    try {
+        quint64 srcSize = 0;
+        for (fs::recursive_directory_iterator it(srcDir), end; it != end; ++it) {
+            if (fs::is_regular_file(*it))
+                srcSize += fs::file_size(*it);
+        }
+        fs::space_info si = fs::space(dstDir);
+        if (si.available < srcSize + (50 * 1024 * 1024)) { // 50MB headroom
+            printf("Migration: Insufficient disk space. Need %llu, have %llu\n",
+                   (unsigned long long)srcSize, (unsigned long long)si.available);
+            return false;
+        }
+    } catch (const fs::filesystem_error& e) {
+        printf("Migration: Cannot check disk space: %s\n", e.what());
+        return false;
+    }
+
+    // Files/directories to skip during copy
+    static const std::set<std::string> skipFiles = {
+        ".lock",
+        "debug.log",
+        "db.log",
+    };
+
+    // Show progress dialog
+    QProgressDialog progress("Moving data directory...", QString(), 0, 0, 0);
+    progress.setWindowTitle("Triangles - Data Migration");
+    progress.setWindowModality(Qt::ApplicationModal);
+    progress.setMinimumDuration(0);
+    progress.setCancelButton(0);
+    progress.show();
+    QApplication::processEvents();
+
+    // Phase 1: Copy wallet.dat FIRST (most critical file)
+    fs::path walletSrc = srcDir / "wallet.dat";
+    fs::path walletDst = dstDir / "wallet.dat";
+    if (fs::exists(walletSrc)) {
+        progress.setLabelText("Copying wallet.dat...");
+        QApplication::processEvents();
+        try {
+            // Copy to temp name first, then rename for atomicity
+            fs::path walletTmp = dstDir / "wallet.dat.migrating";
+            fs::copy_file(walletSrc, walletTmp, fs::copy_option::overwrite_if_exists);
+
+            // Verify copy by checking file size
+            if (fs::file_size(walletTmp) != fs::file_size(walletSrc)) {
+                fs::remove(walletTmp);
+                printf("Migration: wallet.dat copy size mismatch!\n");
+                return false;
+            }
+
+            // Rename into place
+            if (fs::exists(walletDst))
+                fs::remove(walletDst);
+            fs::rename(walletTmp, walletDst);
+        } catch (const fs::filesystem_error& e) {
+            printf("Migration: Failed to copy wallet.dat: %s\n", e.what());
+            return false; // Abort - wallet is critical
+        }
+    }
+
+    // Phase 2: Copy everything else
+    int filesCopied = 0;
+    try {
+        for (fs::directory_iterator it(srcDir), end; it != end; ++it) {
+            std::string filename = it->path().filename().string();
+
+            // Skip special files
+            if (skipFiles.count(filename))
+                continue;
+
+            // Skip wallet.dat (already copied)
+            if (filename == "wallet.dat")
+                continue;
+
+            fs::path dst = dstDir / filename;
+
+            progress.setLabelText(QString("Copying %1...").arg(QString::fromStdString(filename)));
+            QApplication::processEvents();
+
+            if (fs::is_directory(it->path())) {
+                copyDirectoryRecursive(it->path(), dst);
+            } else {
+                fs::copy_file(it->path(), dst, fs::copy_option::overwrite_if_exists);
+            }
+            filesCopied++;
+        }
+    } catch (const fs::filesystem_error& e) {
+        // Non-wallet copy failure: log but don't abort
+        // Chain data can be re-synced; wallet was already safely copied
+        printf("Migration: Warning: failed to copy some files: %s\n", e.what());
+    }
+
+    // Phase 3: Rename old wallet.dat as safety backup (don't delete old dir)
+    try {
+        if (fs::exists(walletSrc)) {
+            fs::rename(walletSrc, srcDir / "wallet.dat.bak-migrated");
+        }
+    } catch (...) {
+        // Not critical
+    }
+
+    progress.close();
+    printf("Migration: Successfully copied %d items from %s to %s\n",
+           filesCopied, srcDir.string().c_str(), dstDir.string().c_str());
     return true;
 }

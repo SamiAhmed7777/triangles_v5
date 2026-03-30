@@ -3,6 +3,9 @@
 
 #include <QDialog>
 
+class QLineEdit;
+class QLabel;
+
 namespace Ui {
 class OptionsDialog;
 }
@@ -45,17 +48,29 @@ private slots:
     void updateDisplayUnit();
     void handleProxyIpValid(QValidatedLineEdit *object, bool fState);
     void applyTorDefaults(bool enabled);
+    void on_dataDirBrowseButton_clicked();
+    void updateDataDirFreeSpace();
 
 signals:
     void proxyIpValid(QValidatedLineEdit *object, bool fValid);
 
 private:
+    bool handleDataDirChange();
+    void performRestart();
+    quint64 calculateDirSize(const QString& path);
+
     Ui::OptionsDialog *ui;
     OptionsModel *model;
     MonitoredDataMapper *mapper;
     bool fRestartWarningDisplayed_Proxy;
     bool fRestartWarningDisplayed_Lang;
     bool fProxyIpValid;
+
+    // Data directory widgets (built programmatically)
+    QLineEdit *dataDirPath;
+    QLabel *dataDirFreeSpaceLabel;
+    QString m_currentDataDir;
+    QString m_pendingDataDir;
 };
 
 #endif // OPTIONSDIALOG_H

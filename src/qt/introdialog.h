@@ -25,6 +25,13 @@ public:
      */
     static bool pickDataDirectory();
 
+    /**
+     * Migrate data directory contents from oldPath to newPath.
+     * Returns true on success, false on failure.
+     * Shows a progress dialog during the copy.
+     */
+    static bool migrateDataDirectory(const QString& oldPath, const QString& newPath);
+
 private slots:
     void on_browseButton_clicked();
     void on_defaultRadio_toggled(bool checked);

@@ -7,12 +7,21 @@
 #include "optionsmodel.h"
 #include "dialog_move_handler.h"
 
+#include "init.h"
+#include "util.h"
+
+#include <boost/filesystem.hpp>
+
 #include <QDir>
+#include <QFileDialog>
+#include <QGroupBox>
 #include <QIntValidator>
 #include <QLocale>
 #include <QMessageBox>
+#include <QProcess>
 #include <QRegExp>
 #include <QRegExpValidator>
+#include <QSettings>
 
 OptionsDialog::OptionsDialog(QWidget *parent) :
     QDialog(parent),
@@ -21,11 +30,53 @@ OptionsDialog::OptionsDialog(QWidget *parent) :
     mapper(0),
     fRestartWarningDisplayed_Proxy(false),
     fRestartWarningDisplayed_Lang(false),
-    fProxyIpValid(true)
+    fProxyIpValid(true),
+    dataDirPath(0),
+    dataDirFreeSpaceLabel(0)
 {
     ui->setupUi(this);
     setWindowFlags(Qt::CustomizeWindowHint | Qt::FramelessWindowHint | Qt::Window);
     ui->wCaption->installEventFilter(new DialogMoveHandler(this));
+
+    /* Data Directory section in Main tab */
+    m_currentDataDir = QString::fromStdString(GetDataDir(false).string());
+    m_pendingDataDir.clear();
+
+    QGroupBox *groupDataDir = new QGroupBox(tr("Data Directory"), this);
+    groupDataDir->setStyleSheet(
+        "QGroupBox { border: 1px solid #61280E; margin-top: 8px; padding-top: 16px; color: #f26522; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 3px; }");
+
+    QVBoxLayout *dataDirLayout = new QVBoxLayout(groupDataDir);
+
+    QHBoxLayout *dataDirPathLayout = new QHBoxLayout();
+    dataDirPath = new QLineEdit(m_currentDataDir, groupDataDir);
+    dataDirPath->setReadOnly(true);
+    dataDirPath->setStyleSheet("QLineEdit { background-color: #1c1c1c; border: 1px solid #f26522; color: #f26522; padding: 2px; }");
+
+    QPushButton *dataDirBrowseButton = new QPushButton(tr("Browse..."), groupDataDir);
+    dataDirBrowseButton->setStyleSheet(
+        "QPushButton { background-color: #000; color: #f26522; border: 1px solid #f26522; padding: 2px 12px; min-height: 20px; }"
+        "QPushButton:hover { background-color: #61280E; }"
+        "QPushButton:pressed:flat { color: #000; background-color: #f26522; }");
+
+    dataDirPathLayout->addWidget(dataDirPath);
+    dataDirPathLayout->addWidget(dataDirBrowseButton);
+    dataDirLayout->addLayout(dataDirPathLayout);
+
+    dataDirFreeSpaceLabel = new QLabel(groupDataDir);
+    dataDirFreeSpaceLabel->setStyleSheet("color: #999; font-size: 11px;");
+    dataDirLayout->addWidget(dataDirFreeSpaceLabel);
+
+    // Insert into Main tab layout, before the vertical spacer (last item)
+    QVBoxLayout *mainTabLayout = qobject_cast<QVBoxLayout*>(ui->tabWidget->widget(0)->layout());
+    if (mainTabLayout) {
+        int spacerIndex = mainTabLayout->count() - 1; // vertical spacer is last
+        mainTabLayout->insertWidget(spacerIndex, groupDataDir);
+    }
+
+    connect(dataDirBrowseButton, SIGNAL(clicked()), this, SLOT(on_dataDirBrowseButton_clicked()));
+    updateDataDirFreeSpace();
 
     /* Network elements init */
 #ifndef USE_UPNP
@@ -188,6 +239,8 @@ void OptionsDialog::setSaveButtonState(bool fState)
 void OptionsDialog::on_okButton_clicked()
 {
     mapper->submit();
+    if (handleDataDirChange())
+        return; // restart flow handles closing
     accept();
 }
 
@@ -199,6 +252,7 @@ void OptionsDialog::on_cancelButton_clicked()
 void OptionsDialog::on_applyButton_clicked()
 {
     mapper->submit();
+    handleDataDirChange();
     disableApplyButton();
 }
 
@@ -302,4 +356,151 @@ bool OptionsDialog::eventFilter(QObject *object, QEvent *event)
         }
     }
     return QDialog::eventFilter(object, event);
+}
+
+void OptionsDialog::on_dataDirBrowseButton_clicked()
+{
+    QString dir = QFileDialog::getExistingDirectory(
+        this, tr("Choose data directory"), m_currentDataDir);
+    if (!dir.isEmpty() && dir != m_currentDataDir)
+    {
+        m_pendingDataDir = dir;
+        dataDirPath->setText(dir);
+        updateDataDirFreeSpace();
+        enableApplyButton();
+    }
+}
+
+void OptionsDialog::updateDataDirFreeSpace()
+{
+    namespace fs = boost::filesystem;
+    QString path = dataDirPath->text();
+    fs::path fsPath(path.toStdString());
+    try {
+        while (!fsPath.empty() && !fs::exists(fsPath))
+            fsPath = fsPath.parent_path();
+        if (!fsPath.empty()) {
+            fs::space_info si = fs::space(fsPath);
+            double freeGB = (double)si.available / (1024.0 * 1024.0 * 1024.0);
+            dataDirFreeSpaceLabel->setText(
+                tr("Free space: %1 GB").arg(QString::number(freeGB, 'f', 2)));
+        } else {
+            dataDirFreeSpaceLabel->setText(tr("Cannot determine free space"));
+        }
+    } catch (const fs::filesystem_error &) {
+        dataDirFreeSpaceLabel->setText(tr("Cannot determine free space"));
+    }
+}
+
+quint64 OptionsDialog::calculateDirSize(const QString& path)
+{
+    namespace fs = boost::filesystem;
+    quint64 totalSize = 0;
+    try {
+        for (fs::recursive_directory_iterator it(path.toStdString()), end; it != end; ++it) {
+            if (fs::is_regular_file(*it))
+                totalSize += fs::file_size(*it);
+        }
+    } catch (...) {}
+    return totalSize;
+}
+
+bool OptionsDialog::handleDataDirChange()
+{
+    if (m_pendingDataDir.isEmpty() || m_pendingDataDir == m_currentDataDir)
+        return false;
+
+    namespace fs = boost::filesystem;
+    fs::path destPath(m_pendingDataDir.toStdString());
+
+    // Check destination is writable
+    try {
+        fs::create_directories(destPath);
+    } catch (const fs::filesystem_error& e) {
+        QMessageBox::critical(this, tr("Error"),
+            tr("Cannot create directory: %1").arg(QString::fromStdString(e.what())));
+        m_pendingDataDir.clear();
+        dataDirPath->setText(m_currentDataDir);
+        updateDataDirFreeSpace();
+        return false;
+    }
+
+    // Check free space vs current data dir size
+    quint64 dataDirSize = calculateDirSize(m_currentDataDir);
+    try {
+        fs::space_info si = fs::space(destPath);
+        quint64 required = dataDirSize + (dataDirSize / 10); // 10% headroom
+        if (si.available < required) {
+            QMessageBox::critical(this, tr("Insufficient Space"),
+                tr("The destination has %1 MB free but the data directory requires approximately %2 MB.")
+                    .arg(si.available / (1024*1024))
+                    .arg(required / (1024*1024)));
+            m_pendingDataDir.clear();
+            dataDirPath->setText(m_currentDataDir);
+            updateDataDirFreeSpace();
+            return false;
+        }
+    } catch (const fs::filesystem_error&) {
+        // If we can't check space, proceed anyway
+    }
+
+    // Save migration state to QSettings
+    QSettings settings;
+    settings.setValue("strDataDirPrevious", m_currentDataDir);
+    settings.setValue("strDataDir", m_pendingDataDir);
+    settings.setValue("fPendingDataDirMigration", true);
+
+    // Ask about restart
+    QMessageBox msgBox(this);
+    msgBox.setWindowFlags(Qt::FramelessWindowHint);
+    msgBox.setWindowTitle(tr("Data Directory Changed"));
+    msgBox.setText(tr("The data directory will be moved from:\n%1\n\nTo:\n%2\n\n"
+                      "This will happen when the wallet restarts.")
+                   .arg(m_currentDataDir).arg(m_pendingDataDir));
+    msgBox.setIcon(QMessageBox::Information);
+    msgBox.setIconPixmap(QPixmap(":/msgbox/information"));
+    msgBox.setStyleSheet("QMessageBox { border: 2px solid #f26522; background-color: #000; color: #f26522; }");
+
+    QPushButton *restartBtn = msgBox.addButton(tr("Restart Now"), QMessageBox::AcceptRole);
+    QPushButton *laterBtn = msgBox.addButton(tr("Later"), QMessageBox::RejectRole);
+
+    QString btnStyle =
+        "QPushButton { background-color: #000; color: #f26522; border: 1px solid #f26522; "
+        "min-width: 120px; max-width: 120px; max-height: 20px; min-height: 20px; }"
+        "QPushButton:hover { background-color: #61280E; }"
+        "QPushButton:pressed:flat { color: #000; background-color: #f26522; }";
+    restartBtn->setStyleSheet(btnStyle);
+    laterBtn->setStyleSheet(btnStyle);
+
+    msgBox.exec();
+
+    if (msgBox.clickedButton() == restartBtn) {
+        performRestart();
+        return true;
+    }
+    return false;
+}
+
+void OptionsDialog::performRestart()
+{
+    // Launch a new instance of ourselves
+    QString exePath = QApplication::applicationFilePath();
+    QStringList args = QApplication::arguments();
+    args.removeFirst(); // remove argv[0]
+
+    // Remove any existing -datadir argument so the new instance
+    // reads strDataDir from QSettings and performs migration
+    QMutableStringListIterator it(args);
+    while (it.hasNext()) {
+        QString arg = it.next();
+        if (arg.startsWith("-datadir") || arg.startsWith("/datadir"))
+            it.remove();
+    }
+
+    // Start new process detached so it survives our shutdown
+    QProcess::startDetached(exePath, args);
+
+    // Close dialog and trigger wallet shutdown
+    accept();
+    StartShutdown();
 }
