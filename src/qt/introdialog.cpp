@@ -306,7 +306,7 @@ static void copyDirectoryRecursive(const boost::filesystem::path& src,
         if (fs::is_directory(it->path())) {
             copyDirectoryRecursive(it->path(), dstChild);
         } else {
-            fs::copy_file(it->path(), dstChild, fs::copy_option::overwrite_if_exists);
+            fs::copy_file(it->path(), dstChild, fs::copy_options::overwrite_existing);
         }
     }
 }
@@ -372,7 +372,7 @@ bool IntroDialog::migrateDataDirectory(const QString& oldPath, const QString& ne
         try {
             // Copy to temp name first, then rename for atomicity
             fs::path walletTmp = dstDir / "wallet.dat.migrating";
-            fs::copy_file(walletSrc, walletTmp, fs::copy_option::overwrite_if_exists);
+            fs::copy_file(walletSrc, walletTmp, fs::copy_options::overwrite_existing);
 
             // Verify copy by checking file size
             if (fs::file_size(walletTmp) != fs::file_size(walletSrc)) {
@@ -413,7 +413,7 @@ bool IntroDialog::migrateDataDirectory(const QString& oldPath, const QString& ne
             if (fs::is_directory(it->path())) {
                 copyDirectoryRecursive(it->path(), dst);
             } else {
-                fs::copy_file(it->path(), dst, fs::copy_option::overwrite_if_exists);
+                fs::copy_file(it->path(), dst, fs::copy_options::overwrite_existing);
             }
             filesCopied++;
         }
