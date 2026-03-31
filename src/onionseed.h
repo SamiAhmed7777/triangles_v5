@@ -9,11 +9,11 @@ static const char *strMainNetOnionSeed[][1] = {
     {"gxvrhv3qitnc6kobrhsrse46bmcfitnybapor3or3oczzuxn6hfzxyid.onion"},   // DNS2
     {"futmtrvh6j34t7s6yjdxfia6iwuyfzwh4k5eqfof5kfhoqk3xmi3qoqd.onion"},   // Original seed
     {"i6tk7soznftvoibtskwlezviskiererhjndpsmrff4kaxw7jnd5izfqd.onion"},     // DNS3
-    // Docker seed nodes
-    {"sgn3pus7ssrwbhidvsu5dav3titilzz7mplclvslfuisduy3v7boqiid.onion"},     // seed-1
-    {"hjveej4qjjm2npaxshse7qnrgbqsdyu67io6erdw5ihdil377552xsqd.onion"},     // seed-2
-    {"krqbt7oyizmjp72oo6oiu6rcf7trxz5rpynjfx6whgavtpf4tkjaajyd.onion"},     // seed-3
-    {"pjhodbrj3swqyj33ezkhyr4mz4f5x4xcueim4mwlybjlragmzruwheid.onion"},     // seed-4
+    // Docker seed nodes (contabo-de)
+    {"uddaxjbo3lh2zskg7w6gwln4ty5cel7q4c5jbx7fdtv6zf2j47gdlyad.onion"},     // seed-1
+    {"el5sirhhleecuctpeeprelzubpqmoqivvra3rzlwbjttinxa4fq3wnid.onion"},     // seed-2
+    {"sj5dhybnlp3v4y5niyc5unrnd6s43lyx5ibup7rolyosjbi2u2hsbvyd.onion"},     // seed-3
+    {"i3kr5meha7se4ns3wss3h7v46m6uksfzv4wrohdqxpj6n35wyo2bvlid.onion"},     // seed-4
     {NULL}
 };
 
