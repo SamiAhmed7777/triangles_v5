@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include "net.h"
+#include "addrman.h"
 #include "trianglesrpc.h"
 #include "alert.h"
 #include "wallet.h"
@@ -198,4 +199,29 @@ Value sendalert(const Array& params, bool fHelp)
     if (alert.nCancel > 0)
         result.push_back(Pair("nCancel", alert.nCancel));
     return result;
+}
+
+Value getseedlist(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error(
+            "getseedlist\n"
+            "Returns known .onion peer addresses from the address manager.\n"
+            "Used by the seed collector to build the dynamic seed list.");
+
+    vector<CAddress> vAddr = addrman.GetAddr();
+    Array ret;
+
+    for (const CAddress& addr : vAddr) {
+        if (!addr.IsTor())
+            continue;
+
+        Object obj;
+        obj.push_back(Pair("address", addr.ToStringIP()));
+        obj.push_back(Pair("port", (int)addr.GetPort()));
+        obj.push_back(Pair("lastseen", (boost::int64_t)addr.nTime));
+        ret.push_back(obj);
+    }
+
+    return ret;
 }

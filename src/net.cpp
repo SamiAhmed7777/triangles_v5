@@ -13,6 +13,9 @@
 #include "ui_interface.h"
 #include "onionseed.h"
 
+#include <boost/asio.hpp>
+#include <sstream>
+
 #ifdef WIN32
 #include <string.h>
 #endif
@@ -41,8 +44,8 @@ void ThreadOpenAddedConnections2(void* parg);
 #ifdef USE_UPNP
 void ThreadMapPort2(void* parg);
 #endif
-void ThreadDNSAddressSeed(void* parg);
-void ThreadDNSAddressSeed2(void* parg);
+void ThreadHTTPSeedFetch(void* parg);
+void ThreadHTTPSeedFetch2(void* parg);
 bool OpenNetworkConnection(const CAddress& addrConnect, CSemaphoreGrant *grantOutbound = NULL, const char *strDest = NULL, bool fOneShot = false);
 
 
@@ -1386,9 +1389,9 @@ void ThreadOnionSeed(void* parg)
 
 
 
+// Hardcoded seeds removed - peer discovery is now fully dynamic via HTTP seed list.
+// See: seeds.cryptographic-triangles.org
 unsigned int pnSeed[] = {
-    0xCE58E9C2, // DNS2-OpenClaw: 194.233.88.206
-    0x13A7D04A, // DNS3-Sami:     74.208.167.19
 };
 
 void DumpAddresses()
@@ -1430,56 +1433,158 @@ void ThreadDumpAddress(void* parg)
     printf("ThreadDumpAddress exited\n");
 }
 
-void ThreadDNSAddressSeed2(void* parg)
+void ThreadHTTPSeedFetch2(void* parg)
 {
-    static const char* strDNSSeed[] = {
-        "seed1.cryptographic-triangles.org",
-        "seed2.cryptographic-triangles.org",
-        "seed3.cryptographic-triangles.org",
-        "backup-seed.cryptographic-triangles.org",
-    };
+    static const char* DEFAULT_SEED_URL_HOST = "seeds.cryptographic-triangles.org";
+    static const char* DEFAULT_SEED_URL_PATH = "/seeds.txt";
+    static const int HTTP_PORT = 80;
 
-    printf("Loading addresses from DNS seeds...\n");
-    int found = 0;
+    std::string seedHost = GetArg("-seedurl", DEFAULT_SEED_URL_HOST);
+    std::string seedPath = DEFAULT_SEED_URL_PATH;
 
-    for (unsigned int seed_idx = 0; seed_idx < ARRAYLEN(strDNSSeed); seed_idx++)
-    {
-        if (fShutdown)
+    // Allow full URL override: -seedurl=myhost.com/path/seeds.txt
+    size_t slashPos = seedHost.find('/');
+    if (slashPos != std::string::npos) {
+        seedPath = seedHost.substr(slashPos);
+        seedHost = seedHost.substr(0, slashPos);
+    }
+
+    printf("Fetching seed list from http://%s%s ...\n", seedHost.c_str(), seedPath.c_str());
+
+    try {
+        boost::asio::io_context io_context;
+        boost::asio::ip::tcp::resolver resolver(io_context);
+
+        boost::system::error_code resolve_ec;
+        auto endpoints = resolver.resolve(seedHost, std::to_string(HTTP_PORT), resolve_ec);
+        if (resolve_ec) {
+            printf("HTTP seed fetch: cannot resolve %s (%s)\n", seedHost.c_str(), resolve_ec.message().c_str());
             return;
+        }
 
-        vector<CNetAddr> vaddr;
-        if (LookupHost(strDNSSeed[seed_idx], vaddr))
+        boost::asio::ip::tcp::socket socket(io_context);
+        boost::asio::connect(socket, endpoints);
+
+        std::string request =
+            "GET " + seedPath + " HTTP/1.1\r\n"
+            "Host: " + seedHost + "\r\n"
+            "Connection: close\r\n"
+            "User-Agent: Triangles\r\n"
+            "\r\n";
+        boost::asio::write(socket, boost::asio::buffer(request));
+
+        // Read response
+        boost::asio::streambuf response_buf;
+        boost::asio::read_until(socket, response_buf, "\r\n\r\n");
+
+        std::istream response_stream(&response_buf);
+        std::string http_version;
+        unsigned int status_code = 0;
+        response_stream >> http_version >> status_code;
+        std::string status_message;
+        std::getline(response_stream, status_message);
+
+        if (status_code != 200) {
+            printf("HTTP seed fetch: got status %u from %s\n", status_code, seedHost.c_str());
+            return;
+        }
+
+        // Skip remaining headers
+        std::string header_line;
+        while (std::getline(response_stream, header_line) && header_line != "\r") {}
+
+        // Read body (remainder in buffer + rest from socket)
+        std::string body;
+
+        // First, grab anything already buffered past the headers
+        if (response_buf.size() > 0) {
+            std::istream body_stream(&response_buf);
+            std::ostringstream oss;
+            oss << body_stream.rdbuf();
+            body = oss.str();
+        }
+
+        // Read rest until EOF
+        boost::system::error_code ec;
+        while (boost::asio::read(socket, response_buf, boost::asio::transfer_at_least(1), ec)) {
+            std::istream s(&response_buf);
+            std::ostringstream oss;
+            oss << s.rdbuf();
+            body += oss.str();
+        }
+
+        // Parse one address per line: "address:port" or just "address"
+        int found = 0;
+        std::istringstream lines(body);
+        std::string line;
+        while (std::getline(lines, line))
         {
-            for (CNetAddr& ip : vaddr)
-            {
-                CAddress addr(CService(ip, GetDefaultPort()));
+            if (fShutdown)
+                return;
+
+            // Trim whitespace and carriage returns
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+                line.pop_back();
+            while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
+                line.erase(line.begin());
+
+            if (line.empty() || line[0] == '#')
+                continue;
+
+            // Parse address:port
+            std::string addrStr = line;
+            int port = GetDefaultPort();
+
+            // For .onion addresses, the last colon before port is after ".onion"
+            size_t onionPos = addrStr.find(".onion:");
+            if (onionPos != std::string::npos) {
+                port = atoi(addrStr.substr(onionPos + 7).c_str());
+                addrStr = addrStr.substr(0, onionPos + 6); // keep ".onion"
+            } else if (addrStr.find(".onion") == std::string::npos) {
+                // Clearnet address - find last colon for port
+                size_t colonPos = addrStr.rfind(':');
+                if (colonPos != std::string::npos) {
+                    port = atoi(addrStr.substr(colonPos + 1).c_str());
+                    addrStr = addrStr.substr(0, colonPos);
+                }
+            }
+
+            if (port <= 0 || port > 65535)
+                port = GetDefaultPort();
+
+            CNetAddr parsed;
+            if (parsed.SetSpecial(addrStr) || LookupHost(addrStr.c_str(), parsed, false)) {
+                CAddress addr(CService(parsed, port));
                 addr.nTime = GetTime() - 3*24*60*60; // 3 days ago
-                addrman.Add(addr, CNetAddr(strDNSSeed[seed_idx], true));
+                addrman.Add(addr, CNetAddr("http-seed", true));
                 found++;
             }
         }
-    }
 
-    printf("%d addresses found from DNS seeds\n", found);
+        printf("%d addresses found from HTTP seed list (%s)\n", found, seedHost.c_str());
+
+    } catch (std::exception& e) {
+        printf("HTTP seed fetch failed: %s\n", e.what());
+    }
 }
 
-void ThreadDNSAddressSeed(void* parg)
+void ThreadHTTPSeedFetch(void* parg)
 {
-    RenameThread("Triangles-dnsseed");
+    RenameThread("Triangles-httpseed");
     try
     {
-        vnThreadsRunning[THREAD_DNSSEED]++;
-        ThreadDNSAddressSeed2(parg);
-        vnThreadsRunning[THREAD_DNSSEED]--;
+        vnThreadsRunning[THREAD_HTTPSEED]++;
+        ThreadHTTPSeedFetch2(parg);
+        vnThreadsRunning[THREAD_HTTPSEED]--;
     }
     catch (std::exception& e) {
-        vnThreadsRunning[THREAD_DNSSEED]--;
-        PrintException(&e, "ThreadDNSAddressSeed()");
+        vnThreadsRunning[THREAD_HTTPSEED]--;
+        PrintException(&e, "ThreadHTTPSeedFetch()");
     } catch (...) {
-        vnThreadsRunning[THREAD_DNSSEED]--;
-        PrintException(NULL, "ThreadDNSAddressSeed()");
+        vnThreadsRunning[THREAD_HTTPSEED]--;
+        PrintException(NULL, "ThreadHTTPSeedFetch()");
     }
-    printf("ThreadDNSAddressSeed exited\n");
+    printf("ThreadHTTPSeedFetch exited\n");
 }
 
 void ThreadOpenConnections(void* parg)
@@ -1586,30 +1691,8 @@ void ThreadOpenConnections2(void* parg)
         if (fShutdown)
             return;
 
-        // Add hardcoded seed nodes when we have no connections.
-        // Original check (addrman.size()==0) was too conservative - stale entries
-        // in peers.dat would prevent fallback to working hardcoded IPs forever.
-        {
-            LOCK(cs_vNodes);
-            bool fNoOutbound = true;
-            for (CNode* pnode : vNodes) {
-                if (!pnode->fInbound) { fNoOutbound = false; break; }
-            }
-            if (fNoOutbound && (GetTime() - nStart > 10) && !fTestNet)
-            {
-                std::vector<CAddress> vAdd;
-                for (unsigned int i = 0; i < ARRAYLEN(pnSeed); i++)
-                {
-                    struct in_addr ip;
-                    memcpy(&ip, &pnSeed[i], sizeof(ip));
-                    CAddress addr(CService(ip, GetDefaultPort()));
-                    addr.nTime = GetTime() - GetRand(60*60); // seen recently
-                    vAdd.push_back(addr);
-                }
-                addrman.Add(vAdd, CNetAddr("127.0.0.1"));
-                printf("No outbound connections after 10s, added %d hardcoded seeds\n", (int)vAdd.size());
-            }
-        }
+        // Hardcoded seed fallback removed - peer discovery is now fully dynamic
+        // via HTTP seed list from seeds.cryptographic-triangles.org
 
         //
         // Choose an address to connect to based on most recently seen
@@ -2112,9 +2195,11 @@ void StartNode(void* parg)
     if (fUseUPnP)
         MapPort();
 
-    // DNS seed lookup
-    if (!NewThread(ThreadDNSAddressSeed, NULL))
-        printf("Error: NewThread(ThreadDNSAddressSeed) failed\n");
+    // HTTP seed list fetch (replaces DNS seeds)
+    if (GetBoolArg("-noseedurl", false))
+        printf("HTTP seed fetch disabled\n");
+    else if (!NewThread(ThreadHTTPSeedFetch, NULL))
+        printf("Error: NewThread(ThreadHTTPSeedFetch) failed\n");
 
     // Send and receive from sockets, accept connections
     if (!NewThread(ThreadSocketHandler, NULL))
@@ -2172,7 +2257,7 @@ bool StopNode()
 #ifdef USE_UPNP
     if (vnThreadsRunning[THREAD_UPNP] > 0) printf("ThreadMapPort still running\n");
 #endif
-    if (vnThreadsRunning[THREAD_DNSSEED] > 0) printf("ThreadDNSAddressSeed still running\n");
+    if (vnThreadsRunning[THREAD_HTTPSEED] > 0) printf("ThreadHTTPSeedFetch still running\n");
     if (vnThreadsRunning[THREAD_ADDEDCONNECTIONS] > 0) printf("ThreadOpenAddedConnections still running\n");
     if (vnThreadsRunning[THREAD_DUMPADDRESS] > 0) printf("ThreadDumpAddresses still running\n");
     if (vnThreadsRunning[THREAD_STAKE_MINER] > 0) printf("ThreadStakeMiner still running\n");
