@@ -378,6 +378,8 @@ std::string HelpMessage()
         "  -synctime              " + _("Sync time with other nodes. Disable if time on your system is precise e.g. syncing with NTP (default: 1)") + "\n" +
         "  -cppolicy              " + _("Sync checkpoints policy (default: strict)") + "\n" +
         "  -onionseed             " + _("Find peers using .onion seeds (default: 1 unless -connect)") + "\n" +
+        "  -seedurl=<host>        " + _("HTTP seed list host (default: seeds.cryptographic-triangles.org)") + "\n" +
+        "  -noseedurl             " + _("Disable HTTP seed list fetch on startup") + "\n" +
         "  -banscore=<n>          " + _("Threshold for disconnecting misbehaving peers (default: 100)") + "\n" +
         "  -bantime=<n>           " + _("Number of seconds to keep misbehaving peers from reconnecting (default: 86400)") + "\n" +
         "  -maxreceivebuffer=<n>  " + _("Maximum per-connection receive buffer, <n>*1000 bytes (default: 5000)") + "\n" +
@@ -1302,11 +1304,6 @@ bool AppInit2()
         }
     }
 #endif
-
-    // ********************************************************* Step 11.6: Address index
-    fAddressIndex = GetBoolArg("-addressindex", false);
-    if (fAddressIndex)
-        printf("Address index enabled\n");
 
     // ********************************************************* Step 11.7: SSE notification queue
     if (GetBoolArg("-ssenotify", false))

@@ -253,6 +253,7 @@ static const CRPCCommand vRPCCommands[] =
     { "getblockchaininfo",      &getblockchaininfo,      true,   false },
     { "getwalletinfo",          &getwalletinfo,          true,   false },
     { "getnetworkinfo",         &getnetworkinfo,         true,   false },
+    { "getseedlist",            &getseedlist,            true,   false },
     { "gettxoutsetinfo",        &gettxoutsetinfo,        true,   false },
     { "estimatefee",            &estimatefee,            true,   false },
     { "getaddressbalance",      &getaddressbalance,      true,   false },

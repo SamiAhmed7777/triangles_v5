@@ -24,13 +24,9 @@ namespace NetBootstrap {
         NULL
     };
 
-    // Legacy IP seed nodes for old wallet compatibility
-    // These should be actual IP addresses of stable nodes
+    // Hardcoded seeds removed - peer discovery is now fully dynamic via HTTP seed list.
+    // See: seeds.cryptographic-triangles.org
     static const unsigned int pnSeed[] __attribute__((unused)) = {
-        // Format: IP addresses in network byte order (little-endian)
-        // For IP a.b.c.d: (d << 24) | (c << 16) | (b << 8) | a
-        0xCE58E9C2, // DNS2-OpenClaw: 194.233.88.206
-        0x13A7D04A, // DNS3-Sami:     74.208.167.19
     };
 
     // Network protocol compatibility settings
