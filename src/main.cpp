@@ -110,10 +110,53 @@ struct CHeaderSyncNode
 
 static std::map<uint256, CHeaderSyncNode> mapHeaderSync;
 static uint256 hashBestHeaderSync = 0;
+static CCriticalSection cs_PostIbdWork;
+static bool fPostIbdWorkStarted = false;
 
 static const unsigned int MAX_HEADER_SYNC_CACHE = 50000;
 static const unsigned int HEADER_DOWNLOAD_WINDOW = 128;
 static const int64_t HEADER_REQUEST_TIMEOUT_MICROS = 30 * 1000000;
+
+static void ThreadPostIbdWork(void* parg)
+{
+    RenameThread("Triangles-postibd");
+
+    try
+    {
+        if (!fShutdown && pwalletMain && GetBoolArg("-postibdrescan", true))
+        {
+            printf("Starting post-IBD wallet rescan from genesis in background...\n");
+            uiInterface.InitMessage(_("Rescanning wallet in background..."));
+            int nFound = 0;
+            bool fUsedIndex = false;
+            if (fAddressIndex)
+            {
+                fUsedIndex = pwalletMain->ScanForWalletTransactionsFromIndex(pindexGenesisBlock, true, &nFound);
+                if (!fUsedIndex)
+                    printf("Indexed wallet rescan failed, falling back to full rescan.\n");
+            }
+            if (!fUsedIndex)
+                nFound = pwalletMain->ScanForWalletTransactions(pindexGenesisBlock, true);
+            printf("Post-IBD wallet rescan complete: %d transactions found (indexed=%d)\n", nFound, fUsedIndex);
+        }
+
+        if (!fShutdown && fSecMsgEnabled)
+        {
+            printf("Starting post-IBD secure message chain scan in background...\n");
+            uiInterface.InitMessage(_("Scanning for secure messages in background..."));
+            SecureMsgScanBlockChain();
+            printf("Post-IBD secure message chain scan complete\n");
+        }
+    }
+    catch (std::exception& e)
+    {
+        PrintExceptionContinue(&e, "ThreadPostIbdWork()");
+    }
+    catch (...)
+    {
+        PrintExceptionContinue(NULL, "ThreadPostIbdWork()");
+    }
+}
 
 static uint256 GetHeaderSyncTrust(unsigned int nBits)
 {
@@ -2043,8 +2086,8 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
             return error("ConnectBlock() : UpdateTxIndex failed");
     }
 
-    // Update address index (skip during IBD - will be rebuilt on next start with -reindex)
-    if (fAddressIndex && !fIsInitialDownload)
+    // Update address index
+    if (fAddressIndex)
     {
         for (unsigned int i = 0; i < vtx.size(); i++)
         {
@@ -2406,23 +2449,23 @@ bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
             const CBlockLocator locator(pindexBest);
             ::SetBestChain(locator);
 
-            // Wallet rescan: SyncWithWallets was skipped during IBD, so scan
-            // the entire chain to pick up all wallet transactions.
-            if (pwalletMain)
+            // Run expensive post-IBD scans in the background so reaching tip
+            // is not blocked by wallet/message index rebuild work.
+            bool fStartPostIbdWork = false;
             {
-                printf("Starting post-IBD wallet rescan from genesis...\n");
-                uiInterface.InitMessage(_("Rescanning wallet..."));
-                int nFound = pwalletMain->ScanForWalletTransactions(pindexGenesisBlock, true);
-                printf("Post-IBD wallet rescan complete: %d transactions found\n", nFound);
+                LOCK(cs_PostIbdWork);
+                if (!fPostIbdWorkStarted)
+                {
+                    fPostIbdWorkStarted = true;
+                    fStartPostIbdWork = true;
+                }
             }
 
-            // Secure messaging: scan chain for public keys needed to decrypt messages
-            if (fSecMsgEnabled)
+            if (fStartPostIbdWork && !NewThread(ThreadPostIbdWork, NULL))
             {
-                printf("Starting post-IBD secure message chain scan...\n");
-                uiInterface.InitMessage(_("Scanning for secure messages..."));
-                SecureMsgScanBlockChain();
-                printf("Post-IBD secure message chain scan complete\n");
+                LOCK(cs_PostIbdWork);
+                fPostIbdWorkStarted = false;
+                printf("Warning: post-IBD background work thread could not be started; scans skipped.\n");
             }
         }
         fWasInitialDownload = fIsInitialDownload;
@@ -2788,9 +2831,6 @@ bool CBlock::AcceptBlock()
                 pnode->PushInventory(CInv(MSG_BLOCK, hash));
     }
 
-    // triangles: check pending sync-checkpoint
-    Checkpoints::AcceptPendingSyncCheckpoint();
-
     return true;
 }
 
@@ -2829,7 +2869,7 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     // triangles: check proof-of-stake
     // Limited duplicity on stake: prevents block flood attack
     // Duplicate stake allowed only when there is orphan child block
-    if (pblock->IsProofOfStake() && setStakeSeen.count(pblock->GetProofOfStake()) && !mapOrphanBlocksByPrev.count(hash) && !Checkpoints::WantedByPendingSyncCheckpoint(hash))
+    if (pblock->IsProofOfStake() && setStakeSeen.count(pblock->GetProofOfStake()) && !mapOrphanBlocksByPrev.count(hash))
         return error("ProcessBlock() : duplicate proof-of-stake (%s, %d) for block %s", pblock->GetProofOfStake().first.ToString().c_str(), pblock->GetProofOfStake().second, hash.ToString().c_str());
 
     // Preliminary checks
@@ -2843,12 +2883,12 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     }
 
     // Anti-spam: reject blocks with insufficient difficulty to prevent memory flooding.
-    // Use sync checkpoint as reference; fall back to chain tip if checkpoint is genesis.
-    CBlockIndex* pcheckpoint = Checkpoints::GetLastSyncCheckpoint();
-    if (!pcheckpoint || pcheckpoint->nHeight == 0)
+    // Use the most recent hardened checkpoint we know about; fall back to the chain tip.
+    CBlockIndex* pcheckpoint = Checkpoints::GetLastCheckpoint(mapBlockIndex);
+    if (!pcheckpoint)
         pcheckpoint = pindexBest;
 
-    if (pcheckpoint && pblock->hashPrevBlock != hashBestChain && !Checkpoints::WantedByPendingSyncCheckpoint(hash))
+    if (pcheckpoint && pblock->hashPrevBlock != hashBestChain)
     {
         int64_t deltaTime = pblock->GetBlockTime() - pcheckpoint->nTime;
         CBigNum bnNewBlock;
@@ -2877,10 +2917,6 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         }
     }
 
-    // triangles: ask for pending sync-checkpoint if any
-    if (!IsInitialBlockDownload())
-        Checkpoints::AskForPendingSyncCheckpoint(pfrom);
-
     // If don't already have its previous block, shunt it off to holding area until we get it
     if (!mapBlockIndex.count(pblock->hashPrevBlock))
     {
@@ -2891,7 +2927,7 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         {
             // Limited duplicity on stake: prevents block flood attack
             // Duplicate stake allowed only when there is orphan child block
-            if (setStakeSeenOrphan.count(pblock2->GetProofOfStake()) && !mapOrphanBlocksByPrev.count(hash) && !Checkpoints::WantedByPendingSyncCheckpoint(hash))
+            if (setStakeSeenOrphan.count(pblock2->GetProofOfStake()) && !mapOrphanBlocksByPrev.count(hash))
                 return error("ProcessBlock() : duplicate proof-of-stake (%s, %d) for orphan block %s", pblock2->GetProofOfStake().first.ToString().c_str(), pblock2->GetProofOfStake().second, hash.ToString().c_str());
             else
                 setStakeSeenOrphan.insert(pblock2->GetProofOfStake());
@@ -2978,10 +3014,6 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
             printf("IBD-DIAG: queued %u more blocks from header planner after accepting %s\n",
                 nQueued, hash.ToString().substr(0,20).c_str());
     }
-
-    // triangles: if responsible for sync-checkpoint send it
-    if (pfrom && !CSyncCheckpoint::strMasterPrivKey.empty())
-        Checkpoints::SendSyncCheckpoint(Checkpoints::AutoSelectSyncCheckpoint());
 
     return true;
 }
@@ -3859,9 +3891,6 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
         cPeerBlockCounts.input(pfrom->nStartingHeight);
 
-        // triangles: ask for pending sync-checkpoint if any
-        if (!IsInitialBlockDownload())
-            Checkpoints::AskForPendingSyncCheckpoint(pfrom);
     }
 
 
