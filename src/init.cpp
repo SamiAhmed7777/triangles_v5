@@ -420,6 +420,7 @@ std::string HelpMessage()
         "  -upgradewallet         " + _("Upgrade wallet to latest format") + "\n" +
         "  -keypool=<n>           " + _("Set key pool size to <n> (default: 100)") + "\n" +
         "  -rescan                " + _("Rescan the block chain for missing wallet transactions") + "\n" +
+        "  -postibdrescan         " + _("Run the wallet rescan after initial sync in a background thread (default: 1)") + "\n" +
         "  -salvagewallet         " + _("Attempt to recover private keys from a corrupt wallet.dat") + "\n" +
         "  -checkblocks=<n>       " + _("How many blocks to check at startup (default: 2500, 0 = all)") + "\n" +
         "  -checklevel=<n>        " + _("How thorough the block verification is (0-6, default: 1)") + "\n" +
@@ -628,6 +629,10 @@ bool AppInit2()
 
     fConfChange = GetBoolArg("-confchange", false);
     fEnforceCanonical = GetBoolArg("-enforcecanonical", true);
+
+    fAddressIndex = GetBoolArg("-addressindex", false);
+    if (fAddressIndex)
+        printf("Address index enabled\n");
 
     if (mapArgs.count("-mininput"))
     {
@@ -1045,7 +1050,7 @@ bool AppInit2()
         printf("Rescanning last %i blocks (from block %i)...\n", pindexBest->nHeight - pindexRescan->nHeight, pindexRescan->nHeight);
         nStart = GetTimeMillis();
         bool fScannedWithIndex = false;
-        if (GetBoolArg("-addressindex", false) && !GetBoolArg("-rescan"))
+        if (fAddressIndex && !GetBoolArg("-rescan"))
         {
             CTxDB txdb("r");
             int nAddressIndexStartHeight = 0;

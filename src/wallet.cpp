@@ -959,39 +959,47 @@ int CWallet::ScanForWalletTransactions(CBlockIndex* pindexStart, bool fUpdate)
     int ret = 0;
 
     CBlockIndex* pindex = pindexStart;
+    int nScanned = 0;
+    int nTotal = nBestHeight - (pindexStart ? pindexStart->nHeight : 0);
+    if (nTotal < 1) nTotal = 1;
+    int64_t nLastProgressTime = GetTimeMillis();
+
+    // Cache wallet birthday outside the loop (only written during key import)
+    int64_t nBirthTime = nTimeFirstKey;
+
+    while (pindex)
     {
-        LOCK(cs_wallet);
-        int nScanned = 0;
-        int nTotal = nBestHeight - (pindexStart ? pindexStart->nHeight : 0);
-        if (nTotal < 1) nTotal = 1;
-        while (pindex)
+        if (fShutdown)
+            break;
+
+        ++nScanned;
+        // Report progress every 500ms to keep UI responsive
+        int64_t nNow = GetTimeMillis();
+        if (nNow - nLastProgressTime > 500)
         {
-            if (fShutdown)
-                break;
-
-            // Report progress every 10000 blocks to keep UI responsive
-            if (++nScanned % 10000 == 0)
-            {
-                int nPercent = (nScanned * 100) / nTotal;
-                uiInterface.InitMessage(strprintf(_("Rescanning... %d%%"), nPercent));
-            }
-
-            // no need to read and scan block, if block was created before
-            // our wallet birthday (as adjusted for block time variability)
-            if (nTimeFirstKey && (pindex->nTime < (nTimeFirstKey - 7200))) {
-                pindex = pindex->pnext;
-                continue;
-            }
-
-            CBlock block;
-            block.ReadFromDisk(pindex, true);
-            for (CTransaction& tx : block.vtx)
-            {
-                if (AddToWalletIfInvolvingMe(tx, &block, fUpdate))
-                    ret++;
-            }
-            pindex = pindex->pnext;
+            nLastProgressTime = nNow;
+            int nPercent = (nScanned * 100) / nTotal;
+            uiInterface.InitMessage(strprintf(_("Rescanning... %d%%"), nPercent));
         }
+
+        // no need to read and scan block, if block was created before
+        // our wallet birthday (as adjusted for block time variability)
+        if (nBirthTime && (pindex->nTime < (nBirthTime - 7200))) {
+            pindex = pindex->pnext;
+            continue;
+        }
+
+        // Read block from disk WITHOUT holding wallet lock
+        CBlock block;
+        block.ReadFromDisk(pindex, true);
+
+        // AddToWalletIfInvolvingMe acquires cs_wallet internally
+        for (CTransaction& tx : block.vtx)
+        {
+            if (AddToWalletIfInvolvingMe(tx, &block, fUpdate))
+                ret++;
+        }
+        pindex = pindex->pnext;
     }
     return ret;
 }
