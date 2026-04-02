@@ -1553,7 +1553,15 @@ void ThreadHTTPSeedFetch2(void* parg)
                 port = GetDefaultPort();
 
             CNetAddr parsed;
-            if (parsed.SetSpecial(addrStr) || LookupHost(addrStr.c_str(), parsed, false)) {
+            bool resolved = parsed.SetSpecial(addrStr);
+            if (!resolved) {
+                std::vector<CNetAddr> vIP;
+                if (LookupHost(addrStr.c_str(), vIP, 1, false) && !vIP.empty()) {
+                    parsed = vIP[0];
+                    resolved = true;
+                }
+            }
+            if (resolved) {
                 CAddress addr(CService(parsed, port));
                 addr.nTime = GetTime() - 3*24*60*60; // 3 days ago
                 addrman.Add(addr, CNetAddr("http-seed", true));
