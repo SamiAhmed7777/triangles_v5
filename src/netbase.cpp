@@ -6,6 +6,7 @@
 #include "netbase.h"
 #include "util.h"
 #include "sync.h"
+#include <openssl/evp.h>
 
 #ifndef WIN32
 #include <sys/fcntl.h>
@@ -860,15 +861,19 @@ std::string CNetAddr::ToStringIP() const
         unsigned char addr35[35];
         memcpy(addr35, tor_v3_pubkey, 32);
         // Compute checksum: SHA3-256(".onion checksum" || pubkey || version)[:2]
-        // For now use a simplified checksum from the stored data
         unsigned char checksumInput[15 + 32 + 1];
         memcpy(checksumInput, ".onion checksum", 15);
         memcpy(checksumInput + 15, tor_v3_pubkey, 32);
         checksumInput[47] = 0x03; // version
-        // SHA-256 as fallback (SHA3-256 via tor_crypto_compat.h for full impl)
-        uint256 hash = Hash(checksumInput, checksumInput + 48);
-        addr35[32] = ((unsigned char*)&hash)[0];
-        addr35[33] = ((unsigned char*)&hash)[1];
+        unsigned char sha3hash[32];
+        unsigned int sha3len = 0;
+        EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+        EVP_DigestInit_ex(mdctx, EVP_sha3_256(), NULL);
+        EVP_DigestUpdate(mdctx, checksumInput, 48);
+        EVP_DigestFinal_ex(mdctx, sha3hash, &sha3len);
+        EVP_MD_CTX_free(mdctx);
+        addr35[32] = sha3hash[0];
+        addr35[33] = sha3hash[1];
         addr35[34] = 0x03; // version
         return EncodeBase32(addr35, 35) + ".onion";
     }
