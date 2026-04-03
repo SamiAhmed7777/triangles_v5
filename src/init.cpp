@@ -834,8 +834,22 @@ bool AppInit2()
     StartupPerfLog("network_init", GetTimeMillis() - nStart, strprintf("listen=%d seednodes=%" PRIszu, !fNoListen, mapMultiArgs["-seednode"].size()));
 
     // ********************************************************* Step 6b: bootstrap download (daemon)
+    // Automatic: if data dir has no blockchain, bootstrap without asking.
+    // Can also be forced with -bootstrap flag, or disabled with -nobootstrap.
 #ifndef QT_GUI
-    if (GetBoolArg("-bootstrap", false))
+    {
+        bool wantsBootstrap = GetBoolArg("-bootstrap", false);
+        bool noBootstrap = GetBoolArg("-nobootstrap", false);
+        fs::path dataPath = GetDataDir();
+        bool needsBootstrap = Bootstrap::NeedsBootstrap(dataPath);
+
+        if (needsBootstrap && !noBootstrap) {
+            printf("Bootstrap: no blockchain data found — downloading automatically.\n");
+            printf("Bootstrap: (use -nobootstrap to skip)\n");
+            wantsBootstrap = true;
+        }
+
+    if (wantsBootstrap)
     {
         int64_t nBootstrapStart = GetTimeMillis();
         fs::path dataPath = GetDataDir();
@@ -871,6 +885,7 @@ bool AppInit2()
         StartupPerfLog("bootstrap_download", GetTimeMillis() - nBootstrapStart,
             strprintf("host=%s success=%d", host.c_str(), success));
     }
+    } // end bootstrap scope
 #endif
 
     // ********************************************************* Step 7: load blockchain

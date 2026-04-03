@@ -225,9 +225,22 @@ bool IntroDialog::pickDataDirectory()
         return false;
     }
 
-    // Offer bootstrap download on each startup (unless user checked "don't ask again")
+    // Auto-bootstrap: if no blockchain data exists, download automatically.
+    // If data exists, offer optional re-download (unless user checked "don't ask again").
     fs::path dataDirPath(dataDir.toStdString());
-    if (!settings.value("bootstrapDontAsk", false).toBool())
+    bool needsBootstrap = Bootstrap::NeedsBootstrap(dataDirPath);
+    bool userWantsBootstrap = false;
+
+    if (needsBootstrap)
+    {
+        // No blockchain data — bootstrap automatically, just inform the user
+        QMessageBox::information(0, "Triangles",
+            "No blockchain data found.\n\n"
+            "Downloading the latest blockchain snapshot automatically.\n"
+            "This will only take a few minutes.");
+        userWantsBootstrap = true;
+    }
+    else if (!settings.value("bootstrapDontAsk", false).toBool())
     {
         QMessageBox msgBox;
         msgBox.setWindowTitle("Triangles");
@@ -247,7 +260,10 @@ bool IntroDialog::pickDataDirectory()
         if (dontAskBox->isChecked())
             settings.setValue("bootstrapDontAsk", true);
 
-        if (ret == QMessageBox::Yes)
+        userWantsBootstrap = (ret == QMessageBox::Yes);
+    }
+
+        if (userWantsBootstrap)
         {
             std::string host = Bootstrap::DEFAULT_HOST;
             std::string strError;
