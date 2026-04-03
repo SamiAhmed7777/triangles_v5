@@ -90,10 +90,36 @@ jobs:
           mkdir -p dist
           cp release/triangles-qt.exe dist/
           windeployqt dist/triangles-qt.exe || true
+
+          # Copy ALL runtime DLLs the binary needs
+          # MinGW runtime
           for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do
             cp /mingw64/bin/$dll dist/ 2>/dev/null || true
           done
+          # Boost
+          for dll in /mingw64/bin/libboost_system*.dll /mingw64/bin/libboost_filesystem*.dll \
+                     /mingw64/bin/libboost_thread*.dll /mingw64/bin/libboost_program_options*.dll \
+                     /mingw64/bin/libboost_chrono*.dll; do
+            cp $dll dist/ 2>/dev/null || true
+          done
+          # OpenSSL
+          for dll in /mingw64/bin/libssl*.dll /mingw64/bin/libcrypto*.dll; do
+            cp $dll dist/ 2>/dev/null || true
+          done
+          # BerkeleyDB, libevent, miniupnpc, zlib
+          for dll in /mingw64/bin/libdb*.dll /mingw64/bin/libevent*.dll \
+                     /mingw64/bin/libminiupnpc*.dll /mingw64/bin/zlib1.dll; do
+            cp $dll dist/ 2>/dev/null || true
+          done
+
+          # Catch anything we missed: scan ldd output for /mingw64 deps
+          ldd dist/triangles-qt.exe | grep '/mingw64' | awk '{print $3}' | while read dll; do
+            cp "$dll" dist/ 2>/dev/null || true
+          done
+
           strip --strip-all dist/triangles-qt.exe
+          echo "=== DLLs in dist/ ==="
+          ls -la dist/*.dll 2>/dev/null || true
 
       - name: Download Tor
         shell: powershell
@@ -163,13 +189,34 @@ jobs:
           mkdir -p obj
           make -f makefile.mingw DEPSDIR=/mingw64 all -j$(nproc) 2>&1
           strip --strip-all trianglesd.exe
-          cp trianglesd.exe ../trianglesd.exe
+
+      - name: Package daemon with DLLs
+        run: |
+          mkdir -p daemon-dist/tor
+          cp src/trianglesd.exe daemon-dist/
+
+          # Copy all linked DLLs from MSYS2
+          ldd src/trianglesd.exe | grep '/mingw64' | awk '{print $3}' | while read dll; do
+            cp "$dll" daemon-dist/ 2>/dev/null || true
+          done
+
+      - name: Bundle Tor for daemon
+        shell: powershell
+        run: |
+          $TOR_VERSION = "15.0.8"
+          Invoke-WebRequest -Uri "https://dist.torproject.org/torbrowser/${TOR_VERSION}/tor-expert-bundle-windows-x86_64-${TOR_VERSION}.tar.gz" -OutFile tor-bundle.tar.gz
+          New-Item -ItemType Directory -Path tor-extract -Force
+          tar -xzf tor-bundle.tar.gz -C tor-extract
+          Copy-Item tor-extract/tor/tor.exe daemon-dist/tor/
+          if (Test-Path tor-extract/data) {
+            Copy-Item -Recurse tor-extract/data daemon-dist/tor/data
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-daemon
-          path: trianglesd.exe
+          path: daemon-dist/
 
   build-linux-qt:
     runs-on: ubuntu-22.04
@@ -431,6 +478,33 @@ jobs:
           export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
           macdeployqt Triangles-Qt.app -verbose=1
 
+      - name: Bundle non-Qt dylibs into app
+        run: |
+          FRAMEWORKS="Triangles-Qt.app/Contents/Frameworks"
+          MACOS="Triangles-Qt.app/Contents/MacOS"
+          BINARY="$MACOS/Triangles-Qt"
+
+          # Copy Homebrew dylibs that macdeployqt doesn't handle
+          for lib in boost_system boost_filesystem boost_thread boost_program_options boost_chrono; do
+            DYLIB=$(otool -L "$BINARY" | grep "$lib" | awk '{print $1}')
+            if [ -n "$DYLIB" ] && [ -f "$DYLIB" ]; then
+              cp "$DYLIB" "$FRAMEWORKS/"
+              BASENAME=$(basename "$DYLIB")
+              install_name_tool -change "$DYLIB" "@executable_path/../Frameworks/$BASENAME" "$BINARY"
+            fi
+          done
+          for lib in libssl libcrypto libevent libdb_cxx libminiupnpc libsodium; do
+            DYLIB=$(otool -L "$BINARY" | grep "$lib" | awk '{print $1}')
+            if [ -n "$DYLIB" ] && [ -f "$DYLIB" ]; then
+              cp "$DYLIB" "$FRAMEWORKS/"
+              BASENAME=$(basename "$DYLIB")
+              install_name_tool -change "$DYLIB" "@executable_path/../Frameworks/$BASENAME" "$BINARY"
+            fi
+          done
+
+          echo "=== Final dylib dependencies ==="
+          otool -L "$BINARY" | head -30
+
       - name: Bundle Tor into app
         run: |
           TOR_VERSION="15.0.8"
@@ -477,8 +551,8 @@ jobs:
           mkdir -p release
           # Windows Qt installer (setup.exe — includes Tor, Start Menu shortcuts, uninstaller)
           cp artifacts/windows-qt-setup/*.exe release/
-          # Windows daemon (standalone exe for server use)
-          cp artifacts/windows-daemon/trianglesd.exe "release/Cryptographic-Triangles-${VERSION}-win-x64-daemon.exe"
+          # Windows daemon (zip with DLLs + Tor)
+          cd artifacts/windows-daemon && zip -r "../../release/Cryptographic-Triangles-${VERSION}-win-x64-daemon.zip" . && cd ../..
           # Linux Qt .deb (dpkg -i to install — includes Tor, desktop entry, icon)
           cp artifacts/linux-qt-deb/*.deb release/
           # Linux daemon .deb (dpkg -i to install — includes Tor, systemd service)
