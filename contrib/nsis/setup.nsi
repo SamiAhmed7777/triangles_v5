@@ -1,5 +1,6 @@
 ; Cryptographic Triangles NSIS Installer
 ; Produces a single setup.exe with wallet + Tor bundled
+; Uses per-user install (no UAC elevation) so network drives stay visible
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
@@ -14,9 +15,9 @@
 
 Name "${APPNAME} v${VERSION}"
 OutFile "Cryptographic-Triangles-${VERSION}-win-x64-setup.exe"
-InstallDir "$PROGRAMFILES64\${APPNAME}"
-InstallDirRegKey HKLM "Software\${APPNAME}" "InstallDir"
-RequestExecutionLevel admin
+InstallDir "$LOCALAPPDATA\${APPNAME}"
+InstallDirRegKey HKCU "Software\${APPNAME}" "InstallDir"
+RequestExecutionLevel user
 
 ; UI — icons and bitmaps are relative to THIS .nsi file
 !define MUI_ICON "..\..\src\qt\res\icons\triangles.ico"
@@ -62,19 +63,19 @@ Section "Install"
   ; Desktop shortcut
   CreateShortcut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\${EXENAME}" "" "$INSTDIR\${EXENAME}" 0
 
-  ; Add/Remove Programs
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayName" "${APPNAME}"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "UninstallString" '"$INSTDIR\uninstall.exe"'
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayIcon" "$INSTDIR\${EXENAME}"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "Publisher" "${COMPANYNAME}"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayVersion" "${VERSION}"
-  WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "NoModify" 1
-  WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "NoRepair" 1
-  WriteRegStr HKLM "Software\${APPNAME}" "InstallDir" "$INSTDIR"
+  ; Add/Remove Programs (per-user)
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayName" "${APPNAME}"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "UninstallString" '"$INSTDIR\uninstall.exe"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayIcon" "$INSTDIR\${EXENAME}"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "Publisher" "${COMPANYNAME}"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayVersion" "${VERSION}"
+  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "NoModify" 1
+  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "NoRepair" 1
+  WriteRegStr HKCU "Software\${APPNAME}" "InstallDir" "$INSTDIR"
 
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   IntFmt $0 "0x%08X" $0
-  WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "EstimatedSize" "$0"
+  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "EstimatedSize" "$0"
 SectionEnd
 
 Section "Uninstall"
@@ -91,6 +92,6 @@ Section "Uninstall"
   Delete "$DESKTOP\${APPNAME}.lnk"
 
   ; Remove registry
-  DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
-  DeleteRegKey HKLM "Software\${APPNAME}"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
+  DeleteRegKey HKCU "Software\${APPNAME}"
 SectionEnd
