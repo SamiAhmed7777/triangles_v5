@@ -80,6 +80,24 @@ jobs:
         run: |
           make -j$(nproc)
 
+      - name: Bundle Tor
+        shell: powershell
+        run: |
+          $TOR_VERSION = "14.0.8"
+          $TOR_URL = "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-windows-x86_64-${TOR_VERSION}.tar.gz"
+          Invoke-WebRequest -Uri $TOR_URL -OutFile tor-bundle.tar.gz
+          New-Item -ItemType Directory -Path tor-extract -Force
+          tar -xzf tor-bundle.tar.gz -C tor-extract
+          New-Item -ItemType Directory -Path dist/tor -Force
+          Copy-Item tor-extract/tor/tor.exe dist/tor/
+          Copy-Item tor-extract/tor/tor-gencert.exe dist/tor/ -ErrorAction SilentlyContinue
+          if (Test-Path tor-extract/tor/pluggable_transports) {
+            Copy-Item -Recurse tor-extract/tor/pluggable_transports dist/tor/
+          }
+          if (Test-Path tor-extract/data) {
+            Copy-Item -Recurse tor-extract/data dist/tor/data
+          }
+
       - name: Package
         run: |
           mkdir -p dist
@@ -135,11 +153,26 @@ jobs:
           strip --strip-all trianglesd.exe
           cp trianglesd.exe ../trianglesd.exe
 
+      - name: Bundle Tor
+        shell: powershell
+        run: |
+          $TOR_VERSION = "14.0.8"
+          $TOR_URL = "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-windows-x86_64-${TOR_VERSION}.tar.gz"
+          Invoke-WebRequest -Uri $TOR_URL -OutFile tor-bundle.tar.gz
+          New-Item -ItemType Directory -Path tor-extract -Force
+          tar -xzf tor-bundle.tar.gz -C tor-extract
+          New-Item -ItemType Directory -Path daemon-dist/tor -Force
+          Copy-Item trianglesd.exe daemon-dist/
+          Copy-Item tor-extract/tor/tor.exe daemon-dist/tor/
+          if (Test-Path tor-extract/data) {
+            Copy-Item -Recurse tor-extract/data daemon-dist/tor/data
+          }
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-daemon
-          path: trianglesd.exe
+          path: daemon-dist/
 
   build-linux-qt:
     runs-on: ubuntu-22.04
@@ -179,14 +212,22 @@ jobs:
       - name: Strip binary
         run: strip --strip-all triangles-qt
 
-      - name: Rename
-        run: mv triangles-qt Cryptographic-Triangles-v${VERSION}-linux-x64-qt
+      - name: Bundle Tor
+        run: |
+          TOR_VERSION="14.0.8"
+          curl -sL "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-linux-x86_64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
+          mkdir -p tor-extract && tar -xzf tor-bundle.tar.gz -C tor-extract
+          mkdir -p linux-qt-dist/tor
+          mv triangles-qt "linux-qt-dist/Cryptographic-Triangles-v${VERSION}-linux-x64-qt"
+          cp tor-extract/tor/tor linux-qt-dist/tor/
+          chmod +x linux-qt-dist/tor/tor
+          cp -r tor-extract/data linux-qt-dist/tor/data
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-qt
-          path: Cryptographic-Triangles-v*-linux-x64-qt
+          path: linux-qt-dist/
 
   build-linux-daemon:
     runs-on: ubuntu-22.04
@@ -222,14 +263,22 @@ jobs:
       - name: Strip binary
         run: strip --strip-all src/trianglesd
 
-      - name: Rename
-        run: mv src/trianglesd Cryptographic-Triangles-v${VERSION}-linux-x64-daemon
+      - name: Bundle Tor
+        run: |
+          TOR_VERSION="14.0.8"
+          curl -sL "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-linux-x86_64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
+          mkdir -p tor-extract && tar -xzf tor-bundle.tar.gz -C tor-extract
+          mkdir -p linux-daemon-dist/tor
+          mv src/trianglesd "linux-daemon-dist/Cryptographic-Triangles-v${VERSION}-linux-x64-daemon"
+          cp tor-extract/tor/tor linux-daemon-dist/tor/
+          chmod +x linux-daemon-dist/tor/tor
+          cp -r tor-extract/data linux-daemon-dist/tor/data
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-daemon
-          path: Cryptographic-Triangles-v*-linux-x64-daemon
+          path: linux-daemon-dist/
 
   build-macos:
     runs-on: macos-15
@@ -284,6 +333,16 @@ jobs:
           export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
           macdeployqt Triangles-Qt.app -verbose=1
 
+      - name: Bundle Tor into app
+        run: |
+          TOR_VERSION="14.0.8"
+          curl -sL "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-macos-aarch64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
+          mkdir -p tor-extract && tar -xzf tor-bundle.tar.gz -C tor-extract
+          mkdir -p Triangles-Qt.app/Contents/MacOS/tor
+          cp tor-extract/tor/tor Triangles-Qt.app/Contents/MacOS/tor/
+          chmod +x Triangles-Qt.app/Contents/MacOS/tor/tor
+          cp -r tor-extract/data Triangles-Qt.app/Contents/MacOS/tor/data
+
       - name: Create DMG
         run: |
           mkdir -p dmg_contents
@@ -318,13 +377,14 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release
-          # Windows
-          cd artifacts/windows-qt && zip -r ../../release/Cryptographic-Triangles-${VERSION}-win-x64.zip . && cd ../..
-          cp artifacts/windows-qt/triangles-qt.exe release/Cryptographic-Triangles-${VERSION}-win-x64-qt.exe
-          cp artifacts/windows-daemon/trianglesd.exe release/Cryptographic-Triangles-${VERSION}-win-x64-daemon.exe
-          # Linux
-          cp artifacts/linux-qt/Cryptographic-Triangles-* release/
-          cp artifacts/linux-daemon/Cryptographic-Triangles-* release/
+          # Windows Qt (zip with Tor bundle included)
+          cd artifacts/windows-qt && zip -r ../../release/Cryptographic-Triangles-${VERSION}-win-x64-qt.zip . && cd ../..
+          # Windows daemon (zip with Tor bundle included)
+          cd artifacts/windows-daemon && zip -r ../../release/Cryptographic-Triangles-${VERSION}-win-x64-daemon.zip . && cd ../..
+          # Linux Qt (tar.gz with Tor bundle)
+          cd artifacts/linux-qt && tar -czf ../../release/Cryptographic-Triangles-${VERSION}-linux-x64-qt.tar.gz . && cd ../..
+          # Linux daemon (tar.gz with Tor bundle)
+          cd artifacts/linux-daemon && tar -czf ../../release/Cryptographic-Triangles-${VERSION}-linux-x64-daemon.tar.gz . && cd ../..
           # macOS
           cp artifacts/macos-arm64-dmg/*.dmg release/
           ls -la release/
