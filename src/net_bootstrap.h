@@ -24,9 +24,12 @@ namespace NetBootstrap {
         NULL
     };
 
-    // Hardcoded seeds removed - peer discovery is now fully dynamic via HTTP seed list.
-    // See: seeds.cryptographic-triangles.org
+    // Hardcoded seed nodes - full network mesh
+    // These nodes will be automatically connected to on first run
     static const unsigned int pnSeed[] __attribute__((unused)) = {
+        0x4ad0a713, // 74.208.167.19 (DNS3)
+        0xc2e958ce, // 194.233.88.206 (DNS2)
+        0x64627b3b, // 100.98.123.59 (Contabo seed server)
     };
 
     // Network protocol compatibility settings
