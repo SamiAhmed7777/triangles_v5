@@ -80,6 +80,19 @@ jobs:
         run: |
           make -j$(nproc)
 
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp release/triangles-qt.exe dist/
+          windeployqt dist/triangles-qt.exe || true
+          # Copy runtime DLLs
+          for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do
+            cp /mingw64/bin/$dll dist/ 2>/dev/null || true
+          done
+
+      - name: Strip binary
+        run: strip --strip-all dist/triangles-qt.exe
+
       - name: Bundle Tor
         shell: powershell
         run: |
@@ -97,19 +110,6 @@ jobs:
           if (Test-Path tor-extract/data) {
             Copy-Item -Recurse tor-extract/data dist/tor/data
           }
-
-      - name: Package
-        run: |
-          mkdir -p dist
-          cp release/triangles-qt.exe dist/
-          windeployqt dist/triangles-qt.exe || true
-          # Copy runtime DLLs
-          for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do
-            cp /mingw64/bin/$dll dist/ 2>/dev/null || true
-          done
-
-      - name: Strip binary
-        run: strip --strip-all dist/triangles-qt.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
