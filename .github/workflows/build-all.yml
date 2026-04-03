@@ -117,9 +117,31 @@ jobs:
             cp "$dll" dist/ 2>/dev/null || true
           done
 
+          # Write qt.conf so the exe finds plugins relative to itself
+          printf '[Paths]\nPlugins = .\n' > dist/qt.conf
+
+          # Ensure Qt platform plugins are present (windeployqt sometimes misses them in MSYS2)
+          if [ ! -f dist/platforms/qwindows.dll ]; then
+            echo "WARNING: windeployqt did not copy platform plugins, copying manually..."
+            mkdir -p dist/platforms
+            cp /mingw64/share/qt5/plugins/platforms/qwindows.dll dist/platforms/ 2>/dev/null || \
+            cp /mingw64/lib/qt5/plugins/platforms/qwindows.dll dist/platforms/ 2>/dev/null || \
+            find /mingw64 -name 'qwindows.dll' -exec cp {} dist/platforms/ \; 2>/dev/null
+          fi
+
+          # Also copy styles and imageformats for good measure
+          for plugdir in styles imageformats; do
+            if [ ! -d "dist/$plugdir" ]; then
+              srcdir=$(find /mingw64 -type d -name "$plugdir" -path "*/plugins/*" 2>/dev/null | head -1)
+              if [ -n "$srcdir" ]; then
+                cp -r "$srcdir" dist/
+              fi
+            fi
+          done
+
           strip --strip-all dist/triangles-qt.exe
-          echo "=== DLLs in dist/ ==="
-          ls -la dist/*.dll 2>/dev/null || true
+          echo "=== dist/ contents ==="
+          find dist/ -type f | head -50
 
       - name: Download Tor
         shell: powershell
