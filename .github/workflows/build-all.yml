@@ -142,11 +142,11 @@ jobs:
       - name: Build NSIS installer
         shell: powershell
         run: |
-          # Download NSIS directly (no Chocolatey dependency)
-          $NSIS_URL = "https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe/download"
-          Invoke-WebRequest -Uri $NSIS_URL -OutFile nsis-setup.exe -MaximumRedirection 5
-          Start-Process -FilePath .\nsis-setup.exe -ArgumentList '/S' -Wait
-          $env:PATH = "C:\Program Files (x86)\NSIS;$env:PATH"
+          # Download NSIS portable zip (no installer needed, no Chocolatey)
+          $NSIS_URL = "https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10.zip/download"
+          Invoke-WebRequest -Uri $NSIS_URL -OutFile nsis.zip -MaximumRedirection 10
+          Expand-Archive -Path nsis.zip -DestinationPath nsis-portable
+          $env:PATH = "$PWD\nsis-portable\nsis-3.10;$env:PATH"
           makensis /DVERSION=$env:VERSION contrib\nsis\setup.nsi
 
       - name: Upload installer
