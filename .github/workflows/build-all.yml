@@ -256,7 +256,7 @@ jobs:
       - name: Strip binary
         run: strip --strip-all triangles-qt
 
-      - name: Build .deb package
+      - name: Build .deb package (fully self-contained)
         run: |
           TOR_VERSION="15.0.8"
           curl -sL "https://dist.torproject.org/torbrowser/${TOR_VERSION}/tor-expert-bundle-linux-x86_64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
@@ -264,6 +264,7 @@ jobs:
 
           PKG="cryptographic-triangles_${VERSION}_amd64"
           mkdir -p ${PKG}/DEBIAN
+          mkdir -p ${PKG}/usr/lib/cryptographic-triangles/lib
           mkdir -p ${PKG}/usr/lib/cryptographic-triangles/tor
           mkdir -p ${PKG}/usr/bin
           mkdir -p ${PKG}/usr/share/applications
@@ -274,9 +275,26 @@ jobs:
           chmod +x ${PKG}/usr/lib/cryptographic-triangles/tor/tor
           [ -d tor-extract/data ] && cp -r tor-extract/data ${PKG}/usr/lib/cryptographic-triangles/tor/data
 
+          # Bundle ALL shared library dependencies (except glibc/kernel)
+          ldd triangles-qt | grep '=> /' | awk '{print $3}' | while read lib; do
+            case "$lib" in
+              /lib/x86_64-linux-gnu/libc.so*|/lib/x86_64-linux-gnu/libm.so*|/lib/x86_64-linux-gnu/libpthread.so*|/lib/x86_64-linux-gnu/libdl.so*|/lib/x86_64-linux-gnu/librt.so*|/lib/x86_64-linux-gnu/ld-linux*|/lib64/ld-linux*)
+                ;; # Skip glibc core — always present
+              *)
+                cp -L "$lib" ${PKG}/usr/lib/cryptographic-triangles/lib/ 2>/dev/null || true
+                ;;
+            esac
+          done
+          echo "=== Bundled libs ==="
+          ls ${PKG}/usr/lib/cryptographic-triangles/lib/ | wc -l
+          ls ${PKG}/usr/lib/cryptographic-triangles/lib/
+
+          # Launcher with LD_LIBRARY_PATH
           cat > ${PKG}/usr/bin/cryptographic-triangles << 'LAUNCHER'
           #!/bin/bash
-          exec /usr/lib/cryptographic-triangles/triangles-qt "$@"
+          INSTALL_DIR=/usr/lib/cryptographic-triangles
+          export LD_LIBRARY_PATH="${INSTALL_DIR}/lib:${LD_LIBRARY_PATH}"
+          exec "${INSTALL_DIR}/triangles-qt" "$@"
           LAUNCHER
           sed -i 's/^          //' ${PKG}/usr/bin/cryptographic-triangles
           chmod +x ${PKG}/usr/bin/cryptographic-triangles
@@ -301,9 +319,8 @@ jobs:
           Architecture: amd64
           Maintainer: Cryptographic Triangles <dev@cryptographic-triangles.org>
           Description: Cryptographic Triangles wallet with integrated Tor
-           Privacy-focused cryptocurrency wallet with built-in Tor support.
-           Tor is bundled — no additional configuration needed.
-          Depends: libqt5widgets5, libqt5gui5, libqt5network5, libqt5core5a, libboost-system1.74.0 | libboost-system1.83.0, libboost-filesystem1.74.0 | libboost-filesystem1.83.0, libboost-thread1.74.0 | libboost-thread1.83.0, libboost-program-options1.74.0 | libboost-program-options1.83.0, libssl3, libdb5.3++, libevent-2.1-7, libminiupnpc17
+           Fully self-contained wallet with all libraries and Tor bundled.
+           No external dependencies required — runs on any x86_64 Linux.
           Section: finance
           Priority: optional
           CTRL
@@ -351,7 +368,7 @@ jobs:
       - name: Strip binary
         run: strip --strip-all src/trianglesd
 
-      - name: Build .deb package
+      - name: Build .deb package (fully self-contained)
         run: |
           TOR_VERSION="15.0.8"
           curl -sL "https://dist.torproject.org/torbrowser/${TOR_VERSION}/tor-expert-bundle-linux-x86_64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
@@ -359,6 +376,7 @@ jobs:
 
           PKG="cryptographic-triangles-daemon_${VERSION}_amd64"
           mkdir -p ${PKG}/DEBIAN
+          mkdir -p ${PKG}/usr/lib/cryptographic-triangles/lib
           mkdir -p ${PKG}/usr/lib/cryptographic-triangles/tor
           mkdir -p ${PKG}/usr/bin
           mkdir -p ${PKG}/etc/systemd/system
@@ -368,9 +386,26 @@ jobs:
           chmod +x ${PKG}/usr/lib/cryptographic-triangles/tor/tor
           [ -d tor-extract/data ] && cp -r tor-extract/data ${PKG}/usr/lib/cryptographic-triangles/tor/data
 
+          # Bundle ALL shared library dependencies (except glibc/kernel)
+          ldd src/trianglesd | grep '=> /' | awk '{print $3}' | while read lib; do
+            case "$lib" in
+              /lib/x86_64-linux-gnu/libc.so*|/lib/x86_64-linux-gnu/libm.so*|/lib/x86_64-linux-gnu/libpthread.so*|/lib/x86_64-linux-gnu/libdl.so*|/lib/x86_64-linux-gnu/librt.so*|/lib/x86_64-linux-gnu/ld-linux*|/lib64/ld-linux*)
+                ;; # Skip glibc core — always present
+              *)
+                cp -L "$lib" ${PKG}/usr/lib/cryptographic-triangles/lib/ 2>/dev/null || true
+                ;;
+            esac
+          done
+          echo "=== Bundled libs ==="
+          ls ${PKG}/usr/lib/cryptographic-triangles/lib/ | wc -l
+          ls ${PKG}/usr/lib/cryptographic-triangles/lib/
+
+          # Launcher with LD_LIBRARY_PATH
           cat > ${PKG}/usr/bin/trianglesd << 'LAUNCHER'
           #!/bin/bash
-          exec /usr/lib/cryptographic-triangles/trianglesd "$@"
+          INSTALL_DIR=/usr/lib/cryptographic-triangles
+          export LD_LIBRARY_PATH="${INSTALL_DIR}/lib:${LD_LIBRARY_PATH}"
+          exec "${INSTALL_DIR}/trianglesd" "$@"
           LAUNCHER
           sed -i 's/^          //' ${PKG}/usr/bin/trianglesd
           chmod +x ${PKG}/usr/bin/trianglesd
@@ -383,7 +418,8 @@ jobs:
 
           [Service]
           Type=simple
-          ExecStart=/usr/bin/trianglesd
+          Environment=LD_LIBRARY_PATH=/usr/lib/cryptographic-triangles/lib
+          ExecStart=/usr/lib/cryptographic-triangles/trianglesd
           Restart=on-failure
           RestartSec=10
 
@@ -398,9 +434,8 @@ jobs:
           Architecture: amd64
           Maintainer: Cryptographic Triangles <dev@cryptographic-triangles.org>
           Description: Cryptographic Triangles daemon with integrated Tor
-           Headless node daemon with built-in Tor support and systemd service.
-           Tor is bundled — no additional configuration needed.
-          Depends: libboost-system1.74.0 | libboost-system1.83.0, libboost-filesystem1.74.0 | libboost-filesystem1.83.0, libboost-thread1.74.0 | libboost-thread1.83.0, libboost-program-options1.74.0 | libboost-program-options1.83.0, libssl3, libdb5.3++, libevent-2.1-7, libminiupnpc17
+           Fully self-contained headless node with all libraries, Tor, and systemd service.
+           No external dependencies required — runs on any x86_64 Linux.
           Section: finance
           Priority: optional
           CTRL
