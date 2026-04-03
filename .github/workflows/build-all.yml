@@ -139,15 +139,11 @@ jobs:
             Copy-Item -Recurse tor-extract/data tor-files/data
           }
 
+      - name: Install NSIS via MSYS2
+        run: pacman -S --noconfirm mingw-w64-x86_64-nsis
+
       - name: Build NSIS installer
-        shell: powershell
-        run: |
-          # Download NSIS portable zip (no installer needed, no Chocolatey)
-          $NSIS_URL = "https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10.zip/download"
-          Invoke-WebRequest -Uri $NSIS_URL -OutFile nsis.zip -MaximumRedirection 10
-          Expand-Archive -Path nsis.zip -DestinationPath nsis-portable
-          $env:PATH = "$PWD\nsis-portable\nsis-3.10;$env:PATH"
-          makensis /DVERSION=$env:VERSION contrib\nsis\setup.nsi
+        run: makensis //DVERSION=$VERSION contrib/nsis/setup.nsi
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
