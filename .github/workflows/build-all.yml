@@ -116,7 +116,10 @@ jobs:
       - name: Build NSIS installer
         shell: powershell
         run: |
-          choco install nsis -y
+          # Download NSIS directly (no Chocolatey dependency)
+          $NSIS_URL = "https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe/download"
+          Invoke-WebRequest -Uri $NSIS_URL -OutFile nsis-setup.exe -MaximumRedirection 5
+          Start-Process -FilePath .\nsis-setup.exe -ArgumentList '/S' -Wait
           $env:PATH = "C:\Program Files (x86)\NSIS;$env:PATH"
           makensis /DVERSION=$env:VERSION contrib\nsis\setup.nsi
 
