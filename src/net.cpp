@@ -13,6 +13,9 @@
 #include "ui_interface.h"
 #include "onionseed.h"
 
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+
 #include <sstream>
 
 #ifdef WIN32
@@ -1433,7 +1436,7 @@ void ThreadHTTPSeedFetch2(void* parg)
 {
     static const char* DEFAULT_SEED_URL_HOST = "seeds.cryptographic-triangles.org";
     static const char* DEFAULT_SEED_URL_PATH = "/seeds.txt";
-    static const int HTTP_PORT = 80;
+    static const int HTTPS_PORT = 443;
 
     std::string seedHost = GetArg("-seedurl", DEFAULT_SEED_URL_HOST);
     std::string seedPath = DEFAULT_SEED_URL_PATH;
@@ -1445,20 +1448,62 @@ void ThreadHTTPSeedFetch2(void* parg)
         seedHost = seedHost.substr(0, slashPos);
     }
 
-    printf("Fetching seed list from http://%s%s (via Tor)...\n", seedHost.c_str(), seedPath.c_str());
+    printf("Fetching seed list from https://%s%s (via Tor)...\n", seedHost.c_str(), seedPath.c_str());
+
+    SSL_CTX* ctx = NULL;
+    SSL* ssl = NULL;
+    SOCKET hSocket = INVALID_SOCKET;
 
     try {
         // Connect through Tor SOCKS proxy using existing proxy-aware socket infrastructure
-        SOCKET hSocket = INVALID_SOCKET;
         CService addrResolved;
-        std::string connectDest = seedHost + ":" + std::to_string(HTTP_PORT);
+        std::string connectDest = seedHost + ":" + std::to_string(HTTPS_PORT);
 
-        if (!ConnectSocketByName(addrResolved, hSocket, connectDest.c_str(), HTTP_PORT, nConnectTimeout)) {
-            printf("HTTP seed fetch: cannot connect to %s through Tor proxy\n", seedHost.c_str());
+        if (!ConnectSocketByName(addrResolved, hSocket, connectDest.c_str(), HTTPS_PORT, nConnectTimeout)) {
+            printf("HTTPS seed fetch: cannot connect to %s through Tor proxy\n", seedHost.c_str());
             return;
         }
 
-        // Send HTTP request
+        // Set up TLS over the connected socket
+        ctx = SSL_CTX_new(TLS_client_method());
+        if (!ctx) {
+            printf("HTTPS seed fetch: SSL_CTX_new failed\n");
+            closesocket(hSocket);
+            return;
+        }
+
+        // Use system default CA certificates for verification
+        SSL_CTX_set_default_verify_paths(ctx);
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+
+        ssl = SSL_new(ctx);
+        if (!ssl) {
+            printf("HTTPS seed fetch: SSL_new failed\n");
+            SSL_CTX_free(ctx);
+            closesocket(hSocket);
+            return;
+        }
+
+        // Set SNI hostname (required for Caddy/Let's Encrypt)
+        SSL_set_tlsext_host_name(ssl, seedHost.c_str());
+        SSL_set_fd(ssl, (int)hSocket);
+
+        int ret = SSL_connect(ssl);
+        if (ret != 1) {
+            int sslErr = SSL_get_error(ssl, ret);
+            unsigned long errCode = ERR_get_error();
+            char errBuf[256];
+            ERR_error_string_n(errCode, errBuf, sizeof(errBuf));
+            printf("HTTPS seed fetch: TLS handshake failed (ssl_err=%d): %s\n", sslErr, errBuf);
+            SSL_free(ssl);
+            SSL_CTX_free(ctx);
+            closesocket(hSocket);
+            return;
+        }
+
+        printf("HTTPS seed fetch: TLS connection established to %s\n", seedHost.c_str());
+
+        // Send HTTP request over TLS
         std::string request =
             "GET " + seedPath + " HTTP/1.1\r\n"
             "Host: " + seedHost + "\r\n"
@@ -1469,41 +1514,52 @@ void ThreadHTTPSeedFetch2(void* parg)
         int nSent = 0;
         int nLen = request.size();
         while (nSent < nLen) {
-            int nBytes = send(hSocket, request.c_str() + nSent, nLen - nSent, 0);
+            int nBytes = SSL_write(ssl, request.c_str() + nSent, nLen - nSent);
             if (nBytes <= 0) {
-                printf("HTTP seed fetch: send failed\n");
+                printf("HTTPS seed fetch: SSL_write failed\n");
+                SSL_shutdown(ssl);
+                SSL_free(ssl);
+                SSL_CTX_free(ctx);
                 closesocket(hSocket);
                 return;
             }
             nSent += nBytes;
         }
 
-        // Read response
+        // Read response over TLS
         std::string response;
         char buf[4096];
         while (true) {
-            int nBytes = recv(hSocket, buf, sizeof(buf), 0);
+            int nBytes = SSL_read(ssl, buf, sizeof(buf));
             if (nBytes <= 0)
                 break;
             response.append(buf, nBytes);
         }
+
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        SSL_CTX_free(ctx);
         closesocket(hSocket);
+        ssl = NULL;
+        ctx = NULL;
+        hSocket = INVALID_SOCKET;
 
         if (response.empty()) {
-            printf("HTTP seed fetch: empty response from %s\n", seedHost.c_str());
+            printf("HTTPS seed fetch: empty response from %s\n", seedHost.c_str());
             return;
         }
 
         // Parse HTTP response - find end of headers
         size_t headerEnd = response.find("\r\n\r\n");
         if (headerEnd == std::string::npos) {
-            printf("HTTP seed fetch: malformed response (no header terminator)\n");
+            printf("HTTPS seed fetch: malformed response (no header terminator)\n");
             return;
         }
 
         // Check status code
-        if (response.substr(0, 12).find("200") == std::string::npos) {
-            printf("HTTP seed fetch: non-200 response from %s\n", seedHost.c_str());
+        std::string statusLine = response.substr(0, response.find("\r\n"));
+        if (statusLine.find("200") == std::string::npos) {
+            printf("HTTPS seed fetch: %s from %s\n", statusLine.c_str(), seedHost.c_str());
             return;
         }
 
@@ -1560,15 +1616,18 @@ void ThreadHTTPSeedFetch2(void* parg)
             if (resolved) {
                 CAddress addr(CService(parsed, port));
                 addr.nTime = GetTime() - 3*24*60*60; // 3 days ago
-                addrman.Add(addr, CNetAddr("http-seed", true));
+                addrman.Add(addr, CNetAddr("https-seed", true));
                 found++;
             }
         }
 
-        printf("%d addresses found from HTTP seed list (%s)\n", found, seedHost.c_str());
+        printf("%d addresses found from HTTPS seed list (%s)\n", found, seedHost.c_str());
 
     } catch (std::exception& e) {
-        printf("HTTP seed fetch failed: %s\n", e.what());
+        printf("HTTPS seed fetch failed: %s\n", e.what());
+        if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
+        if (ctx) SSL_CTX_free(ctx);
+        if (hSocket != INVALID_SOCKET) closesocket(hSocket);
     }
 }
 
