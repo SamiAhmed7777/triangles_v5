@@ -32,9 +32,6 @@ RequestExecutionLevel user
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 
-; Bootstrap page
-Page custom BootstrapPage
-
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 
@@ -42,34 +39,6 @@ Page custom BootstrapPage
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "English"
-
-; Bootstrap selection variable
-Var BootstrapChoice
-
-; Bootstrap page function
-Function BootstrapPage
-  !insertmacro MUI_HEADER_TEXT "Blockchain Sync" "Choose how to synchronize the blockchain"
-  
-  nsDialogs::Create 1018
-  Pop $0
-  
-  ${NSD_CreateLabel} 0 10u 100% 20u "The Triangles blockchain requires ~1GB of data. Choose sync method:"
-  Pop $0
-  
-  ${NSD_CreateRadioButton} 10u 40u 100% 12u "Download bootstrap (~1.3GB) — Recommended (fast)"
-  Pop $1
-  ${NSD_Check} $1
-  
-  ${NSD_CreateRadioButton} 10u 60u 100% 12u "Sync from network — Slow (may take days)"
-  Pop $2
-  
-  ${NSD_CreateLabel} 10u 80u 100% 30u "Bootstrap will download a recent blockchain snapshot, saving hours or days of sync time. Network bandwidth required: ~1.3GB."
-  Pop $0
-  
-  nsDialogs::Show
-  
-  ${NSD_GetState} $1 $BootstrapChoice
-FunctionEnd
 
 Section "Install"
   SetOutPath "$INSTDIR"
@@ -83,25 +52,6 @@ Section "Install"
 
   ; Create data directory
   CreateDirectory "$APPDATA\Triangles"
-
-  ; Download blockchain bootstrap if selected
-  ${If} $BootstrapChoice == ${BST_CHECKED}
-    DetailPrint "Downloading blockchain bootstrap..."
-    inetc::get /CAPTION "Downloading Blockchain" /CANCELTEXT "Skip" \
-      "http://bootstrap.cryptographic-triangles.org/tri-blockchain.tar.gz" \
-      "$TEMP\tri-blockchain.tar.gz" /END
-    Pop $0
-    ${If} $0 == "OK"
-      DetailPrint "Extracting blockchain..."
-      nsExec::ExecToLog '"$INSTDIR\7z.exe" x "$TEMP\tri-blockchain.tar.gz" -o"$TEMP" -y'
-      nsExec::ExecToLog '"$INSTDIR\7z.exe" x "$TEMP\tri-blockchain.tar" -o"$APPDATA\Triangles" -y'
-      Delete "$TEMP\tri-blockchain.tar.gz"
-      Delete "$TEMP\tri-blockchain.tar"
-      DetailPrint "Blockchain bootstrap installed!"
-    ${Else}
-      DetailPrint "Bootstrap download failed or skipped — will sync from network"
-    ${EndIf}
-  ${EndIf}
 
   ; Uninstaller
   WriteUninstaller "$INSTDIR\uninstall.exe"
