@@ -129,9 +129,9 @@ std::string CTorProcess::FindTorBinary()
     candidates.push_back("/usr/local/opt/tor/bin/tor");
 #endif
 
-    // Check each candidate
+    // Check each candidate (must be a regular file, not a directory)
     for (const std::string& path : candidates) {
-        if (fs::exists(path)) {
+        if (fs::exists(path) && !fs::is_directory(path)) {
             printf("Found Tor binary at: %s\n", path.c_str());
             return path;
         }
