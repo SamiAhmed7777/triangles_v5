@@ -1,0 +1,3 @@
+[submodule "src/tor/tor-src"]
+	path = src/tor/tor-src
+	url = https://gitlab.torproject.org/tpo/core/tor.git

@@ -6,6 +6,7 @@
 #include "walletdb.h"
 #include "trianglesrpc.h"
 #include "net.h"
+#include "netbase.h"
 #include "init.h"
 #include "util.h"
 #include "ui_interface.h"
@@ -357,7 +358,7 @@ std::string HelpMessage()
         //"  -proxy=<ip:port>       " + _("Connect through socks proxy") + "\n" +
         //"  -socks=<n>             " + _("Select the version of socks proxy to use (4-5, default: 5)") + "\n" +
         "  -tor=<ip:port>         " + _("Use proxy to reach tor hidden services (default: same as -proxy)") + "\n"
-        "  -notor                 " + _("Disable Tor startup and .onion connectivity") + "\n" +
+        "  -notor                 " + _("Disable Tor (WARNING: wallet will not start - Tor is required)") + "\n" +
         "  -torsocks=<port>       " + _("Set embedded or managed Tor SOCKS proxy port (default: 19099)") + "\n" +
         "  -torhiddenservice      " + _("Enable the managed Tor hidden service (default: 1)") + "\n" +
         "  -torhsport=<port>      " + _("Set embedded or managed Tor hidden service port (default: wallet listen port)") + "\n" +
@@ -744,9 +745,9 @@ bool AppInit2()
     //if (nSocksVersion != 4 && nSocksVersion != 5)
     //  return InitError(strprintf(_("Unknown -socks proxy version requested: %i"), nSocksVersion));
 
-    // Network selection: enable all networks (IPv4, IPv6, Tor)
-    // Tor is always enabled; clearnet is also allowed for seed node discovery
-    // Users can restrict to Tor-only with -onlynet=tor
+    // Network selection: Tor-native mode
+    // All traffic routes through embedded Tor. Clearnet (IPv4/IPv6) is disabled
+    // after Tor starts successfully. Only .onion peers are accepted.
     if (mapArgs.count("-onlynet")) {
         std::set<enum Network> nets;
         for (std::string snet : mapMultiArgs["-onlynet"]) {
@@ -1146,9 +1147,29 @@ bool AppInit2()
         if (torStarted) {
             printf("Tor process running, SOCKS proxy at %s\n",
                    CTorEmbedded::GetInstance()->GetSocksProxy().c_str());
+
+            // TOR-NATIVE MODE: Force all traffic through embedded Tor
+            int socksPort = CTorEmbedded::GetInstance()->GetSocksPort();
+            CService torProxyAddr("127.0.0.1", socksPort);
+
+            SetProxy(NET_IPV4, torProxyAddr, 5);
+            SetProxy(NET_IPV6, torProxyAddr, 5);
+            SetProxy(NET_TOR, torProxyAddr, 5);
+            SetNameProxy(torProxyAddr, 5);
+
+            // Disable clearnet reachability - ONION ONLY
+            SetReachable(NET_IPV4, false);
+            SetReachable(NET_IPV6, false);
+            SetReachable(NET_TOR, true);
+
+            printf("TOR-NATIVE MODE: All network traffic forced through Tor\n");
+            printf("  Clearnet disabled - .onion addresses only\n");
+
+            #ifdef USE_UPNP
+            fUseUPnP = false;
+            #endif
         } else {
-            printf("WARNING: Tor not available. .onion peers will not be reachable.\n");
-            printf("  Clearnet connections will still work normally.\n");
+            return InitError(_("Tor failed to start. Triangles requires Tor to operate."));
         }
 
         // Initialize Tor V3 identity (Ed25519 keys, onion address)

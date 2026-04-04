@@ -1,177 +1,149 @@
 #!/bin/bash
-# bump-version.sh — Update the version number across the entire repo.
+# bump-version.sh - Sync all version references from src/clientversion.h
 #
 # Usage:
-#   scripts/bump-version.sh 5.7.0      # Set version to 5.7.0
-#   scripts/bump-version.sh             # Read from src/clientversion.h and sync everything else
+#   ./scripts/bump-version.sh              # Read version from clientversion.h, update everything
+#   ./scripts/bump-version.sh 5.7.0        # Set version to 5.7.0 in clientversion.h AND everywhere else
+#
+# The single source of truth is src/clientversion.h
 
-set -euo pipefail
+set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$REPO_ROOT"
+CLIENTVERSION="$REPO_ROOT/src/clientversion.h"
 
-# ── Parse version ──────────────────────────────────────────────
-
-if [ -n "${1:-}" ]; then
-    VERSION="$1"
-else
-    # Read from clientversion.h (source of truth)
-    MAJOR=$(grep '#define CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
-    MINOR=$(grep '#define CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
-    REV=$(grep '#define CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
-    VERSION="${MAJOR}.${MINOR}.${REV}"
-fi
-
-# Split into components
-IFS='.' read -r MAJOR MINOR REV <<< "$VERSION"
-BUILD=0
-
-if [ -z "$MAJOR" ] || [ -z "$MINOR" ] || [ -z "$REV" ]; then
-    echo "Error: Invalid version '$VERSION'. Expected format: X.Y.Z"
+if [ ! -f "$CLIENTVERSION" ]; then
+    echo "ERROR: Cannot find $CLIENTVERSION"
     exit 1
 fi
 
-echo "Bumping to v${VERSION} (${MAJOR}.${MINOR}.${REV}.${BUILD})"
-echo ""
+# If a version argument is provided, update clientversion.h first
+if [ -n "$1" ]; then
+    IFS='.' read -r MAJOR MINOR REV <<< "$1"
+    REV="${REV:-0}"
+    BUILD=0
+    sed -i "s/#define CLIENT_VERSION_MAJOR.*/#define CLIENT_VERSION_MAJOR       $MAJOR/" "$CLIENTVERSION"
+    sed -i "s/#define CLIENT_VERSION_MINOR.*/#define CLIENT_VERSION_MINOR       $MINOR/" "$CLIENTVERSION"
+    sed -i "s/#define CLIENT_VERSION_REVISION.*/#define CLIENT_VERSION_REVISION    $REV/" "$CLIENTVERSION"
+    sed -i "s/#define CLIENT_VERSION_BUILD.*/#define CLIENT_VERSION_BUILD       $BUILD/" "$CLIENTVERSION"
+    echo "Updated clientversion.h to $MAJOR.$MINOR.$REV.$BUILD"
+fi
 
-# ── Helper ─────────────────────────────────────────────────────
+# Read version from clientversion.h (the source of truth)
+MAJOR=$(grep '#define CLIENT_VERSION_MAJOR' "$CLIENTVERSION" | awk '{print $3}')
+MINOR=$(grep '#define CLIENT_VERSION_MINOR' "$CLIENTVERSION" | awk '{print $3}')
+REV=$(grep '#define CLIENT_VERSION_REVISION' "$CLIENTVERSION" | awk '{print $3}')
+BUILD=$(grep '#define CLIENT_VERSION_BUILD' "$CLIENTVERSION" | awk '{print $3}')
 
-updated=()
+VERSION="$MAJOR.$MINOR.$REV"
+VERSION_FULL="$MAJOR.$MINOR.$REV.$BUILD"
+
+echo "Syncing all files to version $VERSION (full: $VERSION_FULL)"
+echo "==========================================================="
 
 update_file() {
     local file="$1"
     local pattern="$2"
     local replacement="$3"
-
-    if [ ! -f "$file" ]; then
-        echo "  SKIP  $file (not found)"
-        return
-    fi
-
-    if grep -qE "$pattern" "$file"; then
-        sed -i -E "s|${pattern}|${replacement}|g" "$file"
-        echo "  OK    $file"
-        updated+=("$file")
-    else
-        echo "  SKIP  $file (pattern not found)"
+    if [ -f "$file" ]; then
+        sed -i "$pattern" "$file"
+        echo "  Updated: $file"
     fi
 }
 
-# ── src/clientversion.h (source of truth) ──────────────────────
+# --- Source files ---
 
-echo "Core:"
-cat > src/clientversion.h << EOF
-#ifndef CLIENTVERSION_H
-#define CLIENTVERSION_H
+# src/version.h - DISPLAY_VERSION macros
+update_file "$REPO_ROOT/src/version.h" \
+    "s/#define DISPLAY_VERSION_MAJOR.*/#define DISPLAY_VERSION_MAJOR       $MAJOR/" ""
+update_file "$REPO_ROOT/src/version.h" \
+    "s/#define DISPLAY_VERSION_MINOR.*/#define DISPLAY_VERSION_MINOR       $MINOR/" ""
+update_file "$REPO_ROOT/src/version.h" \
+    "s/#define DISPLAY_VERSION_REVISION.*/#define DISPLAY_VERSION_REVISION    $REV/" ""
+update_file "$REPO_ROOT/src/version.h" \
+    "s/#define DISPLAY_VERSION_BUILD.*/#define DISPLAY_VERSION_BUILD       $BUILD/" ""
 
-//
-// client versioning
-//
+# triangles-qt.pro
+update_file "$REPO_ROOT/triangles-qt.pro" \
+    "s/^VERSION = .*/VERSION = $VERSION_FULL/" ""
 
-// These need to be macros, as version.cpp's and triangles-qt.rc's voodoo requires it
-#define CLIENT_VERSION_MAJOR       ${MAJOR}
-#define CLIENT_VERSION_MINOR       ${MINOR}
-#define CLIENT_VERSION_REVISION    ${REV}
-#define CLIENT_VERSION_BUILD       ${BUILD}
+# --- Docker ---
 
-// Converts the parameter X to a string after macro replacement on X has been performed.
-// Don't merge these into one macro!
-#define STRINGIZE(X) DO_STRINGIZE(X)
-#define DO_STRINGIZE(X) #X
+update_file "$REPO_ROOT/Dockerfile" \
+    "s/LABEL version=\"[^\"]*\"/LABEL version=\"$VERSION\"/" ""
 
-#endif // CLIENTVERSION_H
-EOF
-echo "  OK    src/clientversion.h"
-updated+=("src/clientversion.h")
+update_file "$REPO_ROOT/packaging/docker/Dockerfile" \
+    "s/LABEL version=\"[^\"]*\"/LABEL version=\"$VERSION\"/" ""
+update_file "$REPO_ROOT/packaging/docker/Dockerfile" \
+    "s/ARG VERSION=.*/ARG VERSION=$VERSION/" ""
 
-# ── triangles-qt.pro ───────────────────────────────────────────
+update_file "$REPO_ROOT/packaging/docker/docker-compose.yml" \
+    "s|cryptographic-triangles/trianglesd:[0-9.]*|cryptographic-triangles/trianglesd:$VERSION|" ""
 
-update_file "triangles-qt.pro" \
-    "^VERSION = [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" \
-    "VERSION = ${MAJOR}.${MINOR}.${REV}.${BUILD}"
+# --- Snap ---
 
-# ── Root Dockerfile ────────────────────────────────────────────
-
-update_file "Dockerfile" \
-    'LABEL version="[0-9]+\.[0-9]+\.[0-9]+"' \
-    "LABEL version=\"${VERSION}\""
-
-# ── Packaging manifests ────────────────────────────────────────
-
-echo ""
-echo "Packaging:"
-
-# Docker
-update_file "packaging/docker/Dockerfile" \
-    'LABEL version="[0-9]+\.[0-9]+\.[0-9]+"' \
-    "LABEL version=\"${VERSION}\""
-
-update_file "packaging/docker/docker-compose.yml" \
-    'image: triangles:[0-9]+\.[0-9]+\.[0-9]+' \
-    "image: triangles:${VERSION}"
-
-# AUR
-update_file "packaging/aur/PKGBUILD" \
-    "^pkgver=[0-9]+\.[0-9]+\.[0-9]+" \
-    "pkgver=${VERSION}"
-
-# Chocolatey
-update_file "packaging/chocolatey/triangles.nuspec" \
-    "<version>[0-9]+\.[0-9]+\.[0-9]+</version>" \
-    "<version>${VERSION}</version>"
-
-# Debian
-update_file "packaging/debian/DEBIAN/control" \
-    "^Version: [0-9]+\.[0-9]+\.[0-9]+-[0-9]+" \
-    "Version: ${VERSION}-1"
-
-# RPM
-update_file "packaging/rpm/triangles.spec" \
-    "^Version:[[:space:]]+[0-9]+\.[0-9]+\.[0-9]+" \
-    "Version:        ${VERSION}"
-
-# WinGet
-update_file "packaging/winget/CryptographicTriangles.TrianglesQt.yaml" \
-    "^PackageVersion: [0-9]+\.[0-9]+\.[0-9]+" \
-    "PackageVersion: ${VERSION}"
-
-# Homebrew
-update_file "packaging/homebrew/triangles.rb" \
-    'version "[0-9]+\.[0-9]+\.[0-9]+"' \
-    "version \"${VERSION}\""
-
-# Nix
-update_file "packaging/nix/default.nix" \
-    'version = "[0-9]+\.[0-9]+\.[0-9]+"' \
-    "version = \"${VERSION}\""
-
-# Flatpak — only update the app version tag, not runtime-version
-if [ -f "packaging/flatpak/org.cryptographic_triangles.TrianglesQt.yml" ]; then
-    # The flatpak manifest doesn't have a simple version field to sed,
-    # so we update any tag: line that has our version pattern
-    echo "  NOTE  packaging/flatpak/ — check manually for version references"
+update_file "$REPO_ROOT/snap/snapcraft.yaml" \
+    "s/^version: '[^']*'/version: '$VERSION'/" ""
+# Update download URLs in snapcraft.yaml
+if [ -f "$REPO_ROOT/snap/snapcraft.yaml" ]; then
+    sed -i "s|/download/v[0-9.]*\/|/download/v$VERSION/|g" "$REPO_ROOT/snap/snapcraft.yaml"
+    sed -i "s/Cryptographic-Triangles-v[0-9.]*-linux/Cryptographic-Triangles-v$VERSION-linux/g" "$REPO_ROOT/snap/snapcraft.yaml"
 fi
 
-# AppImage build script
-update_file "packaging/appimage/build-appimage.sh" \
-    'VERSION="[0-9]+\.[0-9]+\.[0-9]+"' \
-    "VERSION=\"${VERSION}\""
+# --- Scoop ---
 
-update_file "packaging/appimage/build-appimage.sh" \
-    "VERSION=[0-9]+\.[0-9]+\.[0-9]+" \
-    "VERSION=${VERSION}"
+if [ -f "$REPO_ROOT/packaging/scoop/triangles.json" ]; then
+    sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" "$REPO_ROOT/packaging/scoop/triangles.json"
+    sed -i "s|/download/v[0-9.]*/|/download/v$VERSION/|g" "$REPO_ROOT/packaging/scoop/triangles.json"
+    sed -i "s/Cryptographic-Triangles-[0-9.]*-win/Cryptographic-Triangles-$VERSION-win/g" "$REPO_ROOT/packaging/scoop/triangles.json"
+    echo "  Updated: packaging/scoop/triangles.json"
+fi
 
-# ── Summary ────────────────────────────────────────────────────
+# --- WinGet ---
+
+if [ -f "$REPO_ROOT/packaging/winget/CryptographicTriangles.TrianglesQt.yaml" ]; then
+    sed -i "s/PackageVersion: .*/PackageVersion: $VERSION/" "$REPO_ROOT/packaging/winget/CryptographicTriangles.TrianglesQt.yaml"
+    sed -i "s|/download/v[0-9.]*/|/download/v$VERSION/|g" "$REPO_ROOT/packaging/winget/CryptographicTriangles.TrianglesQt.yaml"
+    sed -i "s/Cryptographic-Triangles-[0-9.]*-win/Cryptographic-Triangles-$VERSION-win/g" "$REPO_ROOT/packaging/winget/CryptographicTriangles.TrianglesQt.yaml"
+    echo "  Updated: packaging/winget/CryptographicTriangles.TrianglesQt.yaml"
+fi
+
+# --- RPM ---
+
+update_file "$REPO_ROOT/packaging/rpm/triangles.spec" \
+    "s/^Version:        .*/Version:        $VERSION/" ""
+
+if [ -f "$REPO_ROOT/packaging/rpm/build-rpm.sh" ]; then
+    sed -i "s/^VERSION=\"[^\"]*\"/VERSION=\"$VERSION\"/" "$REPO_ROOT/packaging/rpm/build-rpm.sh"
+    echo "  Updated: packaging/rpm/build-rpm.sh"
+fi
+
+# --- Flatpak ---
+
+if [ -f "$REPO_ROOT/packaging/flatpak/org.cryptographic_triangles.TrianglesQt.yml" ]; then
+    sed -i "s|/download/v[0-9.]*/|/download/v$VERSION/|g" "$REPO_ROOT/packaging/flatpak/org.cryptographic_triangles.TrianglesQt.yml"
+    sed -i "s/Cryptographic-Triangles-v[0-9.]*-linux/Cryptographic-Triangles-v$VERSION-linux/g" "$REPO_ROOT/packaging/flatpak/org.cryptographic_triangles.TrianglesQt.yml"
+    echo "  Updated: packaging/flatpak/org.cryptographic_triangles.TrianglesQt.yml"
+fi
+
+# --- Debian ---
+
+if [ -f "$REPO_ROOT/packaging/debian/build-deb.sh" ]; then
+    sed -i "s/^VERSION=\"[^\"]*\"/VERSION=\"$VERSION\"/" "$REPO_ROOT/packaging/debian/build-deb.sh"
+    echo "  Updated: packaging/debian/build-deb.sh"
+fi
+
+# --- AppImage ---
+
+if [ -f "$REPO_ROOT/packaging/appimage/build-appimage.sh" ]; then
+    sed -i "s/^VERSION=\"[^\"]*\"/VERSION=\"$VERSION\"/" "$REPO_ROOT/packaging/appimage/build-appimage.sh"
+    echo "  Updated: packaging/appimage/build-appimage.sh"
+fi
 
 echo ""
-echo "Updated ${#updated[@]} files to v${VERSION}"
+echo "Done! All files synced to v$VERSION"
 echo ""
-echo "Still needs manual review:"
-echo "  - packaging/appstream/...metainfo.xml — add a new <release> entry"
-echo "  - README.md — update header version if desired"
-echo "  - Any documentation with download URLs"
-echo ""
-echo "Next steps:"
-echo "  git add -A && git commit -m 'Bump version to v${VERSION}'"
-echo "  git tag -a v${VERSION} -m 'v${VERSION}'"
-echo "  git push origin master && git push origin v${VERSION}"
+echo "Files NOT auto-updated (require manual review):"
+echo "  - packaging/appstream/...metainfo.xml  (add new <release> entry)"
+echo "  - README.md                            (update header version)"
+echo "  - Documentation .md files              (update download URLs if needed)"

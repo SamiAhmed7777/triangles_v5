@@ -13,7 +13,6 @@
 #include "ui_interface.h"
 #include "onionseed.h"
 
-#include <boost/asio.hpp>
 #include <sstream>
 
 #ifdef WIN32
@@ -490,6 +489,14 @@ CNode* FindNode(const CService& addr)
 
 CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
 {
+    // TOR-NATIVE: Reject all non-.onion addresses
+    std::string addrStr = pszDest ? std::string(pszDest) : addrConnect.ToStringIP();
+    if (addrStr.find(".onion") == std::string::npos) {
+        if (fDebug)
+            printf("ConnectNode(): REJECTED non-onion address: %s (Tor-native mode)\n", addrStr.c_str());
+        return NULL;
+    }
+
     if (pszDest == NULL) {
         if (IsLocal(addrConnect))
             return NULL;
@@ -1449,69 +1456,69 @@ void ThreadHTTPSeedFetch2(void* parg)
         seedHost = seedHost.substr(0, slashPos);
     }
 
-    printf("Fetching seed list from http://%s%s ...\n", seedHost.c_str(), seedPath.c_str());
+    printf("Fetching seed list from http://%s%s (via Tor)...\n", seedHost.c_str(), seedPath.c_str());
 
     try {
-        boost::asio::io_context io_context;
-        boost::asio::ip::tcp::resolver resolver(io_context);
+        // Connect through Tor SOCKS proxy using existing proxy-aware socket infrastructure
+        SOCKET hSocket = INVALID_SOCKET;
+        CService addrResolved;
+        std::string connectDest = seedHost + ":" + std::to_string(HTTP_PORT);
 
-        boost::system::error_code resolve_ec;
-        auto endpoints = resolver.resolve(seedHost, std::to_string(HTTP_PORT), resolve_ec);
-        if (resolve_ec) {
-            printf("HTTP seed fetch: cannot resolve %s (%s)\n", seedHost.c_str(), resolve_ec.message().c_str());
+        if (!ConnectSocketByName(addrResolved, hSocket, connectDest.c_str(), HTTP_PORT, nConnectTimeout)) {
+            printf("HTTP seed fetch: cannot connect to %s through Tor proxy\n", seedHost.c_str());
             return;
         }
 
-        boost::asio::ip::tcp::socket socket(io_context);
-        boost::asio::connect(socket, endpoints);
-
+        // Send HTTP request
         std::string request =
             "GET " + seedPath + " HTTP/1.1\r\n"
             "Host: " + seedHost + "\r\n"
             "Connection: close\r\n"
             "User-Agent: Triangles\r\n"
             "\r\n";
-        boost::asio::write(socket, boost::asio::buffer(request));
+
+        int nSent = 0;
+        int nLen = request.size();
+        while (nSent < nLen) {
+            int nBytes = send(hSocket, request.c_str() + nSent, nLen - nSent, 0);
+            if (nBytes <= 0) {
+                printf("HTTP seed fetch: send failed\n");
+                closesocket(hSocket);
+                return;
+            }
+            nSent += nBytes;
+        }
 
         // Read response
-        boost::asio::streambuf response_buf;
-        boost::asio::read_until(socket, response_buf, "\r\n\r\n");
+        std::string response;
+        char buf[4096];
+        while (true) {
+            int nBytes = recv(hSocket, buf, sizeof(buf), 0);
+            if (nBytes <= 0)
+                break;
+            response.append(buf, nBytes);
+        }
+        closesocket(hSocket);
 
-        std::istream response_stream(&response_buf);
-        std::string http_version;
-        unsigned int status_code = 0;
-        response_stream >> http_version >> status_code;
-        std::string status_message;
-        std::getline(response_stream, status_message);
-
-        if (status_code != 200) {
-            printf("HTTP seed fetch: got status %u from %s\n", status_code, seedHost.c_str());
+        if (response.empty()) {
+            printf("HTTP seed fetch: empty response from %s\n", seedHost.c_str());
             return;
         }
 
-        // Skip remaining headers
-        std::string header_line;
-        while (std::getline(response_stream, header_line) && header_line != "\r") {}
-
-        // Read body (remainder in buffer + rest from socket)
-        std::string body;
-
-        // First, grab anything already buffered past the headers
-        if (response_buf.size() > 0) {
-            std::istream body_stream(&response_buf);
-            std::ostringstream oss;
-            oss << body_stream.rdbuf();
-            body = oss.str();
+        // Parse HTTP response - find end of headers
+        size_t headerEnd = response.find("\r\n\r\n");
+        if (headerEnd == std::string::npos) {
+            printf("HTTP seed fetch: malformed response (no header terminator)\n");
+            return;
         }
 
-        // Read rest until EOF
-        boost::system::error_code ec;
-        while (boost::asio::read(socket, response_buf, boost::asio::transfer_at_least(1), ec)) {
-            std::istream s(&response_buf);
-            std::ostringstream oss;
-            oss << s.rdbuf();
-            body += oss.str();
+        // Check status code
+        if (response.substr(0, 12).find("200") == std::string::npos) {
+            printf("HTTP seed fetch: non-200 response from %s\n", seedHost.c_str());
+            return;
         }
+
+        std::string body = response.substr(headerEnd + 4);
 
         // Parse one address per line: "address:port" or just "address"
         int found = 0;
