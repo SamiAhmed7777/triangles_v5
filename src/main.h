@@ -431,7 +431,51 @@ enum GetMinFee_mode
     GMF_SEND,
 };
 
-typedef std::map<uint256, std::pair<CTxIndex, CTransaction> > MapPrevTx;
+/** A single unspent transaction output entry in the UTXO database.
+ *  Keyed by (txhash, output_index). Erased when spent.
+ */
+class CUtxoEntry
+{
+public:
+    int64_t nValue;         // output value in satoshis
+    int nHeight;            // block height where output was created
+    CScript scriptPubKey;   // output script (needed for sig verification)
+    bool fCoinBase;         // from a coinbase transaction
+    bool fCoinStake;        // from a coinstake transaction
+    unsigned int nTxTime;   // transaction timestamp (needed for PoS coin age)
+
+    CUtxoEntry()
+    {
+        SetNull();
+    }
+
+    IMPLEMENT_SERIALIZE
+    (
+        READWRITE(nValue);
+        READWRITE(nHeight);
+        READWRITE(scriptPubKey);
+        READWRITE(fCoinBase);
+        READWRITE(fCoinStake);
+        READWRITE(nTxTime);
+    )
+
+    void SetNull()
+    {
+        nValue = -1;
+        nHeight = 0;
+        scriptPubKey.clear();
+        fCoinBase = false;
+        fCoinStake = false;
+        nTxTime = 0;
+    }
+
+    bool IsNull() const
+    {
+        return (nValue == -1);
+    }
+};
+
+typedef std::map<COutPoint, CUtxoEntry> MapPrevTx;
 
 /** The basic transaction that is broadcasted on the network and contained in
  * blocks.  A transaction can contain multiple inputs and outputs.
@@ -672,32 +716,28 @@ public:
     bool ReadFromDisk(COutPoint prevout);
     bool DisconnectInputs(CTxDB& txdb);
 
-    /** Fetch from memory and/or disk. inputsRet keys are transaction hashes.
+    /** Fetch UTXO entries for all inputs from the UTXO database or mempool.
 
-     @param[in] txdb	Transaction database
-     @param[in] mapTestPool	List of pending changes to the transaction index database
-     @param[in] fBlock	True if being called to add a new best-block to the chain
-     @param[in] fMiner	True if being called by CreateNewBlock
-     @param[out] inputsRet	Pointers to this transaction's inputs
-     @param[out] fInvalid	returns true if transaction is invalid
-     @return	Returns true if all inputs are in txdb or mapTestPool
+     @param[in] txdb            Transaction database
+     @param[in] mapPendingUtxos UTXOs created by earlier transactions in the same block
+     @param[in] fBlock          True if being called to add a new best-block to the chain
+     @param[in] fMiner          True if being called by CreateNewBlock
+     @param[out] inputsRet      UTXO entries for this transaction's inputs (keyed by COutPoint)
+     @param[out] fInvalid       returns true if transaction is invalid
+     @return Returns true if all inputs are found
      */
-    bool FetchInputs(CTxDB& txdb, const std::map<uint256, CTxIndex>& mapTestPool,
+    bool FetchInputs(CTxDB& txdb, const MapPrevTx& mapPendingUtxos,
                      bool fBlock, bool fMiner, MapPrevTx& inputsRet, bool& fInvalid);
 
-    /** Sanity check previous transactions, then, if all checks succeed,
-        mark them as spent by this transaction.
+    /** Validate inputs against UTXO entries and verify signatures.
 
-        @param[in] inputs	Previous transactions (from FetchInputs)
-        @param[out] mapTestPool	Keeps track of inputs that need to be updated on disk
-        @param[in] posThisTx	Position of this transaction on disk
-        @param[in] pindexBlock
-        @param[in] fBlock	true if called from ConnectBlock
-        @param[in] fMiner	true if called from CreateNewBlock
+        @param[in] inputs       UTXO entries for inputs (from FetchInputs)
+        @param[in] pindexBlock  Block being connected
+        @param[in] fBlock       true if called from ConnectBlock
+        @param[in] fMiner       true if called from CreateNewBlock
         @return Returns true if all checks succeed
      */
-    bool ConnectInputs(CTxDB& txdb, MapPrevTx inputs,
-                       std::map<uint256, CTxIndex>& mapTestPool, const CDiskTxPos& posThisTx,
+    bool ConnectInputs(CTxDB& txdb, const MapPrevTx& inputs,
                        const CBlockIndex* pindexBlock, bool fBlock, bool fMiner);
     bool ClientConnectInputs();
     bool CheckTransaction() const;
@@ -771,9 +811,10 @@ public:
 
 
 
-/**  A txdb record that contains the disk location of a transaction and the
- * locations of transactions that spend its outputs.  vSpent is really only
- * used as a flag, but having the location is very helpful for debugging.
+/**  A txdb record that contains the disk location of a transaction.
+ *  Used for getrawtransaction and wallet position lookups.
+ *  vSpent is legacy (kept for serialization compat) — spent state is
+ *  tracked by the UTXO set (CUtxoEntry) since dbformat=3.
  */
 class CTxIndex
 {
@@ -1364,6 +1405,10 @@ public:
     uint256 hashPrev;
     uint256 hashNext;
 
+    // When true, nChainTrust is included in the on-disk serialization.
+    // Set by LoadBlockIndex based on the DB format version before deserializing.
+    static bool fSerializeChainTrust;
+
     CDiskBlockIndex()
     {
         hashPrev = 0;
@@ -1411,6 +1456,10 @@ public:
         READWRITE(nBits);
         READWRITE(nNonce);
         READWRITE(blockHash);
+
+        // DB format v2+: persist chain trust to skip expensive recalculation on startup
+        if (fSerializeChainTrust)
+            READWRITE(nChainTrust);
     )
 
     uint256 GetBlockHash() const
