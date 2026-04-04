@@ -164,6 +164,14 @@ jobs:
       - name: Install NSIS via MSYS2
         run: pacman -S --noconfirm mingw-w64-x86_64-nsis
 
+      - name: Install NSIS inetc plugin
+        shell: pwsh
+        run: |
+          $nsisDir = (msys2 -c "cygpath -w /mingw64/share/nsis")
+          Invoke-WebRequest -Uri "https://nsis.sourceforge.io/mediawiki/images/c/c9/Inetc.zip" -OutFile "$env:TEMP\Inetc.zip"
+          Expand-Archive "$env:TEMP\Inetc.zip" -DestinationPath "$env:TEMP\inetc"
+          Copy-Item "$env:TEMP\inetc\Plugins\x86-unicode\INetC.dll" "$nsisDir\Plugins\unicode\" -Force
+
       - name: Build NSIS installer
         run: makensis //DVERSION=$VERSION contrib/nsis/setup.nsi
 
