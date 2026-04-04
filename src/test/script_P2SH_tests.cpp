@@ -236,7 +236,7 @@ BOOST_AUTO_TEST_CASE(switchover)
 
 BOOST_AUTO_TEST_CASE(AreInputsStandard)
 {
-    std::map<uint256, std::pair<CTxIndex, CTransaction> > mapInputs;
+    MapPrevTx mapInputs;
     CBasicKeyStore keystore;
     CKey key[3];
     vector<CKey> keys;
@@ -273,7 +273,19 @@ BOOST_AUTO_TEST_CASE(AreInputsStandard)
     oneOfEleven << OP_11 << OP_CHECKMULTISIG;
     txFrom.vout[5].scriptPubKey.SetDestination(oneOfEleven.GetID());
 
-    mapInputs[txFrom.GetHash()] = make_pair(CTxIndex(), txFrom);
+    // Populate UTXO entries for each output of txFrom
+    uint256 hashFrom = txFrom.GetHash();
+    for (unsigned int i = 0; i < txFrom.vout.size(); i++)
+    {
+        CUtxoEntry entry;
+        entry.nValue = txFrom.vout[i].nValue;
+        entry.nHeight = 1;
+        entry.scriptPubKey = txFrom.vout[i].scriptPubKey;
+        entry.fCoinBase = false;
+        entry.fCoinStake = false;
+        entry.nTxTime = 0;
+        mapInputs[COutPoint(hashFrom, i)] = entry;
+    }
 
     CTransaction txTo;
     txTo.vout.resize(1);
