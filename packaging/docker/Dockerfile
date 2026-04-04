@@ -2,7 +2,7 @@ FROM ubuntu:22.04
 
 LABEL maintainer="Cryptographic Triangles Team"
 LABEL description="Cryptographic Triangles (TRI) headless daemon"
-LABEL version="5.3.7"
+LABEL version="5.5.5"
 
 ARG VERSION=5.3.7
 

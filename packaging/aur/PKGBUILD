@@ -1,6 +1,6 @@
 # Maintainer: Cryptographic Triangles Team
 pkgname=triangles-qt-bin
-pkgver=5.3.7
+pkgver=5.5.5
 pkgrel=1
 pkgdesc="Cryptographic Triangles (TRI) cryptocurrency wallet - Qt GUI"
 arch=('x86_64')

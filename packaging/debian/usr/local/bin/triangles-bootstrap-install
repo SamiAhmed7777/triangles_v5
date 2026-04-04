@@ -1,0 +1,87 @@
+#!/bin/bash
+# Triangles Blockchain Bootstrap Installer
+# Downloads and extracts blockchain snapshot to save sync time
+
+set -e
+
+echo "╔═══════════════════════════════════════╗"
+echo "║  Triangles Blockchain Bootstrap      ║"
+echo "╚═══════════════════════════════════════╝"
+echo ""
+
+# Determine data directory
+if [ -n "$1" ]; then
+    DATA_DIR="$1"
+elif [ -d "$HOME/.triangles" ]; then
+    DATA_DIR="$HOME/.triangles"
+else
+    DATA_DIR="$HOME/.triangles"
+    mkdir -p "$DATA_DIR"
+fi
+
+echo "Data directory: $DATA_DIR"
+echo ""
+
+# Check if triangles is running
+if pgrep -x trianglesd > /dev/null || pgrep -x triangles-qt > /dev/null; then
+    echo "⚠️  Triangles is currently running!"
+    echo "   Please stop it first:"
+    echo "   trianglesd stop  (or close triangles-qt)"
+    echo ""
+    exit 1
+fi
+
+# Check existing blockchain
+if [ -f "$DATA_DIR/blk0001.dat" ]; then
+    SIZE=$(du -sh "$DATA_DIR/blk0001.dat" | cut -f1)
+    echo "⚠️  Existing blockchain found ($SIZE)"
+    echo ""
+    read -p "   Overwrite? This will replace your current blockchain [y/N]: " CONFIRM
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+        echo "Cancelled."
+        exit 0
+    fi
+    echo ""
+fi
+
+# Download bootstrap
+BOOTSTRAP_URL="http://bootstrap.cryptographic-triangles.org/tri-blockchain.tar.gz"
+TMP_FILE="/tmp/tri-blockchain-$$.tar.gz"
+
+echo "⬇️  Downloading blockchain bootstrap (~1.3GB)..."
+echo "   This may take several minutes..."
+echo ""
+
+if ! curl -# -L --fail --connect-timeout 30 --max-time 1800 -o "$TMP_FILE" "$BOOTSTRAP_URL"; then
+    echo "❌ Download failed!"
+    echo "   URL: $BOOTSTRAP_URL"
+    rm -f "$TMP_FILE"
+    exit 1
+fi
+
+echo ""
+echo "✓ Downloaded!"
+echo ""
+
+# Extract
+echo "📦 Extracting blockchain..."
+if ! tar xzf "$TMP_FILE" -C "$DATA_DIR/"; then
+    echo "❌ Extraction failed!"
+    rm -f "$TMP_FILE"
+    exit 1
+fi
+
+rm -f "$TMP_FILE"
+
+echo "✓ Blockchain installed!"
+echo ""
+echo "╔═══════════════════════════════════════╗"
+echo "║         Bootstrap Complete!           ║"
+echo "╚═══════════════════════════════════════╝"
+echo ""
+echo "You can now start Triangles:"
+echo "  trianglesd -daemon"
+echo "  (or launch triangles-qt)"
+echo ""
+echo "The node will sync the remaining ~8,000 blocks from the network."
+echo ""
