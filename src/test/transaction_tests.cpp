@@ -152,7 +152,8 @@ BOOST_AUTO_TEST_CASE(test_GetThrow)
     t1.vout[0].nValue = 90*CENT;
     t1.vout[0].scriptPubKey << OP_1;
 
-    BOOST_CHECK_THROW(t1.AreInputsStandard(missingInputs), runtime_error);
+    // AreInputsStandard returns false for missing inputs (no longer throws)
+    BOOST_CHECK(!t1.AreInputsStandard(missingInputs));
     BOOST_CHECK_THROW(t1.GetValueIn(missingInputs), runtime_error);
 }
 

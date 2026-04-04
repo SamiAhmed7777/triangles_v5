@@ -166,6 +166,7 @@ jobs:
 
       - name: Install NSIS inetc plugin
         run: |
+          pacman -S --noconfirm unzip
           NSIS_DIR="/mingw64/share/nsis"
           cd /tmp
           curl -L -o Inetc.zip "https://nsis.sourceforge.io/mediawiki/images/c/c9/Inetc.zip"
