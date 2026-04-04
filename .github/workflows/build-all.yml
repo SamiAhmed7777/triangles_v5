@@ -171,18 +171,25 @@ jobs:
           cd /tmp
           curl -L -o Inetc.zip "https://nsis.sourceforge.io/mediawiki/images/c/c9/Inetc.zip"
           unzip -o Inetc.zip -d inetc_extract
-          # Try both common directory layouts in the zip
+          echo "=== Existing NSIS plugin dirs ==="
+          ls -la "$NSIS_DIR/Plugins/" || true
+          echo "=== Zip contents ==="
+          find inetc_extract/Plugins -name "*.dll" 2>/dev/null || true
+          # Copy all variants - NSIS will use whichever matches its architecture
+          for arch in x86-unicode x86-ansi amd64-unicode; do
+            if [ -d "inetc_extract/Plugins/$arch" ]; then
+              mkdir -p "$NSIS_DIR/Plugins/$arch"
+              cp inetc_extract/Plugins/$arch/INetC.dll "$NSIS_DIR/Plugins/$arch/"
+              echo "Installed INetC.dll to $NSIS_DIR/Plugins/$arch/"
+            fi
+          done
+          # Also copy x86-unicode to generic 'unicode' dir as fallback
           if [ -f "inetc_extract/Plugins/x86-unicode/INetC.dll" ]; then
+            mkdir -p "$NSIS_DIR/Plugins/unicode"
             cp inetc_extract/Plugins/x86-unicode/INetC.dll "$NSIS_DIR/Plugins/unicode/"
-          elif [ -f "inetc_extract/Plugins/unicode/INetC.dll" ]; then
-            cp inetc_extract/Plugins/unicode/INetC.dll "$NSIS_DIR/Plugins/unicode/"
-          else
-            echo "=== inetc zip contents ==="
-            find inetc_extract -name "*.dll" -o -name "*.DLL" | head -20
-            echo "=== Trying any INetC.dll found ==="
-            find inetc_extract -iname "inetc.dll" -exec cp {} "$NSIS_DIR/Plugins/unicode/" \;
           fi
-          ls -la "$NSIS_DIR/Plugins/unicode/" | grep -i inet || echo "WARNING: INetC.dll not found after install"
+          echo "=== Final plugin dirs ==="
+          find "$NSIS_DIR/Plugins" -name "INetC.dll" 2>/dev/null || echo "WARNING: no INetC.dll found"
 
       - name: Build NSIS installer
         run: makensis //DVERSION=$VERSION contrib/nsis/setup.nsi
