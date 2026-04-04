@@ -223,6 +223,7 @@ public:
     DBErrors LoadWallet(CWallet* pwallet);
     static bool Recover(CDBEnv& dbenv, std::string filename, bool fOnlyKeys);
     static bool Recover(CDBEnv& dbenv, std::string filename);
+    static bool ZapWalletTx(const std::string& strWalletFile);
 };
 
 #endif // TRIANGLES_WALLETDB_H

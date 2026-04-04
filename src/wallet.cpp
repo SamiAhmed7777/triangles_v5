@@ -487,7 +487,10 @@ void CWallet::WalletUpdateSpent(const CTransaction &tx, bool fBlock)
                     wtx.MarkSpent(txin.prevout.n);
                     wtx.WriteToDisk();
                     if (!IsInitialBlockDownload())
-                        NotifyTransactionChanged(this, txin.prevout.hash, CT_UPDATED);
+                    {
+                        try { NotifyTransactionChanged(this, txin.prevout.hash, CT_UPDATED); }
+                        catch (...) { }
+                    }
                 }
             }
         }
@@ -505,7 +508,10 @@ void CWallet::WalletUpdateSpent(const CTransaction &tx, bool fBlock)
                     wtx.MarkUnspent(&txout - &tx.vout[0]);
                     wtx.WriteToDisk();
                     if (!IsInitialBlockDownload())
-                        NotifyTransactionChanged(this, hash, CT_UPDATED);
+                    {
+                        try { NotifyTransactionChanged(this, hash, CT_UPDATED); }
+                        catch (...) { }
+                    }
                 }
             }
         }
@@ -638,7 +644,13 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn)
 
         // Notify UI of new or updated transaction (skip during IBD to avoid flooding the event loop)
         if (!IsInitialBlockDownload())
-            NotifyTransactionChanged(this, hash, fInsertedNew ? CT_NEW : CT_UPDATED);
+        {
+            try {
+                NotifyTransactionChanged(this, hash, fInsertedNew ? CT_NEW : CT_UPDATED);
+            } catch (...) {
+                // Absorb boost::bad_weak_ptr or other signal exceptions from stale slots
+            }
+        }
 
         // notify an external script when a wallet transaction comes in or is updated
         std::string strCmd = GetArg("-walletnotify", "");
@@ -1855,18 +1867,37 @@ bool CWallet::GetStakeWeight(const CKeyStore& keystore, uint64_t& nMinWeight, ui
     if (setCoins.empty())
         return false;
 
+    // Collect coin hashes under lock, then read DB outside the per-coin lock
+    // to avoid acquiring/releasing LOCK2 thousands of times for large wallets
+    struct StakeCoin {
+        uint256 hash;
+        int64_t nValue;
+        unsigned int nTime;
+    };
+    vector<StakeCoin> vStakeCoins;
+    {
+        LOCK(cs_wallet);
+        vStakeCoins.reserve(setCoins.size());
+        for (auto& pcoin : setCoins)
+        {
+            StakeCoin sc;
+            sc.hash = pcoin.first->GetHash();
+            sc.nValue = pcoin.first->vout[pcoin.second].nValue;
+            sc.nTime = pcoin.first->nTime;
+            vStakeCoins.push_back(sc);
+        }
+    }
+
     CTxDB txdb("r");
-    for (auto pcoin : setCoins)
+    int64_t nNow = GetTime();
+    for (auto& sc : vStakeCoins)
     {
         CTxIndex txindex;
-        {
-            LOCK2(cs_main, cs_wallet);
-            if (!txdb.ReadTxIndex(pcoin.first->GetHash(), txindex))
-                continue;
-        }
+        if (!txdb.ReadTxIndex(sc.hash, txindex))
+            continue;
 
-        int64_t nTimeWeight = GetWeight((int64_t)pcoin.first->nTime, (int64_t)GetTime());
-        CBigNum bnCoinDayWeight = CBigNum(pcoin.first->vout[pcoin.second].nValue) * nTimeWeight / COIN / (24 * 60 * 60);
+        int64_t nTimeWeight = GetWeight((int64_t)sc.nTime, nNow);
+        CBigNum bnCoinDayWeight = CBigNum(sc.nValue) * nTimeWeight / COIN / (24 * 60 * 60);
 
         // Weight is greater than zero
         if (nTimeWeight > 0)
@@ -2139,7 +2170,8 @@ bool CWallet::CommitTransaction(CWalletTx& wtxNew, CReserveKey& reservekey)
                 coin.BindWallet(this);
                 coin.MarkSpent(txin.prevout.n);
                 coin.WriteToDisk();
-                NotifyTransactionChanged(this, coin.GetHash(), CT_UPDATED);
+                try { NotifyTransactionChanged(this, coin.GetHash(), CT_UPDATED); }
+                catch (...) { }
             }
 
             if (fFileBacked)
@@ -2268,8 +2300,9 @@ bool CWallet::SetAddressBookName(const CTxDestination& address, const string& st
         const CTrianglesAddress& caddress = address;
         SecureMsgWalletKeyChanged(caddress.ToString(), strName, nMode);
     }
-    NotifyAddressBookChanged(this, address, strName, fOwned, nMode);
-    
+    try { NotifyAddressBookChanged(this, address, strName, fOwned, nMode); }
+    catch (...) { }
+
     if (!fFileBacked)
         return false;
     return CWalletDB(strWalletFile).WriteName(CTrianglesAddress(address).ToString(), strName);
@@ -2282,7 +2315,7 @@ bool CWallet::DelAddressBookName(const CTxDestination& address)
 
         mapAddressBook.erase(address);
     }
-    
+
     bool fOwned = ::IsMine(*this, address);
     string sName = "";
     if (fOwned)
@@ -2290,7 +2323,8 @@ bool CWallet::DelAddressBookName(const CTxDestination& address)
         const CTrianglesAddress& caddress = address;
         SecureMsgWalletKeyChanged(caddress.ToString(), sName, CT_DELETED);
     }
-    NotifyAddressBookChanged(this, address, "", fOwned, CT_DELETED);
+    try { NotifyAddressBookChanged(this, address, "", fOwned, CT_DELETED); }
+    catch (...) { }
 
     if (!fFileBacked)
         return false;
@@ -2768,7 +2802,10 @@ void CWallet::UpdatedTransaction(const uint256 &hashTx)
         // Only notify UI if this transaction is in this wallet
         map<uint256, CWalletTx>::const_iterator mi = mapWallet.find(hashTx);
         if (mi != mapWallet.end() && !IsInitialBlockDownload())
-            NotifyTransactionChanged(this, hashTx, CT_UPDATED);
+        {
+            try { NotifyTransactionChanged(this, hashTx, CT_UPDATED); }
+            catch (...) { }
+        }
     }
 }
 

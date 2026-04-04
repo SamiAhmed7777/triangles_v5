@@ -1635,18 +1635,35 @@ void static ThreadStakeMiner(void* parg)
 {
     printf("ThreadStakeMiner started\n");
     CWallet* pwallet = (CWallet*)parg;
-    try
+    int nConsecutiveErrors = 0;
+    while (!fShutdown)
     {
-        vnThreadsRunning[THREAD_STAKE_MINER]++;
-        StakeMiner(pwallet);
-        vnThreadsRunning[THREAD_STAKE_MINER]--;
-    }
-    catch (std::exception& e) {
-        vnThreadsRunning[THREAD_STAKE_MINER]--;
-        PrintException(&e, "ThreadStakeMiner()");
-    } catch (...) {
-        vnThreadsRunning[THREAD_STAKE_MINER]--;
-        PrintException(NULL, "ThreadStakeMiner()");
+        try
+        {
+            vnThreadsRunning[THREAD_STAKE_MINER]++;
+            StakeMiner(pwallet);
+            vnThreadsRunning[THREAD_STAKE_MINER]--;
+            break; // normal exit
+        }
+        catch (std::exception& e) {
+            vnThreadsRunning[THREAD_STAKE_MINER]--;
+            nConsecutiveErrors++;
+            printf("ThreadStakeMiner() exception: %s (attempt %d)\n", e.what(), nConsecutiveErrors);
+            if (nConsecutiveErrors >= 10) {
+                printf("ThreadStakeMiner() too many consecutive errors, giving up\n");
+                break;
+            }
+            MilliSleep(5000); // wait 5 seconds before retrying
+        } catch (...) {
+            vnThreadsRunning[THREAD_STAKE_MINER]--;
+            nConsecutiveErrors++;
+            printf("ThreadStakeMiner() unknown exception (attempt %d)\n", nConsecutiveErrors);
+            if (nConsecutiveErrors >= 10) {
+                printf("ThreadStakeMiner() too many consecutive errors, giving up\n");
+                break;
+            }
+            MilliSleep(5000);
+        }
     }
     printf("ThreadStakeMiner exiting, %d threads remaining\n", vnThreadsRunning[THREAD_STAKE_MINER]);
 }

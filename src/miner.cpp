@@ -434,7 +434,10 @@ void StakeMiner(CWallet *pwallet)
         int64_t nFees;
         unique_ptr<CBlock> pblock(CreateNewBlock(pwallet, true, &nFees));
         if (!pblock.get())
-            return;
+        {
+            MilliSleep(5000);
+            continue;
+        }
 
         // Try to sign the block
         if (pblock->SignBlock(*pwallet, nFees))

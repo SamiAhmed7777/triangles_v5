@@ -1911,7 +1911,8 @@ Value clearwallettransactions(const Array& params, bool fHelp)
                 };
                 
                 pwalletMain->mapWallet.erase(hash);
-                pwalletMain->NotifyTransactionChanged(pwalletMain, hash, CT_DELETED);
+                try { pwalletMain->NotifyTransactionChanged(pwalletMain, hash, CT_DELETED); }
+                catch (...) { }
                 
                 nTransactions++;
             };

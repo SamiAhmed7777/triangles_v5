@@ -718,3 +718,64 @@ bool CWalletDB::Recover(CDBEnv& dbenv, std::string filename)
 {
     return CWalletDB::Recover(dbenv, filename, false);
 }
+
+bool CWalletDB::ZapWalletTx(const std::string& strWalletFile)
+{
+    // Open the wallet database directly and delete all "tx" entries,
+    // keeping keys and other metadata intact. This strips transaction
+    // history while preserving private keys. A rescan will rebuild
+    // the transaction list from the blockchain.
+    printf("ZapWalletTx: erasing transaction records from %s\n", strWalletFile.c_str());
+
+    CWalletDB walletdb(strWalletFile, "r+");
+    if (!walletdb.pdb)
+    {
+        printf("ZapWalletTx: failed to open wallet database\n");
+        return false;
+    }
+
+    Dbc* pcursor = walletdb.GetCursor();
+    if (!pcursor)
+    {
+        printf("ZapWalletTx: failed to get cursor\n");
+        return false;
+    }
+
+    // First pass: collect all tx hashes to erase
+    std::vector<uint256> vTxHash;
+    CDataStream ssKey(SER_DISK, CLIENT_VERSION);
+    CDataStream ssValue(SER_DISK, CLIENT_VERSION);
+    while (true)
+    {
+        int ret = walletdb.ReadAtCursor(pcursor, ssKey, ssValue, DB_NEXT);
+        if (ret == DB_NOTFOUND)
+            break;
+        if (ret != 0)
+        {
+            printf("ZapWalletTx: cursor read error %d\n", ret);
+            pcursor->close();
+            return false;
+        }
+
+        std::string strType;
+        ssKey >> strType;
+        if (strType == "tx")
+        {
+            uint256 hash;
+            ssKey >> hash;
+            vTxHash.push_back(hash);
+        }
+    }
+    pcursor->close();
+
+    // Second pass: erase all collected tx entries
+    int nErased = 0;
+    for (const uint256& hash : vTxHash)
+    {
+        if (walletdb.EraseTx(hash))
+            nErased++;
+    }
+
+    printf("ZapWalletTx: erased %d of %d transaction records\n", nErased, (int)vTxHash.size());
+    return true;
+}
