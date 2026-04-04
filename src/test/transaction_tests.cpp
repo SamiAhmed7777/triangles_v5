@@ -61,14 +61,40 @@ SetupDummyInputs(CBasicKeyStore& keystoreRet, MapPrevTx& inputsRet)
     dummyTransactions[0].vout[0].scriptPubKey << key[0].GetPubKey() << OP_CHECKSIG;
     dummyTransactions[0].vout[1].nValue = 50*CENT;
     dummyTransactions[0].vout[1].scriptPubKey << key[1].GetPubKey() << OP_CHECKSIG;
-    inputsRet[dummyTransactions[0].GetHash()] = make_pair(CTxIndex(), dummyTransactions[0]);
+    {
+        uint256 hash0 = dummyTransactions[0].GetHash();
+        for (unsigned int i = 0; i < dummyTransactions[0].vout.size(); i++)
+        {
+            CUtxoEntry entry;
+            entry.nValue = dummyTransactions[0].vout[i].nValue;
+            entry.nHeight = 1;
+            entry.scriptPubKey = dummyTransactions[0].vout[i].scriptPubKey;
+            entry.fCoinBase = false;
+            entry.fCoinStake = false;
+            entry.nTxTime = 0;
+            inputsRet[COutPoint(hash0, i)] = entry;
+        }
+    }
 
     dummyTransactions[1].vout.resize(2);
     dummyTransactions[1].vout[0].nValue = 21*CENT;
     dummyTransactions[1].vout[0].scriptPubKey.SetDestination(key[2].GetPubKey().GetID());
     dummyTransactions[1].vout[1].nValue = 22*CENT;
     dummyTransactions[1].vout[1].scriptPubKey.SetDestination(key[3].GetPubKey().GetID());
-    inputsRet[dummyTransactions[1].GetHash()] = make_pair(CTxIndex(), dummyTransactions[1]);
+    {
+        uint256 hash1 = dummyTransactions[1].GetHash();
+        for (unsigned int i = 0; i < dummyTransactions[1].vout.size(); i++)
+        {
+            CUtxoEntry entry;
+            entry.nValue = dummyTransactions[1].vout[i].nValue;
+            entry.nHeight = 1;
+            entry.scriptPubKey = dummyTransactions[1].vout[i].scriptPubKey;
+            entry.fCoinBase = false;
+            entry.fCoinStake = false;
+            entry.nTxTime = 0;
+            inputsRet[COutPoint(hash1, i)] = entry;
+        }
+    }
 
     return dummyTransactions;
 }
