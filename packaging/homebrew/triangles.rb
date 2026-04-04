@@ -2,7 +2,7 @@ class Triangles < Formula
   desc "Cryptographic Triangles (TRI) cryptocurrency wallet and daemon"
   homepage "https://cryptographic-triangles.org"
   license "MIT"
-  version "5.3.7"
+  version "5.5.5"
 
   on_macos do
     url "https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.3.7/Cryptographic-Triangles-v5.3.7-macos-arm64.dmg"

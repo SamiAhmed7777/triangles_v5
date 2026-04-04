@@ -1,0 +1,18 @@
+#!/bin/bash
+# Post-installation script for Triangles .deb package
+
+set -e
+
+echo "════════════════════════════════════════════════════════"
+echo "  Triangles Installation Complete"
+echo "════════════════════════════════════════════════════════"
+echo ""
+echo "Optional: Download blockchain bootstrap to skip days of sync"
+echo ""
+echo "  sudo triangles-bootstrap-install"
+echo ""
+echo "This will download ~1.3GB and extract to ~/.triangles/"
+echo "════════════════════════════════════════════════════════"
+echo ""
+
+exit 0
