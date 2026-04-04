@@ -682,12 +682,15 @@ bool CTransaction::AreInputsStandard(const MapPrevTx& mapInputs) const
 
     for (unsigned int i = 0; i < vin.size(); i++)
     {
-        const CTxOut& prev = GetOutputFor(vin[i], mapInputs);
+        MapPrevTx::const_iterator mi = mapInputs.find(vin[i].prevout);
+        if (mi == mapInputs.end())
+            return false;
+        const CUtxoEntry& entry = mi->second;
 
         vector<vector<unsigned char> > vSolutions;
         txnouttype whichType;
         // get the scriptPubKey corresponding to this input:
-        const CScript& prevScript = prev.scriptPubKey;
+        const CScript& prevScript = entry.scriptPubKey;
         if (!Solver(prevScript, whichType, vSolutions))
             return false;
         int nArgsExpected = ScriptSigArgsExpected(whichType, vSolutions);
@@ -951,9 +954,9 @@ bool CTxMemPool::accept(CTxDB& txdb, CTransaction &tx, bool fCheckInputs,
     if (fCheckInputs)
     {
         MapPrevTx mapInputs;
-        map<uint256, CTxIndex> mapUnused;
+        MapPrevTx mapEmpty; // no pending UTXOs for mempool acceptance
         bool fInvalid = false;
-        if (!tx.FetchInputs(txdb, mapUnused, false, false, mapInputs, fInvalid))
+        if (!tx.FetchInputs(txdb, mapEmpty, false, false, mapInputs, fInvalid))
         {
             if (fInvalid)
                 return error("CTxMemPool::accept() : FetchInputs found invalid tx %s", hash.ToString().substr(0,10).c_str());
@@ -1007,7 +1010,7 @@ bool CTxMemPool::accept(CTxDB& txdb, CTransaction &tx, bool fCheckInputs,
 
         // Check against previous transactions
         // This is done last to help prevent CPU exhaustion denial-of-service attacks.
-        if (!tx.ConnectInputs(txdb, mapInputs, mapUnused, CDiskTxPos(1,1,1), pindexBest, false, false))
+        if (!tx.ConnectInputs(txdb, mapInputs, pindexBest, false, false))
         {
             return error("CTxMemPool::accept() : ConnectInputs failed %s", hash.ToString().substr(0,10).c_str());
         }
@@ -1529,41 +1532,16 @@ void CBlock::UpdateTime(const CBlockIndex* pindexPrev)
 
 bool CTransaction::DisconnectInputs(CTxDB& txdb)
 {
-    // Relinquish previous transactions' spent pointers
-    if (!IsCoinBase())
-    {
-        for (const CTxIn& txin : vin)
-        {
-            COutPoint prevout = txin.prevout;
-
-            // Get prev txindex from disk
-            CTxIndex txindex;
-            if (!txdb.ReadTxIndex(prevout.hash, txindex))
-                return error("DisconnectInputs() : ReadTxIndex failed");
-
-            if (prevout.n >= txindex.vSpent.size())
-                return error("DisconnectInputs() : prevout.n out of range");
-
-            // Mark outpoint as not spent
-            txindex.vSpent[prevout.n].SetNull();
-
-            // Write back
-            if (!txdb.UpdateTxIndex(prevout.hash, txindex))
-                return error("DisconnectInputs() : UpdateTxIndex failed");
-        }
-    }
-
-    // Remove transaction from index
-    // This can fail if a duplicate of this transaction was in a chain that got
-    // reorganized away. This is only possible if this transaction was completely
-    // spent, so erasing it would be a no-op anyway.
+    // Remove transaction position index entry.
+    // UTXO undo (restoring spent outputs, removing created outputs) is
+    // handled by DisconnectBlock's UTXO section.
     txdb.EraseTxIndex(*this);
 
     return true;
 }
 
 
-bool CTransaction::FetchInputs(CTxDB& txdb, const map<uint256, CTxIndex>& mapTestPool,
+bool CTransaction::FetchInputs(CTxDB& txdb, const MapPrevTx& mapPendingUtxos,
                                bool fBlock, bool fMiner, MapPrevTx& inputsRet, bool& fInvalid)
 {
     // FetchInputs can return false either because we just haven't seen some inputs
@@ -1578,61 +1556,96 @@ bool CTransaction::FetchInputs(CTxDB& txdb, const map<uint256, CTxIndex>& mapTes
     for (unsigned int i = 0; i < vin.size(); i++)
     {
         COutPoint prevout = vin[i].prevout;
-        if (inputsRet.count(prevout.hash))
+        if (inputsRet.count(prevout))
             continue; // Got it already
 
-        // Read txindex
-        CTxIndex& txindex = inputsRet[prevout.hash].first;
-        bool fFound = true;
-        if ((fBlock || fMiner) && mapTestPool.count(prevout.hash))
+        // Check pending UTXOs from earlier transactions in the same block
+        MapPrevTx::const_iterator mi = mapPendingUtxos.find(prevout);
+        if (mi != mapPendingUtxos.end())
         {
-            // Get txindex from current proposed changes
-            txindex = mapTestPool.find(prevout.hash)->second;
+            inputsRet[prevout] = mi->second;
+            continue;
         }
-        else
-        {
-            // Read txindex from txdb
-            fFound = txdb.ReadTxIndex(prevout.hash, txindex);
-        }
-        if (!fFound && (fBlock || fMiner))
-            return fMiner ? false : error("FetchInputs() : %s prev tx %s index entry not found", GetHash().ToString().substr(0,10).c_str(),  prevout.hash.ToString().substr(0,10).c_str());
 
-        // Read txPrev
-        CTransaction& txPrev = inputsRet[prevout.hash].second;
-        if (!fFound || txindex.pos == CDiskTxPos(1,1,1))
+        // Read from UTXO database
+        CUtxoEntry entry;
+        if (txdb.ReadUtxo(prevout.hash, prevout.n, entry))
         {
-            // Get prev tx from single transactions in memory
+            inputsRet[prevout] = entry;
+            continue;
+        }
+
+        // Lazy fallback: try old CTxIndex path (for databases upgrading from pre-UTXO format)
+        {
+            CTxIndex txindex;
+            if (txdb.ReadTxIndex(prevout.hash, txindex))
             {
-                LOCK(mempool.cs);
-                if (!mempool.exists(prevout.hash))
-                    return error("FetchInputs() : %s mempool Tx prev not found %s", GetHash().ToString().substr(0,10).c_str(),  prevout.hash.ToString().substr(0,10).c_str());
-                txPrev = mempool.lookup(prevout.hash);
-            }
-            if (!fFound)
-                txindex.vSpent.resize(txPrev.vout.size());
-        }
-        else
-        {
-            // Get prev tx from disk
-            if (!txPrev.ReadFromDisk(txindex.pos))
-                return error("FetchInputs() : %s ReadFromDisk prev tx %s failed", GetHash().ToString().substr(0,10).c_str(),  prevout.hash.ToString().substr(0,10).c_str());
-        }
-    }
+                CTransaction txPrev;
+                if (txPrev.ReadFromDisk(txindex.pos))
+                {
+                    if (prevout.n < txPrev.vout.size())
+                    {
+                        CUtxoEntry backfill;
+                        backfill.nValue = txPrev.vout[prevout.n].nValue;
+                        backfill.scriptPubKey = txPrev.vout[prevout.n].scriptPubKey;
+                        backfill.fCoinBase = txPrev.IsCoinBase();
+                        backfill.fCoinStake = txPrev.IsCoinStake();
+                        backfill.nTxTime = txPrev.nTime;
+                        backfill.nHeight = 0; // conservative default
 
-    // Make sure all prevout.n indexes are valid:
-    for (unsigned int i = 0; i < vin.size(); i++)
-    {
-        const COutPoint prevout = vin[i].prevout;
-        assert(inputsRet.count(prevout.hash) != 0);
-        const CTxIndex& txindex = inputsRet[prevout.hash].first;
-        const CTransaction& txPrev = inputsRet[prevout.hash].second;
-        if (prevout.n >= txPrev.vout.size() || prevout.n >= txindex.vSpent.size())
-        {
-            // Revisit this if/when transaction replacement is implemented and allows
-            // adding inputs:
-            fInvalid = true;
-            return DoS(100, error("FetchInputs() : %s prevout.n out of range %d %" PRIszu " %" PRIszu " prev tx %s\n%s", GetHash().ToString().substr(0,10).c_str(), prevout.n, txPrev.vout.size(), txindex.vSpent.size(), prevout.hash.ToString().substr(0,10).c_str(), txPrev.ToString().c_str()));
+                        // Try to recover exact block height from block index
+                        CBlock blockHeader;
+                        if (blockHeader.ReadFromDisk(txindex.pos.nFile, txindex.pos.nBlockPos, false))
+                        {
+                            std::map<uint256, CBlockIndex*>::iterator bmi = mapBlockIndex.find(blockHeader.GetHash());
+                            if (bmi != mapBlockIndex.end())
+                                backfill.nHeight = bmi->second->nHeight;
+                        }
+
+                        // Check if this output was already spent (vSpent in old format)
+                        if (prevout.n < txindex.vSpent.size() && !txindex.vSpent[prevout.n].IsNull())
+                        {
+                            // Already spent — don't return it as available
+                        }
+                        else
+                        {
+                            // Backfill to UTXO DB for future lookups
+                            txdb.WriteUtxo(prevout.hash, prevout.n, backfill);
+                            inputsRet[prevout] = backfill;
+                            continue;
+                        }
+                    }
+                }
+            }
         }
+
+        // Not in UTXO DB or old index — check mempool
+        {
+            LOCK(mempool.cs);
+            if (mempool.exists(prevout.hash))
+            {
+                const CTransaction& txPrev = mempool.lookup(prevout.hash);
+                if (prevout.n < txPrev.vout.size())
+                {
+                    CUtxoEntry mempoolEntry;
+                    mempoolEntry.nValue = txPrev.vout[prevout.n].nValue;
+                    mempoolEntry.nHeight = 0; // not yet in a block
+                    mempoolEntry.scriptPubKey = txPrev.vout[prevout.n].scriptPubKey;
+                    mempoolEntry.fCoinBase = txPrev.IsCoinBase();
+                    mempoolEntry.fCoinStake = txPrev.IsCoinStake();
+                    mempoolEntry.nTxTime = txPrev.nTime;
+                    inputsRet[prevout] = mempoolEntry;
+                    continue;
+                }
+            }
+        }
+
+        // Input not found anywhere
+        if (fBlock || fMiner)
+            return fMiner ? false : error("FetchInputs() : %s prev output %s:%d not found", GetHash().ToString().substr(0,10).c_str(), prevout.hash.ToString().substr(0,10).c_str(), prevout.n);
+
+        // For orphan detection in AcceptToMemoryPool
+        return false;
     }
 
     return true;
@@ -1640,15 +1653,11 @@ bool CTransaction::FetchInputs(CTxDB& txdb, const map<uint256, CTxIndex>& mapTes
 
 const CTxOut& CTransaction::GetOutputFor(const CTxIn& input, const MapPrevTx& inputs) const
 {
-    MapPrevTx::const_iterator mi = inputs.find(input.prevout.hash);
-    if (mi == inputs.end())
-        throw std::runtime_error("CTransaction::GetOutputFor() : prevout.hash not found");
-
-    const CTransaction& txPrev = (mi->second).second;
-    if (input.prevout.n >= txPrev.vout.size())
-        throw std::runtime_error("CTransaction::GetOutputFor() : prevout.n out of range");
-
-    return txPrev.vout[input.prevout.n];
+    // Legacy adapter: constructs a temporary CTxOut from CUtxoEntry.
+    // Only used by AreInputsStandard which needs a CTxOut reference.
+    (void)input;
+    (void)inputs;
+    throw std::runtime_error("CTransaction::GetOutputFor() : use UTXO entries directly");
 }
 
 int64_t CTransaction::GetValueIn(const MapPrevTx& inputs) const
@@ -1659,10 +1668,12 @@ int64_t CTransaction::GetValueIn(const MapPrevTx& inputs) const
     int64_t nResult = 0;
     for (unsigned int i = 0; i < vin.size(); i++)
     {
-        nResult += GetOutputFor(vin[i], inputs).nValue;
+        MapPrevTx::const_iterator mi = inputs.find(vin[i].prevout);
+        if (mi == inputs.end())
+            throw std::runtime_error("CTransaction::GetValueIn() : input not found");
+        nResult += mi->second.nValue;
     }
     return nResult;
-
 }
 
 unsigned int CTransaction::GetP2SHSigOpCount(const MapPrevTx& inputs) const
@@ -1673,20 +1684,22 @@ unsigned int CTransaction::GetP2SHSigOpCount(const MapPrevTx& inputs) const
     unsigned int nSigOps = 0;
     for (unsigned int i = 0; i < vin.size(); i++)
     {
-        const CTxOut& prevout = GetOutputFor(vin[i], inputs);
-        if (prevout.scriptPubKey.IsPayToScriptHash())
-            nSigOps += prevout.scriptPubKey.GetSigOpCount(vin[i].scriptSig);
+        MapPrevTx::const_iterator mi = inputs.find(vin[i].prevout);
+        if (mi == inputs.end())
+            continue;
+        const CScript& scriptPubKey = mi->second.scriptPubKey;
+        if (scriptPubKey.IsPayToScriptHash())
+            nSigOps += scriptPubKey.GetSigOpCount(vin[i].scriptSig);
     }
     return nSigOps;
 }
 
-bool CTransaction::ConnectInputs(CTxDB& txdb, MapPrevTx inputs, map<uint256, CTxIndex>& mapTestPool, const CDiskTxPos& posThisTx,
+bool CTransaction::ConnectInputs(CTxDB& txdb, const MapPrevTx& inputs,
     const CBlockIndex* pindexBlock, bool fBlock, bool fMiner)
 {
-    // Take over previous transactions' spent pointers
-    // fBlock is true when this is called from AcceptBlock when a new best-block is added to the blockchain
-    // fMiner is true when called from the internal triangles miner
-    // ... both are false when called from CTransaction::AcceptToMemoryPool
+    // Validate inputs against UTXO entries and verify signatures.
+    // Double-spend is impossible here: FetchInputs only returns entries that exist
+    // in the UTXO DB (unspent) or mapPendingUtxos (created earlier in this block).
     if (!IsCoinBase())
     {
         int64_t nValueIn = 0;
@@ -1694,64 +1707,44 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, MapPrevTx inputs, map<uint256, CTx
         for (unsigned int i = 0; i < vin.size(); i++)
         {
             COutPoint prevout = vin[i].prevout;
-            assert(inputs.count(prevout.hash) > 0);
-            CTxIndex& txindex = inputs[prevout.hash].first;
-            CTransaction& txPrev = inputs[prevout.hash].second;
-
-            if (prevout.n >= txPrev.vout.size() || prevout.n >= txindex.vSpent.size())
-                return DoS(100, error("ConnectInputs() : %s prevout.n out of range %d %" PRIszu " %" PRIszu " prev tx %s\n%s", GetHash().ToString().substr(0,10).c_str(), prevout.n, txPrev.vout.size(), txindex.vSpent.size(), prevout.hash.ToString().substr(0,10).c_str(), txPrev.ToString().c_str()));
+            MapPrevTx::const_iterator mi = inputs.find(prevout);
+            if (mi == inputs.end())
+                return DoS(100, error("ConnectInputs() : %s input %s:%d not found", GetHash().ToString().substr(0,10).c_str(), prevout.hash.ToString().substr(0,10).c_str(), prevout.n));
+            const CUtxoEntry& entry = mi->second;
 
             // If prev is coinbase or coinstake, check that it's matured
-            if (txPrev.IsCoinBase() || txPrev.IsCoinStake())
-                for (const CBlockIndex* pindex = pindexBlock; pindex && pindexBlock->nHeight - pindex->nHeight < nCoinbaseMaturity; pindex = pindex->pprev)
-                    if (pindex->nBlockPos == txindex.pos.nBlockPos && pindex->nFile == txindex.pos.nFile)
-                        return error("ConnectInputs() : tried to spend %s at depth %d", txPrev.IsCoinBase() ? "coinbase" : "coinstake", pindexBlock->nHeight - pindex->nHeight);
+            if (entry.fCoinBase || entry.fCoinStake)
+            {
+                if (pindexBlock->nHeight - entry.nHeight < nCoinbaseMaturity)
+                    return error("ConnectInputs() : tried to spend %s at depth %d", entry.fCoinBase ? "coinbase" : "coinstake", pindexBlock->nHeight - entry.nHeight);
+            }
 
             // triangles: check transaction timestamp
-            if (txPrev.nTime > nTime)
+            if (entry.nTxTime > nTime)
                 return DoS(100, error("ConnectInputs() : transaction timestamp earlier than input transaction"));
 
             // Check for negative or overflow input values
-            nValueIn += txPrev.vout[prevout.n].nValue;
-            if (!MoneyRange(txPrev.vout[prevout.n].nValue) || !MoneyRange(nValueIn))
+            nValueIn += entry.nValue;
+            if (!MoneyRange(entry.nValue) || !MoneyRange(nValueIn))
                 return DoS(100, error("ConnectInputs() : txin values out of range"));
-
         }
+
         // The first loop above does all the inexpensive checks.
         // Only if ALL inputs pass do we perform expensive ECDSA signature checks.
         // Helps prevent CPU exhaustion attacks.
         for (unsigned int i = 0; i < vin.size(); i++)
         {
             COutPoint prevout = vin[i].prevout;
-            assert(inputs.count(prevout.hash) > 0);
-            CTxIndex& txindex = inputs[prevout.hash].first;
-            CTransaction& txPrev = inputs[prevout.hash].second;
-
-            // Check for conflicts (double-spend)
-            // This doesn't trigger the DoS code on purpose; if it did, it would make it easier
-            // for an attacker to attempt to split the network.
-            if (!txindex.vSpent[prevout.n].IsNull())
-                return fMiner ? false : error("ConnectInputs() : %s prev tx already used at %s", GetHash().ToString().substr(0,10).c_str(), txindex.vSpent[prevout.n].ToString().c_str());
+            const CUtxoEntry& entry = inputs.find(prevout)->second;
 
             // Skip ECDSA signature verification when connecting blocks (fBlock=true)
             // before the last blockchain checkpoint. This is safe because block merkle hashes are
             // still computed and checked, and any change will be caught at the next checkpoint.
             if (!(fBlock && (nBestHeight < Checkpoints::GetTotalBlocksEstimate())))
             {
-                // Verify signature
-                if (!VerifySignature(txPrev, *this, i, 0))
-                {
-                    return DoS(100,error("ConnectInputs() : %s VerifySignature failed", GetHash().ToString().substr(0,10).c_str()));
-                }
-            }
-
-            // Mark outpoints as spent
-            txindex.vSpent[prevout.n] = posThisTx;
-
-            // Write back
-            if (fBlock || fMiner)
-            {
-                mapTestPool[prevout.hash] = txindex;
+                // Verify signature using scriptPubKey from UTXO entry
+                if (!VerifyScript(vin[i].scriptSig, entry.scriptPubKey, *this, i, 0))
+                    return DoS(100, error("ConnectInputs() : %s VerifySignature failed", GetHash().ToString().substr(0,10).c_str()));
             }
         }
 
@@ -1862,6 +1855,45 @@ bool CBlock::DisconnectBlock(CTxDB& txdb, CBlockIndex* pindex)
         if (!vtx[i].DisconnectInputs(txdb))
             return false;
 
+    // Undo UTXO entries for this block (reverse of ConnectBlock's UTXO writes)
+    for (int i = (int)vtx.size()-1; i >= 0; i--)
+    {
+        const CTransaction& tx = vtx[i];
+        uint256 txhash = tx.GetHash();
+
+        // Erase outputs this block created
+        for (unsigned int k = 0; k < tx.vout.size(); k++)
+        {
+            if (!tx.vout[k].IsEmpty())
+                txdb.EraseUtxo(txhash, k);
+        }
+
+        // Restore inputs this block spent (read prev tx from disk to rebuild UTXO entry)
+        if (!tx.IsCoinBase())
+        {
+            for (const CTxIn& txin : tx.vin)
+            {
+                CTransaction txPrev;
+                CTxIndex txindex;
+                if (txdb.ReadDiskTx(txin.prevout.hash, txPrev, txindex))
+                {
+                    if (txin.prevout.n < txPrev.vout.size())
+                    {
+                        const CTxOut& prevout = txPrev.vout[txin.prevout.n];
+                        CUtxoEntry utxo;
+                        utxo.nValue = prevout.nValue;
+                        utxo.nHeight = 0; // approximation; exact height not critical for restored UTXOs
+                        utxo.scriptPubKey = prevout.scriptPubKey;
+                        utxo.fCoinBase = txPrev.IsCoinBase();
+                        utxo.fCoinStake = txPrev.IsCoinStake();
+                        utxo.nTxTime = txPrev.nTime;
+                        txdb.WriteUtxo(txin.prevout.hash, txin.prevout.n, utxo);
+                    }
+                }
+            }
+        }
+    }
+
     // Undo address index entries for this block
     if (fAddressIndex)
     {
@@ -1966,7 +1998,8 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
     else
         nTxPos = pindex->nBlockPos + ::GetSerializeSize(CBlock(), SER_DISK, CLIENT_VERSION) - (2 * GetSizeOfCompactSize(0)) + GetSizeOfCompactSize(vtx.size());
 
-    map<uint256, CTxIndex> mapQueuedChanges;
+    map<uint256, CTxIndex> mapQueuedChanges;  // tx position index (for getrawtransaction)
+    MapPrevTx mapPendingUtxos;                // in-block UTXO tracking
     int64_t nFees = 0;
     int64_t nValueIn = 0;
     int64_t nValueOut = 0;
@@ -1980,33 +2013,43 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
         if (!fJustCheck)
             nTxPos += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
 
-        // Fast path: below checkpoint, skip all input validation and spent-tracking.
-        // Just record where each transaction lives on disk (txindex).
+        // Record tx position for getrawtransaction (both fast and full paths)
+        mapQueuedChanges[hashTx] = CTxIndex(posThisTx, tx.vout.size());
+
+        // Fast path: below checkpoint, skip all input validation.
+        // Track pending UTXOs so later txs in the same block can find inputs.
         if (fAssumeValid)
         {
-            mapQueuedChanges[hashTx] = CTxIndex(posThisTx, tx.vout.size());
+            // Add outputs to pending UTXOs
+            for (unsigned int k = 0; k < tx.vout.size(); k++)
+            {
+                if (!tx.vout[k].IsEmpty())
+                {
+                    CUtxoEntry entry;
+                    entry.nValue = tx.vout[k].nValue;
+                    entry.nHeight = pindex->nHeight;
+                    entry.scriptPubKey = tx.vout[k].scriptPubKey;
+                    entry.fCoinBase = tx.IsCoinBase();
+                    entry.fCoinStake = tx.IsCoinStake();
+                    entry.nTxTime = tx.nTime;
+                    mapPendingUtxos[COutPoint(hashTx, k)] = entry;
+                }
+            }
+            // Remove spent inputs from pending UTXOs
+            if (!tx.IsCoinBase())
+                for (const CTxIn& txin : tx.vin)
+                    mapPendingUtxos.erase(txin.prevout);
             continue;
         }
 
         // Full validation path (above checkpoint)
 
-        // Do not allow blocks that contain transactions which 'overwrite' older transactions,
-        // unless those are already completely spent.
-        // If such overwrites are allowed, coinbases and transactions depending upon those
-        // can be duplicated to remove the ability to spend the first instance -- even after
-        // being sent to another address.
-        // See BIP30 and http://r6.ca/blog/20120206T005236Z.html for more information.
-        // This logic is not necessary for memory pool transactions, as AcceptToMemoryPool
-        // already refuses previously-known transaction ids entirely.
-        // This rule was originally applied all blocks whose timestamp was after March 15, 2012, 0:00 UTC.
-        // Now that the whole chain is irreversibly beyond that time it is applied to all blocks except the
-        // two in the chain that violate it. This prevents exploiting the issue against nodes in their
-        // initial block download.
-        CTxIndex txindexOld;
-        if (txdb.ReadTxIndex(hashTx, txindexOld)) {
-            for (CDiskTxPos &pos : txindexOld.vSpent)
-                if (pos.IsNull())
-                    return false;
+        // BIP30: check for duplicate transaction with unspent outputs.
+        // With UTXO model, if any output of this txid exists in the UTXO DB, it's a duplicate.
+        for (unsigned int k = 0; k < tx.vout.size(); k++)
+        {
+            if (!tx.vout[k].IsEmpty() && txdb.HaveUtxo(hashTx, k))
+                return false;
         }
 
         nSigOps += tx.GetLegacySigOpCount();
@@ -2019,7 +2062,7 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
         else
         {
             bool fInvalid;
-            if (!tx.FetchInputs(txdb, mapQueuedChanges, true, false, mapInputs, fInvalid))
+            if (!tx.FetchInputs(txdb, mapPendingUtxos, true, false, mapInputs, fInvalid))
                 return false;
 
             // Add in sigops done by pay-to-script-hash inputs;
@@ -2038,11 +2081,29 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
             if (tx.IsCoinStake())
                 nStakeReward = nTxValueOut - nTxValueIn;
 
-            if (!tx.ConnectInputs(txdb, mapInputs, mapQueuedChanges, posThisTx, pindex, true, false))
+            if (!tx.ConnectInputs(txdb, mapInputs, pindex, true, false))
                 return false;
         }
 
-        mapQueuedChanges[hashTx] = CTxIndex(posThisTx, tx.vout.size());
+        // Add this tx's outputs to pending UTXOs for later txs in the block
+        for (unsigned int k = 0; k < tx.vout.size(); k++)
+        {
+            if (!tx.vout[k].IsEmpty())
+            {
+                CUtxoEntry entry;
+                entry.nValue = tx.vout[k].nValue;
+                entry.nHeight = pindex->nHeight;
+                entry.scriptPubKey = tx.vout[k].scriptPubKey;
+                entry.fCoinBase = tx.IsCoinBase();
+                entry.fCoinStake = tx.IsCoinStake();
+                entry.nTxTime = tx.nTime;
+                mapPendingUtxos[COutPoint(hashTx, k)] = entry;
+            }
+        }
+        // Remove spent inputs from pending UTXOs
+        if (!tx.IsCoinBase())
+            for (const CTxIn& txin : tx.vin)
+                mapPendingUtxos.erase(txin.prevout);
     }
 
     if (!fAssumeValid)
@@ -2084,6 +2145,42 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
     {
         if (!txdb.UpdateTxIndex((*mi).first, (*mi).second))
             return error("ConnectBlock() : UpdateTxIndex failed");
+    }
+
+    // Write UTXO database entries: add new outputs, erase spent inputs.
+    // Runs for both fAssumeValid (fast) and full validation paths.
+    for (unsigned int i = 0; i < vtx.size(); i++)
+    {
+        const CTransaction& tx = vtx[i];
+        uint256 hashTx = tx.GetHash();
+
+        // Add new outputs to UTXO set
+        for (unsigned int k = 0; k < tx.vout.size(); k++)
+        {
+            const CTxOut& txout = tx.vout[k];
+            if (txout.IsEmpty())
+                continue;
+
+            CUtxoEntry utxo;
+            utxo.nValue = txout.nValue;
+            utxo.nHeight = pindex->nHeight;
+            utxo.scriptPubKey = txout.scriptPubKey;
+            utxo.fCoinBase = tx.IsCoinBase();
+            utxo.fCoinStake = tx.IsCoinStake();
+            utxo.nTxTime = tx.nTime;
+            if (!txdb.WriteUtxo(hashTx, k, utxo))
+                return error("ConnectBlock() : WriteUtxo failed");
+        }
+
+        // Erase spent inputs from UTXO set
+        if (!tx.IsCoinBase())
+        {
+            for (const CTxIn& txin : tx.vin)
+            {
+                if (!txdb.EraseUtxo(txin.prevout.hash, txin.prevout.n))
+                    return error("ConnectBlock() : EraseUtxo failed");
+            }
+        }
     }
 
     // Update address index
@@ -2387,11 +2484,22 @@ bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
 
     // Log every 5000 blocks during sync, every block once caught up
     if (nBestHeight % 5000 == 0 || !IsInitialBlockDownload())
-        printf("SetBestChain: new best=%s  height=%d  trust=%s  blocktrust=%" PRId64 "  date=%s\n",
+    {
+        static int64_t nLastLogTime = 0;
+        static int nLastLogHeight = 0;
+        int64_t nNow = GetTimeMillis();
+        double dRate = 0;
+        if (nLastLogTime > 0 && nNow > nLastLogTime)
+            dRate = (double)(nBestHeight - nLastLogHeight) * 1000.0 / (double)(nNow - nLastLogTime);
+        printf("SetBestChain: new best=%s  height=%d  trust=%s  blocktrust=%" PRId64 "  date=%s  %.1f blk/s\n",
           hashBestChain.ToString().substr(0,20).c_str(), nBestHeight,
           CBigNum(nBestChainTrust).ToString().c_str(),
           nBestBlockTrust.Get64(),
-          DateTimeStrFormat("%x %H:%M:%S", pindexBest->GetBlockTime()).c_str());
+          DateTimeStrFormat("%x %H:%M:%S", pindexBest->GetBlockTime()).c_str(),
+          dRate);
+        nLastLogTime = nNow;
+        nLastLogHeight = nBestHeight;
+    }
 
     if (fDebug)
 		printf("Stake checkpoint: %x\n", pindexBest->nStakeModifierChecksum);
@@ -2491,26 +2599,47 @@ bool CTransaction::GetCoinAge(CTxDB& txdb, uint64_t& nCoinAge) const
 
     for (const CTxIn& txin : vin)
     {
-        // First try finding the previous transaction in database
-        CTransaction txPrev;
-        CTxIndex txindex;
-        if (!txPrev.ReadFromDisk(txdb, txin.prevout, txindex))
-            continue;  // previous transaction not in main chain
-        if (nTime < txPrev.nTime)
+        // Look up the UTXO entry for this input
+        CUtxoEntry utxo;
+        if (!txdb.ReadUtxo(txin.prevout.hash, txin.prevout.n, utxo))
+        {
+            // Lazy fallback: try old CTxIndex path
+            CTxIndex txindexFallback;
+            if (!txdb.ReadTxIndex(txin.prevout.hash, txindexFallback))
+                continue;
+            CTransaction txPrev;
+            if (!txPrev.ReadFromDisk(txindexFallback.pos))
+                continue;
+            if (txin.prevout.n >= txPrev.vout.size())
+                continue;
+
+            utxo.nValue = txPrev.vout[txin.prevout.n].nValue;
+            utxo.scriptPubKey = txPrev.vout[txin.prevout.n].scriptPubKey;
+            utxo.fCoinBase = txPrev.IsCoinBase();
+            utxo.fCoinStake = txPrev.IsCoinStake();
+            utxo.nTxTime = txPrev.nTime;
+            utxo.nHeight = 0;
+        }
+
+        if (nTime < utxo.nTxTime)
             return false;  // Transaction timestamp violation
 
-        // Read block header
+        // Read block header to check min age.
+        // Use the tx position index to find the block file/position.
+        CTxIndex txindex;
+        if (!txdb.ReadTxIndex(txin.prevout.hash, txindex))
+            continue;
         CBlock block;
         if (!block.ReadFromDisk(txindex.pos.nFile, txindex.pos.nBlockPos, false))
             return false; // unable to read block of previous transaction
         if (block.GetBlockTime() + nStakeMinAge > nTime)
             continue; // only count coins meeting min age requirement
 
-        int64_t nValueIn = txPrev.vout[txin.prevout.n].nValue;
-        bnCentSecond += CBigNum(nValueIn) * (nTime-txPrev.nTime) / CENT;
+        int64_t nValueIn = utxo.nValue;
+        bnCentSecond += CBigNum(nValueIn) * (nTime - utxo.nTxTime) / CENT;
 
         if (fDebug && GetBoolArg("-printcoinage"))
-            printf("coin age nValueIn=%" PRId64 " nTimeDiff=%d bnCentSecond=%s\n", nValueIn, nTime - txPrev.nTime, bnCentSecond.ToString().c_str());
+            printf("coin age nValueIn=%" PRId64 " nTimeDiff=%d bnCentSecond=%s\n", nValueIn, nTime - utxo.nTxTime, bnCentSecond.ToString().c_str());
     }
 
     CBigNum bnCoinDay = bnCentSecond * CENT / (24 * 60 * 60);
@@ -3579,15 +3708,37 @@ bool FastImportBlockFile()
             // Write block index to batch
             txdb.WriteBlockIndex(CDiskBlockIndex(pindexNew));
 
-            // Build tx index entries
+            // Build tx index + UTXO entries
             unsigned int nTxPos = nBlockPos + ::GetSerializeSize(CBlock(), SER_DISK, CLIENT_VERSION)
                                 - (2 * GetSizeOfCompactSize(0)) + GetSizeOfCompactSize(block.vtx.size());
             for (unsigned int i = 0; i < block.vtx.size(); i++)
             {
                 const CTransaction& tx = block.vtx[i];
+                uint256 hashTx = tx.GetHash();
                 CDiskTxPos posThisTx(1, nBlockPos, nTxPos);
-                txdb.UpdateTxIndex(tx.GetHash(), CTxIndex(posThisTx, tx.vout.size()));
+                txdb.UpdateTxIndex(hashTx, CTxIndex(posThisTx, tx.vout.size()));
                 nTxPos += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
+
+                // UTXO entries
+                if (!tx.IsCoinBase())
+                {
+                    for (const CTxIn& txin : tx.vin)
+                        txdb.EraseUtxo(txin.prevout.hash, txin.prevout.n);
+                }
+                for (unsigned int k = 0; k < tx.vout.size(); k++)
+                {
+                    if (!tx.vout[k].IsEmpty())
+                    {
+                        CUtxoEntry utxo;
+                        utxo.nValue = tx.vout[k].nValue;
+                        utxo.nHeight = pindexNew->nHeight;
+                        utxo.scriptPubKey = tx.vout[k].scriptPubKey;
+                        utxo.fCoinBase = tx.IsCoinBase();
+                        utxo.fCoinStake = tx.IsCoinStake();
+                        utxo.nTxTime = tx.nTime;
+                        txdb.WriteUtxo(hashTx, k, utxo);
+                    }
+                }
             }
 
             // Update best chain

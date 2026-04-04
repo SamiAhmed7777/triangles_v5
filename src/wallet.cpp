@@ -1103,43 +1103,27 @@ bool CWallet::ScanForWalletTransactionsFromIndex(CBlockIndex* pindexStart, bool 
             wtx = (*mi).second;
         }
 
-        CTxIndex txindex;
-        if (!txdb.ReadTxIndex(hashTx, txindex))
+        // Check UTXO existence to update spent status.
+        // Spending transactions are discovered through block scanning.
+        if (!txdb.ContainsTx(hashTx))
             continue;
-        if (txindex.vSpent.size() != wtx.vout.size())
-        {
-            printf("ERROR: ScanForWalletTransactionsFromIndex() : txindex.vSpent.size() %"PRIszu" != wtx.vout.size() %"PRIszu" for %s\n",
-                   txindex.vSpent.size(), wtx.vout.size(), hashTx.ToString().c_str());
-            continue;
-        }
 
-        for (unsigned int i = 0; i < txindex.vSpent.size(); i++)
+        for (unsigned int i = 0; i < wtx.vout.size(); i++)
         {
-            if (txindex.vSpent[i].IsNull() || !IsMine(wtx.vout[i]))
+            if (!IsMine(wtx.vout[i]))
                 continue;
-
-            CTransaction txSpend;
-            CTxIndex txindexSpend;
-            int nSpendHeight = 0;
-            if (!ReadIndexedWalletTransaction(txdb, txindex.vSpent[i], txSpend, txindexSpend, nSpendHeight))
-                return false;
-
-            bool fSpendExists = false;
+            // If UTXO doesn't exist, the output was spent
+            if (!txdb.HaveUtxo(hashTx, i))
             {
                 LOCK(cs_wallet);
-                fSpendExists = mapWallet.count(txSpend.GetHash()) > 0;
+                if (!wtx.IsSpent(i))
+                {
+                    CWalletTx& wtxMutable = mapWallet[hashTx];
+                    wtxMutable.MarkSpent(i);
+                    wtxMutable.WriteToDisk();
+                    nFound++;
+                }
             }
-            if (fSpendExists && !fUpdate)
-                continue;
-
-            CWalletTx wtxSpend(this, txSpend);
-            wtxSpend.SetMerkleBranch();
-            if (!AddToWallet(wtxSpend))
-                return false;
-            nFound++;
-
-            if (setQueuedTxs.insert(txSpend.GetHash()).second)
-                vWorkQueue.push_back(txSpend.GetHash());
         }
     }
 
@@ -1181,25 +1165,20 @@ void CWallet::ReacceptWalletTransactions()
                 if ((wtx.IsCoinBase() && wtx.IsSpent(0)) || (wtx.IsCoinStake() && wtx.IsSpent(1)))
                     continue;
 
-                CTxIndex txindex;
+                uint256 hashTx = wtx.GetHash();
                 bool fUpdated = false;
-                if (txdb.ReadTxIndex(wtx.GetHash(), txindex))
+                // Check UTXO database for spent status of our outputs
+                if (txdb.ContainsTx(hashTx))
                 {
-                    // Update fSpent if a tx got spent somewhere else by a copy of wallet.dat
-                    if (txindex.vSpent.size() != wtx.vout.size())
-                    {
-                        printf("ERROR: ReacceptWalletTransactions() : txindex.vSpent.size() %"PRIszu" != wtx.vout.size() %"PRIszu"\n", txindex.vSpent.size(), wtx.vout.size());
-                        continue;
-                    }
-                    for (unsigned int i = 0; i < txindex.vSpent.size(); i++)
+                    for (unsigned int i = 0; i < wtx.vout.size(); i++)
                     {
                         if (wtx.IsSpent(i))
                             continue;
-                        if (!txindex.vSpent[i].IsNull() && IsMine(wtx.vout[i]))
+                        // If the UTXO doesn't exist, the output was spent
+                        if (!txdb.HaveUtxo(hashTx, i) && IsMine(wtx.vout[i]))
                         {
                             wtx.MarkSpent(i);
                             fUpdated = true;
-                            vMissingTx.push_back(txindex.vSpent[i]);
                         }
                     }
                     if (fUpdated)
@@ -2670,16 +2649,17 @@ void CWallet::FixSpentCoins(int& nMismatchFound, int64_t& nBalanceInQuestion, bo
     CTxDB txdb("r");
     for (CWalletTx* pcoin : vCoins)
     {
-        // Find the corresponding transaction index
-        CTxIndex txindex;
-        if (!txdb.ReadTxIndex(pcoin->GetHash(), txindex))
+        uint256 hashTx = pcoin->GetHash();
+        if (!txdb.ContainsTx(hashTx))
             continue;
         for (unsigned int n=0; n < pcoin->vout.size(); n++)
         {
-            if (IsMine(pcoin->vout[n]) && pcoin->IsSpent(n) && (txindex.vSpent.size() <= n || txindex.vSpent[n].IsNull()))
+            bool fUtxoExists = txdb.HaveUtxo(hashTx, n);
+            // Wallet says spent but UTXO exists (meaning it's NOT spent) — lost coin
+            if (IsMine(pcoin->vout[n]) && pcoin->IsSpent(n) && fUtxoExists)
             {
                 printf("FixSpentCoins found lost coin %s TRI %s[%d], %s\n",
-                    FormatMoney(pcoin->vout[n].nValue).c_str(), pcoin->GetHash().ToString().c_str(), n, fCheckOnly? "repair not attempted" : "repairing");
+                    FormatMoney(pcoin->vout[n].nValue).c_str(), hashTx.ToString().c_str(), n, fCheckOnly? "repair not attempted" : "repairing");
                 nMismatchFound++;
                 nBalanceInQuestion += pcoin->vout[n].nValue;
                 if (!fCheckOnly)
@@ -2688,10 +2668,11 @@ void CWallet::FixSpentCoins(int& nMismatchFound, int64_t& nBalanceInQuestion, bo
                     pcoin->WriteToDisk();
                 }
             }
-            else if (IsMine(pcoin->vout[n]) && !pcoin->IsSpent(n) && (txindex.vSpent.size() > n && !txindex.vSpent[n].IsNull()))
+            // Wallet says unspent but UTXO doesn't exist (meaning it IS spent) — phantom coin
+            else if (IsMine(pcoin->vout[n]) && !pcoin->IsSpent(n) && !fUtxoExists)
             {
                 printf("FixSpentCoins found spent coin %s TRI %s[%d], %s\n",
-                    FormatMoney(pcoin->vout[n].nValue).c_str(), pcoin->GetHash().ToString().c_str(), n, fCheckOnly? "repair not attempted" : "repairing");
+                    FormatMoney(pcoin->vout[n].nValue).c_str(), hashTx.ToString().c_str(), n, fCheckOnly? "repair not attempted" : "repairing");
                 nMismatchFound++;
                 nBalanceInQuestion += pcoin->vout[n].nValue;
                 if (!fCheckOnly)

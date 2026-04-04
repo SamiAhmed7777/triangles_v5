@@ -183,6 +183,17 @@ public:
         return Write(std::string("version"), nVersion);
     }
 
+    bool ReadDbFormat(int& nDbFormat)
+    {
+        nDbFormat = 1;
+        return Read(std::string("dbformat"), nDbFormat);
+    }
+
+    bool WriteDbFormat(int nDbFormat)
+    {
+        return Write(std::string("dbformat"), nDbFormat);
+    }
+
     bool ReadTxIndex(uint256 hash, CTxIndex& txindex);
     bool UpdateTxIndex(uint256 hash, const CTxIndex& txindex);
     bool AddTxIndex(const CTransaction& tx, const CDiskTxPos& pos, int nHeight);
@@ -219,6 +230,12 @@ public:
     // Address index iteration (for RPC queries)
     bool GetAddressUtxos(int nType, const uint160& hashBytes, std::vector<std::pair<COutPoint, std::pair<int64_t, int> > >& vUtxos);
     bool GetAddressTxIds(int nType, const uint160& hashBytes, int nStartHeight, int nEndHeight, std::vector<uint256>& vTxIds);
+
+    // UTXO database methods
+    bool ReadUtxo(const uint256& hash, unsigned int n, CUtxoEntry& entry);
+    bool WriteUtxo(const uint256& hash, unsigned int n, const CUtxoEntry& entry);
+    bool EraseUtxo(const uint256& hash, unsigned int n);
+    bool HaveUtxo(const uint256& hash, unsigned int n);
 
 private:
     bool LoadBlockIndexGuts();

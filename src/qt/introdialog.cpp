@@ -307,7 +307,6 @@ bool IntroDialog::pickDataDirectory()
                 progress.setValue(100);
             }
         }
-    }
 
     return true;
 }

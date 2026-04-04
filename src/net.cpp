@@ -1349,40 +1349,29 @@ void ThreadOnionSeed(void* parg)
 
 
 
+    // Load hardcoded .onion seeds (if any)
     static const char *(*strOnionSeed)[1] = fTestNet ? strTestNetOnionSeed : strMainNetOnionSeed;
-
-
     int found = 0;
-
-    printf("Loading addresses from .onion seeds\n");
-
-
-
-
 
     for (unsigned int seed_idx = 0; strOnionSeed[seed_idx][0] != NULL; seed_idx++) {
         CNetAddr parsed;
-        if (
-            !parsed.SetSpecial(
-                strOnionSeed[seed_idx][0]
-            )
-        ) {
+        if (!parsed.SetSpecial(strOnionSeed[seed_idx][0]))
             throw runtime_error("ThreadOnionSeed() : invalid .onion seed");
-        }
 
         int nOneDay = 24*3600;
         CAddress addr = CAddress(CService(parsed, GetDefaultPort()));
-        addr.nTime = GetTime() - 3*nOneDay - GetRand(4*nOneDay); // use a random age between 3 and 7 days old
-
-        found++;
+        addr.nTime = GetTime() - 3*nOneDay - GetRand(4*nOneDay);
         addrman.Add(addr, parsed);
-
-
-
-
+        found++;
     }
 
-    printf("%d addresses found from .onion seeds\n", found);
+    printf("%d addresses from hardcoded .onion seeds\n", found);
+
+    // Also fetch dynamic seeds from HTTP seed list
+    // This is the primary discovery mechanism — seeds.cryptographic-triangles.org
+    ThreadHTTPSeedFetch2(NULL);
+
+    printf("ThreadOnionSeed: seeding complete\n");
 }
 
 
@@ -2210,8 +2199,11 @@ void StartNode(void* parg)
     if (fUseUPnP)
         MapPort();
 
-    // HTTP seed list fetch (replaces DNS seeds)
-    if (GetBoolArg("-noseedurl", false))
+    // HTTP seed list fetch — only as a standalone thread if onion seeding is disabled,
+    // since ThreadOnionSeed already calls ThreadHTTPSeedFetch2 internally.
+    if (GetBoolArg("-onionseed", true))
+        printf("HTTP seed fetch handled by onion seed thread\n");
+    else if (GetBoolArg("-noseedurl", false))
         printf("HTTP seed fetch disabled\n");
     else if (!NewThread(ThreadHTTPSeedFetch, NULL))
         printf("Error: NewThread(ThreadHTTPSeedFetch) failed\n");

@@ -370,20 +370,20 @@ Value signrawtransaction(const Array& params, bool fHelp)
     {
         CTransaction tempTx;
         MapPrevTx mapPrevTx;
+        MapPrevTx mapEmpty;
         CTxDB txdb("r");
-        map<uint256, CTxIndex> unused;
         bool fInvalid;
 
         // FetchInputs aborts on failure, so we go one at a time.
         tempTx.vin.push_back(mergedTx.vin[i]);
-        tempTx.FetchInputs(txdb, unused, false, false, mapPrevTx, fInvalid);
+        tempTx.FetchInputs(txdb, mapEmpty, false, false, mapPrevTx, fInvalid);
 
         // Copy results into mapPrevOut:
         for (const CTxIn& txin : tempTx.vin)
         {
-            const uint256& prevHash = txin.prevout.hash;
-            if (mapPrevTx.count(prevHash) && mapPrevTx[prevHash].second.vout.size()>txin.prevout.n)
-                mapPrevOut[txin.prevout] = mapPrevTx[prevHash].second.vout[txin.prevout.n].scriptPubKey;
+            MapPrevTx::const_iterator mi = mapPrevTx.find(txin.prevout);
+            if (mi != mapPrevTx.end())
+                mapPrevOut[txin.prevout] = mi->second.scriptPubKey;
         }
     }
 

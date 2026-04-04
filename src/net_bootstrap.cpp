@@ -3,6 +3,7 @@
 // Distributed under the MIT/X11 software license
 
 #include "net_bootstrap.h"
+#include "main.h"
 #include "net.h"
 #include "util.h"
 
@@ -32,11 +33,10 @@ namespace NetBootstrap {
         // Bootstrapped if at least 3 connections
         health.isBootstrapped = (health.connectedPeers >= 3);
 
-        // Sync status
-        extern int64_t nTimeBestReceived;
-        health.isSyncing = (nTimeBestReceived > 0 &&
-                           GetTime() - nTimeBestReceived < 3600);
-        health.lastBlockTime = nTimeBestReceived;
+        // Sync status (nTimeBestReceived declared in main.h)
+        health.isSyncing = (::nTimeBestReceived > 0 &&
+                           GetTime() - ::nTimeBestReceived < 3600);
+        health.lastBlockTime = ::nTimeBestReceived;
 
         return health;
     }

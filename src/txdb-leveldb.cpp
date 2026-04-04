@@ -29,6 +29,8 @@ namespace fs = boost::filesystem;
 
 leveldb::DB *txdb; // global pointer for LevelDB object instance
 
+bool CDiskBlockIndex::fSerializeChainTrust = false;
+
 static leveldb::Options GetOptions() {
     leveldb::Options options;
     int nCacheSizeMB = GetArg("-dbcache", 2048);
@@ -365,9 +367,22 @@ bool CTxDB::LoadBlockIndex()
         // from BDB.
         return true;
     }
+
+    // Check DB format version to determine serialization features.
+    int nDbFormat = 1;
+    ReadDbFormat(nDbFormat);
+    CDiskBlockIndex::fSerializeChainTrust = (nDbFormat >= 2);
+
+    if (CDiskBlockIndex::fSerializeChainTrust)
+        printf("LoadBlockIndex(): DB format v%d — nChainTrust persisted\n", nDbFormat);
+    else
+        printf("LoadBlockIndex(): DB format v%d — will recalculate nChainTrust (one-time upgrade)\n", nDbFormat);
+
     // The block index is an in-memory structure that maps hashes to on-disk
     // locations where the contents of the block can be found. Here, we scan it
     // out of the DB and into mapBlockIndex.
+    int64_t nPhaseStart = GetTimeMillis();
+    int64_t nTotalStart = nPhaseStart;
     leveldb::Iterator *iterator = pdb->NewIterator(leveldb::ReadOptions());
     // Seek to start key.
     CDataStream ssStartKey(SER_DISK, CLIENT_VERSION);
@@ -418,6 +433,8 @@ bool CTxDB::LoadBlockIndex()
         pindexNew->nTime          = diskindex.nTime;
         pindexNew->nBits          = diskindex.nBits;
         pindexNew->nNonce         = diskindex.nNonce;
+        // nChainTrust is populated from disk if fSerializeChainTrust, else stays 0
+        pindexNew->nChainTrust    = diskindex.nChainTrust;
 
         // Watch for genesis block
         if (pindexGenesisBlock == NULL && blockHash == (!fTestNet ? hashGenesisBlockOfficial : hashGenesisBlockTestNet))
@@ -428,56 +445,138 @@ bool CTxDB::LoadBlockIndex()
             return error("LoadBlockIndex() : CheckIndex failed at %d", pindexNew->nHeight);
         }
 
-        // triangles: build setStakeSeen
-        if (pindexNew->IsProofOfStake())
-            setStakeSeen.insert(make_pair(pindexNew->prevoutStake, pindexNew->nStakeTime));
+        // setStakeSeen is populated below for recent blocks only (Change D)
 
         iterator->Next();
     }
     delete iterator;
+    printf("STARTUP-PERF: block_index_deserialize %" PRId64 "ms blocks=%d\n", GetTimeMillis() - nPhaseStart, nBlocksLoaded);
 
     if (fRequestShutdown)
         return true;
 
-    // Calculate nChainTrust
-    vector<pair<int, CBlockIndex*> > vSortedByHeight;
-    vSortedByHeight.reserve(mapBlockIndex.size());
-    for (const auto& item : mapBlockIndex)
+    // ---- nChainTrust: recalculate if not persisted, or verify stake modifiers ----
+    nPhaseStart = GetTimeMillis();
+    bool fNeedChainTrustRecalc = !CDiskBlockIndex::fSerializeChainTrust;
+
+    if (fNeedChainTrustRecalc)
     {
-        CBlockIndex* pindex = item.second;
-        vSortedByHeight.push_back(make_pair(pindex->nHeight, pindex));
+        uiInterface.InitMessage(_("Calculating chain trust (one-time upgrade)..."));
+
+        vector<pair<int, CBlockIndex*> > vSortedByHeight;
+        vSortedByHeight.reserve(mapBlockIndex.size());
+        for (const auto& item : mapBlockIndex)
+            vSortedByHeight.push_back(make_pair(item.second->nHeight, item.second));
+        sort(vSortedByHeight.begin(), vSortedByHeight.end());
+
+        int nLastCheckpointHeight = Checkpoints::GetTotalBlocksEstimate();
+        int nProgressInterval = std::max((int)vSortedByHeight.size() / 20, 1);
+        int nCount = 0;
+
+        for (const auto& item : vSortedByHeight)
+        {
+            CBlockIndex* pindex = item.second;
+            pindex->nChainTrust = (pindex->pprev ? pindex->pprev->nChainTrust : 0) + pindex->GetBlockTrust();
+
+            if (pindex->nHeight >= nLastCheckpointHeight)
+            {
+                pindex->nStakeModifierChecksum = GetStakeModifierChecksum(pindex);
+                if (!CheckStakeModifierCheckpoints(pindex->nHeight, pindex->nStakeModifierChecksum))
+                    return error("CTxDB::LoadBlockIndex() : Failed stake modifier checkpoint height=%d, modifier=0x%016"PRIx64, pindex->nHeight, pindex->nStakeModifier);
+            }
+
+            if (++nCount % nProgressInterval == 0)
+            {
+                std::string strMsg = strprintf(_("Calculating chain trust... (%d%%)"), nCount * 100 / vSortedByHeight.size());
+                uiInterface.InitMessage(strMsg);
+            }
+        }
+
+        // Upgrade: rewrite all block index entries with nChainTrust and bump format.
+        printf("LoadBlockIndex(): upgrading DB to format v3 (persisting nChainTrust + UTXO model)...\n");
+        uiInterface.InitMessage(_("Upgrading block index..."));
+        CDiskBlockIndex::fSerializeChainTrust = true;
+
+        leveldb::WriteBatch batch;
+        nCount = 0;
+        for (const auto& item : vSortedByHeight)
+        {
+            CBlockIndex* pindex = item.second;
+            CDiskBlockIndex diskindex(pindex);
+
+            CDataStream ssKey(SER_DISK, CLIENT_VERSION);
+            ssKey << make_pair(string("blockindex"), *pindex->phashBlock);
+            CDataStream ssValue(SER_DISK, CLIENT_VERSION);
+            ssValue << diskindex;
+            batch.Put(ssKey.str(), ssValue.str());
+
+            // Flush in chunks to limit memory usage
+            if (++nCount % 100000 == 0)
+            {
+                pdb->Write(leveldb::WriteOptions(), &batch);
+                batch.Clear();
+                printf("LoadBlockIndex(): upgraded %d / %d block index entries\n", nCount, (int)vSortedByHeight.size());
+            }
+        }
+        // Write remaining entries + format version
+        CDataStream ssFmtKey(SER_DISK, CLIENT_VERSION);
+        ssFmtKey << string("dbformat");
+        CDataStream ssFmtValue(SER_DISK, CLIENT_VERSION);
+        ssFmtValue << (int)3;
+        batch.Put(ssFmtKey.str(), ssFmtValue.str());
+
+        leveldb::Status status = pdb->Write(leveldb::WriteOptions(), &batch);
+        if (!status.ok())
+            return error("LoadBlockIndex(): failed to write upgraded block index: %s", status.ToString().c_str());
+
+        printf("LoadBlockIndex(): DB upgraded to format v3 (%d entries rewritten)\n", nCount);
     }
-    sort(vSortedByHeight.begin(), vSortedByHeight.end());
-
-    int nLastCheckpointHeight = Checkpoints::GetTotalBlocksEstimate();
-    int nProgressInterval = std::max((int)vSortedByHeight.size() / 20, 1);
-    int nCount = 0;
-
-    for (const auto& item : vSortedByHeight)
+    else
     {
-        CBlockIndex* pindex = item.second;
-        pindex->nChainTrust = (pindex->pprev ? pindex->pprev->nChainTrust : 0) + pindex->GetBlockTrust();
-
-        // Only compute the expensive SHA-256 stake modifier checksum for blocks
-        // at or beyond the last hardcoded checkpoint. Blocks well below the
-        // checkpoint have already been validated — recomputing 2M+ hashes on
-        // every startup was the main cause of multi-minute load times.
-        if (pindex->nHeight >= nLastCheckpointHeight)
+        // nChainTrust was loaded from disk. Only need stake modifier checksums
+        // for blocks above the last checkpoint (typically very few or zero).
+        int nLastCheckpointHeight = Checkpoints::GetTotalBlocksEstimate();
+        bool fNeedModifierCheck = false;
+        for (const auto& item : mapBlockIndex)
         {
-            pindex->nStakeModifierChecksum = GetStakeModifierChecksum(pindex);
-            if (!CheckStakeModifierCheckpoints(pindex->nHeight, pindex->nStakeModifierChecksum))
-                return error("CTxDB::LoadBlockIndex() : Failed stake modifier checkpoint height=%d, modifier=0x%016"PRIx64, pindex->nHeight, pindex->nStakeModifier);
+            if (item.second->nHeight >= nLastCheckpointHeight)
+            {
+                fNeedModifierCheck = true;
+                break;
+            }
         }
 
-        // Report progress for UI responsiveness
-        if (++nCount % nProgressInterval == 0)
+        if (fNeedModifierCheck)
         {
-            std::string strMsg = strprintf(_("Loading block index... (%d%%)"), nCount * 100 / vSortedByHeight.size());
-            uiInterface.InitMessage(strMsg);
+            vector<pair<int, CBlockIndex*> > vAboveCheckpoint;
+            for (const auto& item : mapBlockIndex)
+                if (item.second->nHeight >= nLastCheckpointHeight)
+                    vAboveCheckpoint.push_back(make_pair(item.second->nHeight, item.second));
+            sort(vAboveCheckpoint.begin(), vAboveCheckpoint.end());
+
+            for (const auto& item : vAboveCheckpoint)
+            {
+                CBlockIndex* pindex = item.second;
+                pindex->nStakeModifierChecksum = GetStakeModifierChecksum(pindex);
+                if (!CheckStakeModifierCheckpoints(pindex->nHeight, pindex->nStakeModifierChecksum))
+                    return error("CTxDB::LoadBlockIndex() : Failed stake modifier checkpoint height=%d, modifier=0x%016"PRIx64, pindex->nHeight, pindex->nStakeModifier);
+            }
         }
+    }
+
+    printf("STARTUP-PERF: chain_trust_and_modifiers %" PRId64 "ms\n", GetTimeMillis() - nPhaseStart);
+
+    // Bump dbformat to 3 if needed (databases that already had v2 nChainTrust upgrade).
+    // UTXO entries are written by ConnectBlock during normal sync. For databases upgrading
+    // from older versions, FetchInputs has a lazy fallback to the old CTxIndex path.
+    if (nDbFormat < 3)
+    {
+        WriteDbFormat(3);
+        printf("LoadBlockIndex(): bumped dbformat to v3 (UTXO model with lazy fallback)\n");
     }
 
     // Load hashBestChain pointer to end of best chain
+    nPhaseStart = GetTimeMillis();
     if (!ReadHashBestChain(hashBestChain))
     {
         if (pindexGenesisBlock == NULL)
@@ -489,6 +588,26 @@ bool CTxDB::LoadBlockIndex()
     pindexBest = mapBlockIndex[hashBestChain];
     nBestHeight = pindexBest->nHeight;
     nBestChainTrust = pindexBest->nChainTrust;
+
+    printf("STARTUP-PERF: best_chain %" PRId64 "ms\n", GetTimeMillis() - nPhaseStart);
+
+    // ---- setStakeSeen: only populate for recent blocks (DoS protection) ----
+    nPhaseStart = GetTimeMillis();
+    {
+        int nStakeSeenDepth = 500;
+        CBlockIndex* pindex = pindexBest;
+        int nLoaded = 0;
+        while (pindex && nLoaded < nStakeSeenDepth)
+        {
+            if (pindex->IsProofOfStake())
+                setStakeSeen.insert(make_pair(pindex->prevoutStake, pindex->nStakeTime));
+            pindex = pindex->pprev;
+            nLoaded++;
+        }
+        printf("LoadBlockIndex(): populated setStakeSeen with %d entries (last %d blocks)\n",
+               (int)setStakeSeen.size(), nLoaded);
+    }
+    printf("STARTUP-PERF: stake_seen %" PRId64 "ms\n", GetTimeMillis() - nPhaseStart);
 
     printf("LoadBlockIndex(): hashBestChain=%s  height=%d  trust=%s  date=%s\n",
       hashBestChain.ToString().substr(0,20).c_str(), nBestHeight, CBigNum(nBestChainTrust).ToString().c_str(),
@@ -512,6 +631,7 @@ bool CTxDB::LoadBlockIndex()
     nBestInvalidTrust = bnBestInvalidTrust.getuint256();
 
     // Verify blocks in the best chain
+    nPhaseStart = GetTimeMillis();
     int nCheckLevel = GetArg("-checklevel", 1);
     int nCheckDepth = GetArg( "-checkblocks", 50);
     if (nCheckDepth == 0)
@@ -563,65 +683,19 @@ bool CTxDB::LoadBlockIndex()
                                 pindexFork = pindex->pprev;
                             }
                     }
-                    // check level 4: check whether spent txouts were spent within the main chain
-                    unsigned int nOutput = 0;
-                    if (nCheckLevel>3)
+                    // check level 4: verify spent inputs were removed from UTXO set
+                    if (nCheckLevel>3 && !tx.IsCoinBase())
                     {
-                        for (const CDiskTxPos &txpos : txindex.vSpent)
+                        for (const CTxIn &txin : tx.vin)
                         {
-                            if (!txpos.IsNull())
+                            if (HaveUtxo(txin.prevout.hash, txin.prevout.n))
                             {
-                                pair<unsigned int, unsigned int> posFind = make_pair(txpos.nFile, txpos.nBlockPos);
-                                if (!mapBlockPos.count(posFind))
-                                {
-                                    printf("LoadBlockIndex(): *** found bad spend at %d, hashBlock=%s, hashTx=%s\n", pindex->nHeight, pindex->GetBlockHash().ToString().c_str(), hashTx.ToString().c_str());
-                                    pindexFork = pindex->pprev;
-                                }
-                                // check level 6: check whether spent txouts were spent by a valid transaction that consume them
-                                if (nCheckLevel>5)
-                                {
-                                    CTransaction txSpend;
-                                    if (!txSpend.ReadFromDisk(txpos))
-                                    {
-                                        printf("LoadBlockIndex(): *** cannot read spending transaction of %s:%i from disk\n", hashTx.ToString().c_str(), nOutput);
-                                        pindexFork = pindex->pprev;
-                                    }
-                                    else if (!txSpend.CheckTransaction())
-                                    {
-                                        printf("LoadBlockIndex(): *** spending transaction of %s:%i is invalid\n", hashTx.ToString().c_str(), nOutput);
-                                        pindexFork = pindex->pprev;
-                                    }
-                                    else
-                                    {
-                                        bool fFound = false;
-                                        for (const CTxIn &txin : txSpend.vin)
-                                            if (txin.prevout.hash == hashTx && txin.prevout.n == nOutput)
-                                                fFound = true;
-                                        if (!fFound)
-                                        {
-                                            printf("LoadBlockIndex(): *** spending transaction of %s:%i does not spend it\n", hashTx.ToString().c_str(), nOutput);
-                                            pindexFork = pindex->pprev;
-                                        }
-                                    }
-                                }
+                                printf("LoadBlockIndex(): *** spent input still in UTXO set: %s:%i in %s\n",
+                                       txin.prevout.hash.ToString().c_str(), txin.prevout.n, hashTx.ToString().c_str());
+                                pindexFork = pindex->pprev;
                             }
-                            nOutput++;
                         }
                     }
-                }
-                // check level 5: check whether all prevouts are marked spent
-                if (nCheckLevel>4)
-                {
-                     for (const CTxIn &txin : tx.vin)
-                     {
-                          CTxIndex txindex;
-                          if (ReadTxIndex(txin.prevout.hash, txindex))
-                              if (txindex.vSpent.size()-1 < txin.prevout.n || txindex.vSpent[txin.prevout.n].IsNull())
-                              {
-                                  printf("LoadBlockIndex(): *** found unspent prevout %s:%i in %s\n", txin.prevout.hash.ToString().c_str(), txin.prevout.n, hashTx.ToString().c_str());
-                                  pindexFork = pindex->pprev;
-                              }
-                     }
                 }
             }
         }
@@ -636,6 +710,8 @@ bool CTxDB::LoadBlockIndex()
         CTxDB txdb;
         block.SetBestChain(txdb, pindexFork);
     }
+    printf("STARTUP-PERF: verify_blocks %" PRId64 "ms depth=%d level=%d\n", GetTimeMillis() - nPhaseStart, nCheckDepth, nCheckLevel);
+    printf("STARTUP-PERF: load_block_index_total %" PRId64 "ms\n", GetTimeMillis() - nTotalStart);
 
     return true;
 }
@@ -748,5 +824,39 @@ bool CTxDB::GetAddressTxIds(int nType, const uint160& hashBytes, int nStartHeigh
     }
     delete it;
     return true;
+}
+
+// ---------- UTXO database methods ----------
+
+bool CTxDB::ReadUtxo(const uint256& hash, unsigned int n, CUtxoEntry& entry)
+{
+    entry.SetNull();
+    return Read(make_pair(string("u"), make_pair(hash, n)), entry);
+}
+
+bool CTxDB::WriteUtxo(const uint256& hash, unsigned int n, const CUtxoEntry& entry)
+{
+    return Write(make_pair(string("u"), make_pair(hash, n)), entry);
+}
+
+bool CTxDB::EraseUtxo(const uint256& hash, unsigned int n)
+{
+    return Erase(make_pair(string("u"), make_pair(hash, n)));
+}
+
+bool CTxDB::HaveUtxo(const uint256& hash, unsigned int n)
+{
+    if (Exists(make_pair(string("u"), make_pair(hash, n))))
+        return true;
+
+    // Lazy fallback: check old CTxIndex vSpent for databases upgrading from pre-UTXO format
+    CTxIndex txindex;
+    if (ReadTxIndex(hash, txindex))
+    {
+        if (n < txindex.vSpent.size() && txindex.vSpent[n].IsNull())
+            return true; // vSpent[n] is null = output NOT spent = UTXO exists
+    }
+
+    return false;
 }
 
