@@ -4004,11 +4004,12 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         // blocks from the fastest available source.
         static int nAskedForBlocks = 0;
         bool fIBD = IsInitialBlockDownload();
+        bool fBehindPeer = (pfrom->nStartingHeight > nBestHeight);
         bool fShouldAsk = !pfrom->fClient && !pfrom->fOneShot &&
             (pfrom->nStartingHeight > (nBestHeight - 144)) &&
             (pfrom->nVersion < NOBLKS_VERSION_START ||
              pfrom->nVersion >= NOBLKS_VERSION_END) &&
-             (fIBD || nAskedForBlocks < 1 || vNodes.size() <= 1);
+             (fIBD || nAskedForBlocks < 1 || vNodes.size() <= 1 || fBehindPeer);
         printf("IBD-DIAG: version handler: peer=%s height=%d ourHeight=%d fClient=%d fOneShot=%d shouldAsk=%d nAskedForBlocks=%d IBD=%d\n",
             pfrom->addr.ToString().c_str(), pfrom->nStartingHeight, nBestHeight,
             pfrom->fClient, pfrom->fOneShot, fShouldAsk, nAskedForBlocks, fIBD);

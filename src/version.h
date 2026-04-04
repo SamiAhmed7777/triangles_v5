@@ -30,7 +30,7 @@ static const int DATABASE_VERSION = 70509;
 // network protocol versioning
 //
 
-static const int PROTOCOL_VERSION = 70206;
+static const int PROTOCOL_VERSION = 70205;
 
 // v5 hard fork: require new protocol version (disconnects old nodes)
 static const int MIN_PROTO_VERSION = 70205;
