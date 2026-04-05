@@ -252,6 +252,7 @@ public:
     bool fNetworkNode;
     bool fSuccessfullyConnected;
     bool fDisconnect;
+    bool fPreferHeaders; // peer requested block announcements via headers (sendheaders)
     CSemaphoreGrant grantOutbound;
     int nRefCount;
 protected:
@@ -308,6 +309,7 @@ public:
         fNetworkNode = false;
         fSuccessfullyConnected = false;
         fDisconnect = false;
+        fPreferHeaders = false;
         nRefCount = 0;
         nSendSize = 0;
         nSendOffset = 0;
@@ -732,6 +734,9 @@ public:
     // new code.
     static void ClearBanned(); // needed for unit testing
     static bool IsBanned(CNetAddr ip);
+    static bool Ban(CNetAddr ip, int64_t banTime);
+    static bool Unban(CNetAddr ip);
+    static void GetBanned(std::map<CNetAddr, int64_t>& mapBannedOut);
     bool Misbehaving(int howmuch); // 1 == a little, 100 == a lot
     void copyStats(CNodeStats &stats);
 };

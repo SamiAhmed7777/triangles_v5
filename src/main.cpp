@@ -39,6 +39,7 @@ CCriticalSection cs_main;
 
 CTxMemPool mempool;
 unsigned int nTransactionsUpdated = 0;
+CCheckQueue<CScriptCheck>* pScriptCheckQueue = NULL;
 
 map<uint256, CBlockIndex*> mapBlockIndex;
 set<pair<COutPoint, unsigned int> > setStakeSeen;
@@ -1325,13 +1326,15 @@ int64_t GetProofOfWorkReward(int64_t nFees)
 {
     int64_t nSubsidy = 1 * COIN;
 
+    if (!pindexBest)
+        return nSubsidy + nFees;
 
-    if (pindexBest->nHeight >= 1 ) { nSubsidy = 1 * COIN;}
-    if (pindexBest->nHeight >= 100) { nSubsidy = 20 * COIN;}
-    if (pindexBest->nHeight >= 1000) { nSubsidy = 10 * COIN;}
-    if (pindexBest->nHeight >= 3000) { nSubsidy = 5 * COIN;}
-    if (pindexBest->nHeight >= 7000) { nSubsidy = 10 * COIN;}
     if (pindexBest->nHeight >= 9001) { nSubsidy = 0 * COIN; }
+    else if (pindexBest->nHeight >= 7000) { nSubsidy = 10 * COIN; }
+    else if (pindexBest->nHeight >= 3000) { nSubsidy = 5 * COIN; }
+    else if (pindexBest->nHeight >= 1000) { nSubsidy = 10 * COIN; }
+    else if (pindexBest->nHeight >= 100) { nSubsidy = 20 * COIN; }
+    else if (pindexBest->nHeight >= 1) { nSubsidy = 1 * COIN; }
 
     if (fDebug && GetBoolArg("-printcreation"))
         printf("GetProofOfWorkReward() : create=%s nSubsidy=%" PRId64 "\n", FormatMoney(nSubsidy).c_str(), nSubsidy);
@@ -1695,7 +1698,8 @@ unsigned int CTransaction::GetP2SHSigOpCount(const MapPrevTx& inputs) const
 }
 
 bool CTransaction::ConnectInputs(CTxDB& txdb, const MapPrevTx& inputs,
-    const CBlockIndex* pindexBlock, bool fBlock, bool fMiner)
+    const CBlockIndex* pindexBlock, bool fBlock, bool fMiner,
+    std::vector<CScriptCheck>* pvChecks)
 {
     // Validate inputs against UTXO entries and verify signatures.
     // Double-spend is impossible here: FetchInputs only returns entries that exist
@@ -1742,9 +1746,16 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, const MapPrevTx& inputs,
             // still computed and checked, and any change will be caught at the next checkpoint.
             if (!(fBlock && (nBestHeight < Checkpoints::GetTotalBlocksEstimate())))
             {
-                // Verify signature using scriptPubKey from UTXO entry
-                if (!VerifyScript(vin[i].scriptSig, entry.scriptPubKey, *this, i, 0))
-                    return DoS(100, error("ConnectInputs() : %s VerifySignature failed", GetHash().ToString().substr(0,10).c_str()));
+                if (pvChecks)
+                {
+                    pvChecks->push_back(CScriptCheck(entry.scriptPubKey, vin[i].scriptSig, *this, i, 0));
+                }
+                else
+                {
+                    // Verify signature using scriptPubKey from UTXO entry
+                    if (!VerifyScript(vin[i].scriptSig, entry.scriptPubKey, *this, i, 0))
+                        return DoS(100, error("ConnectInputs() : %s VerifySignature failed", GetHash().ToString().substr(0,10).c_str()));
+                }
             }
         }
 
@@ -2000,6 +2011,8 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
 
     map<uint256, CTxIndex> mapQueuedChanges;  // tx position index (for getrawtransaction)
     MapPrevTx mapPendingUtxos;                // in-block UTXO tracking
+    std::vector<CScriptCheck> vChecks;
+    CCheckQueueControl<CScriptCheck> scriptcheckcontrol(pScriptCheckQueue);
     int64_t nFees = 0;
     int64_t nValueIn = 0;
     int64_t nValueOut = 0;
@@ -2081,8 +2094,14 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
             if (tx.IsCoinStake())
                 nStakeReward = nTxValueOut - nTxValueIn;
 
-            if (!tx.ConnectInputs(txdb, mapInputs, pindex, true, false))
+            if (!tx.ConnectInputs(txdb, mapInputs, pindex, true, false,
+                                  pScriptCheckQueue ? &vChecks : NULL))
                 return false;
+            if (pScriptCheckQueue && vChecks.size() >= 128)
+            {
+                scriptcheckcontrol.Add(vChecks);
+                vChecks.clear();
+            }
         }
 
         // Add this tx's outputs to pending UTXOs for later txs in the block
@@ -2108,6 +2127,11 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
 
     if (!fAssumeValid)
     {
+        scriptcheckcontrol.Add(vChecks);
+        vChecks.clear();
+        if (!scriptcheckcontrol.Wait())
+            return DoS(100, error("ConnectBlock() : script verification failed"));
+
         if (IsProofOfWork())
         {
             int64_t nReward = GetProofOfWorkReward(nFees);

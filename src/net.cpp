@@ -62,8 +62,11 @@ struct LocalServiceInfo {
 bool fClient = false;
 //bool fDiscover = true;
 
+#ifdef USE_UPNP
 bool fUseUPnP = GetBoolArg("-upnp", USE_UPNP);
-//bool fUseUPnP = false;
+#else
+bool fUseUPnP = false;
+#endif
 uint64_t nLocalServices = (fClient ? 0 : NODE_NETWORK);
 static CCriticalSection cs_mapLocalHost;
 static map<CNetAddr, LocalServiceInfo> mapLocalHost;
@@ -618,6 +621,32 @@ bool CNode::IsBanned(CNetAddr ip)
         }
     }
     return fResult;
+}
+
+bool CNode::Ban(CNetAddr ip, int64_t banTime)
+{
+    if (ip.IsLocal())
+        return false;
+
+    LOCK(cs_setBanned);
+    std::map<CNetAddr, int64_t>::iterator it = setBanned.find(ip);
+    if (it != setBanned.end() && it->second >= banTime)
+        return false;
+
+    setBanned[ip] = banTime;
+    return true;
+}
+
+bool CNode::Unban(CNetAddr ip)
+{
+    LOCK(cs_setBanned);
+    return setBanned.erase(ip) != 0;
+}
+
+void CNode::GetBanned(std::map<CNetAddr, int64_t>& mapBannedOut)
+{
+    LOCK(cs_setBanned);
+    mapBannedOut = setBanned;
 }
 
 bool CNode::Misbehaving(int howmuch)

@@ -347,8 +347,10 @@ bool CheckStake(CBlock* pblock, CWallet& wallet)
     if(!pblock->IsProofOfStake())
         return error("CheckStake() : %s is not a proof-of-stake block", hash.GetHex().c_str());
 
+    if (pblock->vtx.size() < 2)
+        return error("CheckStake() : block has no coinstake transaction");
+
     // verify hash target and signature of coinstake tx
-    //bool fIsInitialDownload = IsInitialBlockDownload();
     if (!CheckProofOfStake(pblock->vtx[1], pblock->nBits, proofHash, hashTarget))
         return error("CheckStake() : proof-of-stake checking failed");
 
