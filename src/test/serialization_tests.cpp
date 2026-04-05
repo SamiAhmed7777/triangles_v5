@@ -146,7 +146,7 @@ BOOST_AUTO_TEST_CASE(block_header_roundtrip)
 
 BOOST_AUTO_TEST_CASE(block_current_version)
 {
-    BOOST_CHECK_EQUAL(CBlock::CURRENT_VERSION, 6);
+    BOOST_CHECK_EQUAL((int)CBlock::CURRENT_VERSION, 6);
 }
 
 // --- CDiskTxPos ---
