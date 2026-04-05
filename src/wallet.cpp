@@ -12,6 +12,7 @@
 #include "kernel.h"
 #include "coincontrol.h"
 #include "addressindex.h"
+#include <memory>
 #include <boost/algorithm/string/replace.hpp>
 #include <algorithm>
 #include <random>
@@ -262,11 +263,13 @@ bool CWallet::ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase,
             {
                 int64_t nStartTime = GetTimeMillis();
                 crypter.SetKeyFromPassphrase(strNewWalletPassphrase, pMasterKey.second.vchSalt, pMasterKey.second.nDeriveIterations, pMasterKey.second.nDerivationMethod);
-                pMasterKey.second.nDeriveIterations = pMasterKey.second.nDeriveIterations * (100 / ((double)(GetTimeMillis() - nStartTime)));
+                int64_t nElapsed = std::max((int64_t)1, GetTimeMillis() - nStartTime);
+                pMasterKey.second.nDeriveIterations = pMasterKey.second.nDeriveIterations * (100 / ((double)nElapsed));
 
                 nStartTime = GetTimeMillis();
                 crypter.SetKeyFromPassphrase(strNewWalletPassphrase, pMasterKey.second.vchSalt, pMasterKey.second.nDeriveIterations, pMasterKey.second.nDerivationMethod);
-                pMasterKey.second.nDeriveIterations = (pMasterKey.second.nDeriveIterations + pMasterKey.second.nDeriveIterations * 100 / ((double)(GetTimeMillis() - nStartTime))) / 2;
+                nElapsed = std::max((int64_t)1, GetTimeMillis() - nStartTime);
+                pMasterKey.second.nDeriveIterations = (pMasterKey.second.nDeriveIterations + pMasterKey.second.nDeriveIterations * 100 / ((double)nElapsed)) / 2;
 
                 if (pMasterKey.second.nDeriveIterations < 25000)
                     pMasterKey.second.nDeriveIterations = 25000;
@@ -370,11 +373,13 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
     CCrypter crypter;
     int64_t nStartTime = GetTimeMillis();
     crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt, 25000, kMasterKey.nDerivationMethod);
-    kMasterKey.nDeriveIterations = 2500000 / ((double)(GetTimeMillis() - nStartTime));
+    int64_t nElapsed = std::max((int64_t)1, GetTimeMillis() - nStartTime);
+    kMasterKey.nDeriveIterations = 2500000 / ((double)nElapsed);
 
     nStartTime = GetTimeMillis();
     crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt, kMasterKey.nDeriveIterations, kMasterKey.nDerivationMethod);
-    kMasterKey.nDeriveIterations = (kMasterKey.nDeriveIterations + kMasterKey.nDeriveIterations * 100 / ((double)(GetTimeMillis() - nStartTime))) / 2;
+    nElapsed = std::max((int64_t)1, GetTimeMillis() - nStartTime);
+    kMasterKey.nDeriveIterations = (kMasterKey.nDeriveIterations + kMasterKey.nDeriveIterations * 100 / ((double)nElapsed)) / 2;
 
     if (kMasterKey.nDeriveIterations < 25000)
         kMasterKey.nDeriveIterations = 25000;
@@ -1682,11 +1687,13 @@ bool CWallet::CreateTransaction(const vector<pair<CScript, int64_t> >& vecSend, 
     int64_t nValue = 0;
     for (const auto& s : vecSend)
     {
-        if (nValue < 0)
+        if (!MoneyRange(s.second))
             return false;
         nValue += s.second;
+        if (!MoneyRange(nValue))
+            return false;
     }
-    if (vecSend.empty() || nValue < 0)
+    if (vecSend.empty() || nValue <= 0)
         return false;
 
     wtxNew.BindWallet(this);
@@ -2586,6 +2593,8 @@ std::map<CTxDestination, int64_t> CWallet::GetAddressBalances()
 
 set< set<CTxDestination> > CWallet::GetAddressGroupings()
 {
+    LOCK(cs_wallet);
+
     set< set<CTxDestination> > groupings;
     set<CTxDestination> grouping;
 
@@ -2596,7 +2605,7 @@ set< set<CTxDestination> > CWallet::GetAddressGroupings()
         if (pcoin->vin.size() > 0 && IsMine(pcoin->vin[0]))
         {
             // group all input addresses with each other
-            for (CTxIn txin : pcoin->vin)
+            for (const CTxIn& txin : pcoin->vin)
             {
                 CTxDestination address;
                 if(!ExtractDestination(mapWallet[txin.prevout.hash].vout[txin.prevout.n].scriptPubKey, address))
@@ -2605,10 +2614,9 @@ set< set<CTxDestination> > CWallet::GetAddressGroupings()
             }
 
             // group change with input addresses
-            for (CTxOut txout : pcoin->vout)
+            for (const CTxOut& txout : pcoin->vout)
                 if (IsChange(txout))
                 {
-                    CWalletTx tx = mapWallet[pcoin->vin[0].prevout.hash];
                     CTxDestination txoutAddr;
                     if(!ExtractDestination(txout.scriptPubKey, txoutAddr))
                         continue;
@@ -2631,37 +2639,38 @@ set< set<CTxDestination> > CWallet::GetAddressGroupings()
             }
     }
 
-    set< set<CTxDestination>* > uniqueGroupings; // a set of pointers to groups of addresses
-    map< CTxDestination, set<CTxDestination>* > setmap;  // map addresses to the unique group containing it
-    for (set<CTxDestination> grouping : groupings)
+    typedef std::shared_ptr< set<CTxDestination> > GroupPtr;
+    set<GroupPtr> uniqueGroupings;
+    map<CTxDestination, GroupPtr> setmap;
+    for (const auto& grouping : groupings)
     {
         // make a set of all the groups hit by this new group
-        set< set<CTxDestination>* > hits;
-        map< CTxDestination, set<CTxDestination>* >::iterator it;
-        for (CTxDestination address : grouping)
-            if ((it = setmap.find(address)) != setmap.end())
-                hits.insert((*it).second);
+        set<GroupPtr> hits;
+        for (const auto& address : grouping)
+        {
+            auto it = setmap.find(address);
+            if (it != setmap.end())
+                hits.insert(it->second);
+        }
 
-        // merge all hit groups into a new single group and delete old groups
-        set<CTxDestination>* merged = new set<CTxDestination>(grouping);
-        for (set<CTxDestination>* hit : hits)
+        // merge all hit groups into a new single group
+        auto merged = std::make_shared< set<CTxDestination> >(grouping);
+        for (const auto& hit : hits)
         {
             merged->insert(hit->begin(), hit->end());
             uniqueGroupings.erase(hit);
-            delete hit;
         }
         uniqueGroupings.insert(merged);
 
         // update setmap
-        for (CTxDestination element : *merged)
+        for (const auto& element : *merged)
             setmap[element] = merged;
     }
 
     set< set<CTxDestination> > ret;
-    for (set<CTxDestination>* uniqueGrouping : uniqueGroupings)
+    for (const auto& uniqueGrouping : uniqueGroupings)
     {
         ret.insert(*uniqueGrouping);
-        delete uniqueGrouping;
     }
 
     return ret;

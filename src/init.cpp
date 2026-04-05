@@ -22,6 +22,7 @@
 #endif
 #include "notificationqueue.h"
 #include "addressindex.h"
+#include <boost/thread.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
 // boost/filesystem/convenience.hpp removed in modern Boost; functionality is in filesystem.hpp
@@ -51,6 +52,14 @@ enum Checkpoints::CPMode CheckpointsMode;
 
 static CCriticalSection cs_DeferredStartup;
 static bool fDeferredStartupRunning = false;
+static boost::thread_group* pScriptCheckThreads = NULL;
+
+static void ThreadScriptCheck()
+{
+    RenameThread("Triangles-scrchk");
+    if (pScriptCheckQueue)
+        pScriptCheckQueue->Thread();
+}
 
 static void StartupPerfLog(const char* phase, int64_t elapsedMs)
 {
@@ -181,6 +190,19 @@ void Shutdown(void* parg)
         // Stop network threads FIRST so nothing references Tor objects
         nTransactionsUpdated++;
         StopNode();
+
+        if (pScriptCheckQueue)
+        {
+            pScriptCheckQueue->Quit();
+            if (pScriptCheckThreads)
+            {
+                pScriptCheckThreads->join_all();
+                delete pScriptCheckThreads;
+                pScriptCheckThreads = NULL;
+            }
+            delete pScriptCheckQueue;
+            pScriptCheckQueue = NULL;
+        }
 
         // NOW safe to destroy Tor state - all threads have stopped
         ShutdownTorV3();
@@ -383,6 +405,7 @@ std::string HelpMessage()
         "  -noseedurl             " + _("Disable HTTP seed list fetch on startup") + "\n" +
         "  -banscore=<n>          " + _("Threshold for disconnecting misbehaving peers (default: 100)") + "\n" +
         "  -bantime=<n>           " + _("Number of seconds to keep misbehaving peers from reconnecting (default: 86400)") + "\n" +
+        "  -par=<n>               " + _("Set the number of script verification threads (default: auto, 0 = auto, 1 = single-threaded)") + "\n" +
         "  -maxreceivebuffer=<n>  " + _("Maximum per-connection receive buffer, <n>*1000 bytes (default: 5000)") + "\n" +
         "  -maxsendbuffer=<n>     " + _("Maximum per-connection send buffer, <n>*1000 bytes (default: 1000)") + "\n" +
 #ifdef USE_UPNP
@@ -638,6 +661,20 @@ bool AppInit2()
 
     fConfChange = GetBoolArg("-confchange", false);
     fEnforceCanonical = GetBoolArg("-enforcecanonical", true);
+
+    int nScriptCheckThreads = GetArg("-par", 0);
+    if (nScriptCheckThreads <= 0)
+        nScriptCheckThreads = boost::thread::hardware_concurrency();
+    if (nScriptCheckThreads > 16)
+        nScriptCheckThreads = 16;
+    if (nScriptCheckThreads > 1)
+    {
+        pScriptCheckQueue = new CCheckQueue<CScriptCheck>(128);
+        pScriptCheckThreads = new boost::thread_group();
+        for (int i = 0; i < nScriptCheckThreads - 1; ++i)
+            pScriptCheckThreads->create_thread(&ThreadScriptCheck);
+        printf("Script verification threads: %d workers + main thread\n", nScriptCheckThreads - 1);
+    }
 
     fAddressIndex = GetBoolArg("-addressindex", false);
     if (fAddressIndex)
@@ -983,7 +1020,11 @@ bool AppInit2()
             {
                 CBlockIndex* pindex = (*mi).second;
                 CBlock block;
-                block.ReadFromDisk(pindex);
+                if (!block.ReadFromDisk(pindex))
+                {
+                    printf("Error: Failed to read block %s from disk\n", hash.ToString().c_str());
+                    continue;
+                }
                 block.BuildMerkleTree();
                 block.print();
                 printf("\n");

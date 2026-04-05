@@ -11,6 +11,7 @@
 #include "script.h"
 #include "scrypt.h"
 #include "hashblock.h"
+#include "checkqueue.h"
 
 #include <list>
 
@@ -25,6 +26,7 @@ class CAddress;
 class CInv;
 class CRequestTracker;
 class CNode;
+class CScriptCheck;
 
 static const int CUTOFF_POW_BLOCK = 9000;
 static const int CRAPCHAIN_CUTOFF_BLOCK = 17691; // pre-Pharao (version 4) blockchain until block 17691
@@ -738,7 +740,8 @@ public:
         @return Returns true if all checks succeed
      */
     bool ConnectInputs(CTxDB& txdb, const MapPrevTx& inputs,
-                       const CBlockIndex* pindexBlock, bool fBlock, bool fMiner);
+                       const CBlockIndex* pindexBlock, bool fBlock, bool fMiner,
+                       std::vector<CScriptCheck>* pvChecks = NULL);
     bool ClientConnectInputs();
     bool CheckTransaction() const;
     bool AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs=true, bool* pfMissingInputs=NULL);
@@ -1671,5 +1674,43 @@ public:
 };
 
 extern CTxMemPool mempool;
+
+/**
+ * Closure representing one script check for parallel verification.
+ * Captures everything needed to call VerifyScript independently.
+ */
+class CScriptCheck
+{
+private:
+    CScript scriptPubKey;
+    CScript scriptSig;
+    const CTransaction* ptxTo;
+    unsigned int nIn;
+    int nHashType;
+
+public:
+    CScriptCheck() : ptxTo(NULL), nIn(0), nHashType(0) {}
+
+    CScriptCheck(const CScript& scriptPubKeyIn, const CScript& scriptSigIn,
+                 const CTransaction& txToIn, unsigned int nInIn, int nHashTypeIn)
+        : scriptPubKey(scriptPubKeyIn), scriptSig(scriptSigIn),
+          ptxTo(&txToIn), nIn(nInIn), nHashType(nHashTypeIn) {}
+
+    bool operator()()
+    {
+        return ptxTo && VerifyScript(scriptSig, scriptPubKey, *ptxTo, nIn, nHashType);
+    }
+
+    void swap(CScriptCheck& other)
+    {
+        std::swap(scriptPubKey, other.scriptPubKey);
+        std::swap(scriptSig, other.scriptSig);
+        std::swap(ptxTo, other.ptxTo);
+        std::swap(nIn, other.nIn);
+        std::swap(nHashType, other.nHashType);
+    }
+};
+
+extern CCheckQueue<CScriptCheck>* pScriptCheckQueue;
 
 #endif
