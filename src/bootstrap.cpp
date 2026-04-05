@@ -434,7 +434,7 @@ bool DownloadBootstrap(const std::string& host,
 
     // Try downloading bootstrap.tar.gz first
     fs::path tmpTarGz = dataDir / "bootstrap.tar.gz.tmp";
-    std::string tarUrl = std::string(BASE_PATH) + "bootstrap.tar.gz";
+    std::string tarUrl = std::string(BASE_PATH) + "triangles-bootstrap.tar.gz";
 
     bool tarDownloaded = DownloadFile(host, tarUrl, tmpTarGz, progressFn, strError);
 
