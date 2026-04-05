@@ -6,6 +6,10 @@
 #include "../main.h"
 #include "../kernel.h"
 
+// These globals are defined in main.cpp but not declared in any header
+extern unsigned int nTargetSpacing;
+extern unsigned int nStakeMaxAge;
+
 BOOST_AUTO_TEST_SUITE(consensus_tests)
 
 // --- Chain constants that must never change ---
@@ -75,20 +79,16 @@ BOOST_AUTO_TEST_CASE(pow_cutoff)
 BOOST_AUTO_TEST_CASE(timing_constants)
 {
     // 2-minute block target
-    extern unsigned int nTargetSpacing;
-    BOOST_CHECK_EQUAL(nTargetSpacing, 120u);
+    BOOST_CHECK_EQUAL(::nTargetSpacing, 120u);
 
     // 1-hour minimum stake age
-    extern unsigned int nStakeMinAge;
-    BOOST_CHECK_EQUAL(nStakeMinAge, 3600u);
+    BOOST_CHECK_EQUAL(::nStakeMinAge, 3600u);
 
     // 12-hour maximum stake age (pre-V5 fork)
-    extern unsigned int nStakeMaxAge;
-    BOOST_CHECK_EQUAL(nStakeMaxAge, 43200u);
+    BOOST_CHECK_EQUAL(::nStakeMaxAge, 43200u);
 
     // Modifier interval
-    extern unsigned int nModifierInterval;
-    BOOST_CHECK_EQUAL(nModifierInterval, 300u);  // 5 minutes
+    BOOST_CHECK_EQUAL(::nModifierInterval, 300u);  // 5 minutes
 }
 
 BOOST_AUTO_TEST_CASE(coinbase_maturity)
