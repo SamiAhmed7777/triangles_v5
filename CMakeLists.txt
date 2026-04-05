@@ -52,8 +52,8 @@ include(AddCompilerFlags)
 
 # ── Find required dependencies ──
 find_package(OpenSSL REQUIRED)
-find_package(Boost 1.75 REQUIRED COMPONENTS
-    filesystem program_options thread chrono system
+find_package(Boost 1.71 REQUIRED COMPONENTS
+    filesystem program_options thread chrono
 )
 if(BUILD_TESTS)
     find_package(Boost REQUIRED COMPONENTS unit_test_framework)
