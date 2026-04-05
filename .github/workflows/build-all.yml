@@ -18,21 +18,24 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libboost-all-dev \
-            libssl-dev libdb++-dev libleveldb-dev libevent-dev libminiupnpc-dev
+          sudo apt-get install -y build-essential cmake ninja-build \
+            libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
+            libevent-dev libminiupnpc-dev zlib1g-dev
 
-      - name: Build LevelDB
+      - name: Configure
         run: |
-          cd src/leveldb
-          chmod +x build_detect_platform
-          make clean || true
-          make OPT="-O2" libleveldb.a libmemenv.a
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_QT=OFF \
+            -DBUILD_DAEMON=ON \
+            -DBUILD_TESTS=ON \
+            -DUSE_UPNP=OFF
 
-      - name: Build and run unit tests
-        run: |
-          cd src
-          make -f makefile.unix test -j$(nproc)
-          ./test_triangles --log_level=test_suite 2>&1 || true
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Run unit tests
+        run: cd build && ctest --output-on-failure || true
 
   build-windows-qt:
     runs-on: windows-latest
@@ -48,6 +51,8 @@ jobs:
           update: true
           install: >-
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
             mingw-w64-x86_64-qt5-base
             mingw-w64-x86_64-qt5-tools
             mingw-w64-x86_64-boost
@@ -55,13 +60,7 @@ jobs:
             mingw-w64-x86_64-db
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-miniupnpc
-            make
-
-      - name: Create Qt5 tool symlinks
-        run: |
-          ln -sf /mingw64/bin/qmake-qt5.exe /mingw64/bin/qmake.exe 2>/dev/null || true
-          ln -sf /mingw64/bin/lrelease-qt5.exe /mingw64/bin/lrelease.exe 2>/dev/null || true
-          ln -sf /mingw64/bin/windeployqt-qt5.exe /mingw64/bin/windeployqt.exe 2>/dev/null || true
+            mingw-w64-x86_64-zlib
 
       - name: Set VERSION from source
         run: |
@@ -70,25 +69,23 @@ jobs:
           REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
           echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
 
-      - name: Clean stale build artifacts
-        run: rm -rf build/*.o build/*.h
-
-      - name: Build LevelDB
+      - name: Configure
         run: |
-          cd src/leveldb
-          make clean || true
-          CC=gcc CXX=g++ TARGET_OS=OS_WINDOWS_CROSSCOMPILE make OPT="-fno-keep-inline-dllexport -march=nocona -msahf -mtune=generic -Wa,-mbig-obj -O2" libleveldb.a libmemenv.a
-
-      - name: Run qmake
-        run: qmake triangles-qt.pro "RELEASE=1"
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_QT=ON \
+            -DBUILD_DAEMON=OFF \
+            -DBUILD_TESTS=OFF \
+            -DUSE_UPNP=ON \
+            -DUSE_QRCODE=OFF
 
       - name: Build
-        run: make -j$(nproc)
+        run: cmake --build build -j$(nproc)
 
       - name: Package
         run: |
           mkdir -p dist
-          cp release/triangles-qt.exe dist/
+          cp build/bin/triangles-qt.exe dist/
           windeployqt dist/triangles-qt.exe || true
 
           # Copy ALL runtime DLLs the binary needs
@@ -199,34 +196,36 @@ jobs:
           update: true
           install: >-
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
             mingw-w64-x86_64-boost
             mingw-w64-x86_64-openssl
             mingw-w64-x86_64-db
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-miniupnpc
-            make
+            mingw-w64-x86_64-zlib
 
-      - name: Build LevelDB
+      - name: Configure
         run: |
-          cd src/leveldb
-          make clean || true
-          CC=gcc CXX=g++ TARGET_OS=OS_WINDOWS_CROSSCOMPILE make OPT="-fno-keep-inline-dllexport -march=nocona -msahf -mtune=generic -Wa,-mbig-obj -O2" libleveldb.a libmemenv.a
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_QT=OFF \
+            -DBUILD_DAEMON=ON \
+            -DBUILD_TESTS=OFF \
+            -DUSE_UPNP=ON
 
-      - name: Build daemon
+      - name: Build
         run: |
-          set -eo pipefail
-          cd src
-          mkdir -p obj
-          make -f makefile.mingw DEPSDIR=/mingw64 all -j$(nproc) 2>&1
-          strip --strip-all trianglesd.exe
+          cmake --build build -j$(nproc)
+          strip --strip-all build/bin/trianglesd.exe
 
       - name: Package daemon with DLLs
         run: |
           mkdir -p daemon-dist/tor
-          cp src/trianglesd.exe daemon-dist/
+          cp build/bin/trianglesd.exe daemon-dist/
 
           # Copy all linked DLLs from MSYS2
-          ldd src/trianglesd.exe | grep '/mingw64' | awk '{print $3}' | while read dll; do
+          ldd build/bin/trianglesd.exe | grep '/mingw64' | awk '{print $3}' | while read dll; do
             cp "$dll" daemon-dist/ 2>/dev/null || true
           done
 
@@ -263,28 +262,25 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential qt5-qmake qtbase5-dev \
-            qttools5-dev-tools libboost-all-dev libssl-dev libdb++-dev \
-            libleveldb-dev libevent-dev libminiupnpc-dev
+          sudo apt-get install -y build-essential cmake ninja-build \
+            qtbase5-dev qttools5-dev-tools \
+            libboost-all-dev libssl-dev libdb++-dev \
+            libleveldb-dev libevent-dev libminiupnpc-dev zlib1g-dev
 
-      - name: Build LevelDB
+      - name: Configure
         run: |
-          cd src/leveldb
-          chmod +x build_detect_platform
-          make clean || true
-          make OPT="-O2" libleveldb.a libmemenv.a
-
-      - name: Clean stale build artifacts
-        run: rm -rf build/*.o
-
-      - name: Run qmake
-        run: qmake triangles-qt.pro "RELEASE=1"
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_QT=ON \
+            -DBUILD_DAEMON=OFF \
+            -DBUILD_TESTS=OFF \
+            -DUSE_UPNP=ON
 
       - name: Build
-        run: make -j$(nproc)
+        run: cmake --build build -j$(nproc)
 
       - name: Strip binary
-        run: strip --strip-all triangles-qt
+        run: strip --strip-all build/bin/triangles-qt
 
       - name: Build .deb package (fully self-contained)
         run: |
@@ -300,13 +296,13 @@ jobs:
           mkdir -p ${PKG}/usr/share/applications
           mkdir -p ${PKG}/usr/share/pixmaps
 
-          cp triangles-qt ${PKG}/usr/lib/cryptographic-triangles/
+          cp build/bin/triangles-qt ${PKG}/usr/lib/cryptographic-triangles/
           cp tor-extract/tor/tor ${PKG}/usr/lib/cryptographic-triangles/tor/
           chmod +x ${PKG}/usr/lib/cryptographic-triangles/tor/tor
           [ -d tor-extract/data ] && cp -r tor-extract/data ${PKG}/usr/lib/cryptographic-triangles/tor/data
 
           # Bundle ALL shared library dependencies (except glibc/kernel)
-          ldd triangles-qt | grep '=> /' | awk '{print $3}' | while read lib; do
+          ldd build/bin/triangles-qt | grep '=> /' | awk '{print $3}' | while read lib; do
             case "$lib" in
               /lib/x86_64-linux-gnu/libc.so*|/lib/x86_64-linux-gnu/libm.so*|/lib/x86_64-linux-gnu/libpthread.so*|/lib/x86_64-linux-gnu/libdl.so*|/lib/x86_64-linux-gnu/librt.so*|/lib/x86_64-linux-gnu/ld-linux*|/lib64/ld-linux*)
                 ;; # Skip glibc core — always present
@@ -379,24 +375,24 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libboost-all-dev \
-            libssl-dev libdb++-dev libleveldb-dev libevent-dev libminiupnpc-dev
+          sudo apt-get install -y build-essential cmake ninja-build \
+            libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
+            libevent-dev libminiupnpc-dev zlib1g-dev
 
-      - name: Build LevelDB
+      - name: Configure
         run: |
-          cd src/leveldb
-          chmod +x build_detect_platform
-          make clean || true
-          make OPT="-O2" libleveldb.a libmemenv.a
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_QT=OFF \
+            -DBUILD_DAEMON=ON \
+            -DBUILD_TESTS=OFF \
+            -DUSE_UPNP=ON
 
-      - name: Build daemon
-        run: |
-          cd src
-          mkdir -p obj
-          make -f makefile.unix trianglesd -j$(nproc)
+      - name: Build
+        run: cmake --build build -j$(nproc)
 
       - name: Strip binary
-        run: strip --strip-all src/trianglesd
+        run: strip --strip-all build/bin/trianglesd
 
       - name: Build .deb package (fully self-contained)
         run: |
@@ -411,13 +407,13 @@ jobs:
           mkdir -p ${PKG}/usr/bin
           mkdir -p ${PKG}/etc/systemd/system
 
-          cp src/trianglesd ${PKG}/usr/lib/cryptographic-triangles/
+          cp build/bin/trianglesd ${PKG}/usr/lib/cryptographic-triangles/
           cp tor-extract/tor/tor ${PKG}/usr/lib/cryptographic-triangles/tor/
           chmod +x ${PKG}/usr/lib/cryptographic-triangles/tor/tor
           [ -d tor-extract/data ] && cp -r tor-extract/data ${PKG}/usr/lib/cryptographic-triangles/tor/data
 
           # Bundle ALL shared library dependencies (except glibc/kernel)
-          ldd src/trianglesd | grep '=> /' | awk '{print $3}' | while read lib; do
+          ldd build/bin/trianglesd | grep '=> /' | awk '{print $3}' | while read lib; do
             case "$lib" in
               /lib/x86_64-linux-gnu/libc.so*|/lib/x86_64-linux-gnu/libm.so*|/lib/x86_64-linux-gnu/libpthread.so*|/lib/x86_64-linux-gnu/libdl.so*|/lib/x86_64-linux-gnu/librt.so*|/lib/x86_64-linux-gnu/ld-linux*|/lib64/ld-linux*)
                 ;; # Skip glibc core — always present
@@ -504,50 +500,48 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install qt@5 openssl@3 boost berkeley-db@5 leveldb libevent miniupnpc
+          brew install cmake ninja qt@5 openssl@3 boost berkeley-db@5 leveldb libevent miniupnpc
 
-      - name: Clean stale build artifacts
-        run: rm -rf build/*.o build/*.h
-
-      - name: Build LevelDB
-        run: |
-          cd src/leveldb
-          chmod +x build_detect_platform
-          make clean || true
-          CC=clang CXX=clang++ make OPT="-O2" libleveldb.a libmemenv.a
-
-      - name: Run qmake
+      - name: Configure
         run: |
           export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
-          qmake triangles-qt.pro -spec macx-clang \
-            "BOOST_INCLUDE_PATH=/opt/homebrew/opt/boost/include" \
-            "BOOST_LIB_PATH=/opt/homebrew/opt/boost/lib" \
-            "BDB_INCLUDE_PATH=/opt/homebrew/opt/berkeley-db@5/include" \
-            "BDB_LIB_PATH=/opt/homebrew/opt/berkeley-db@5/lib" \
-            "BDB_LIB_SUFFIX=" \
-            "OPENSSL_INCLUDE_PATH=/opt/homebrew/opt/openssl@3/include" \
-            "OPENSSL_LIB_PATH=/opt/homebrew/opt/openssl@3/lib" \
-            "MINIUPNPC_INCLUDE_PATH=/opt/homebrew/opt/miniupnpc/include" \
-            "MINIUPNPC_LIB_PATH=/opt/homebrew/opt/miniupnpc/lib" \
-            "EVENT_INCLUDE_PATH=/opt/homebrew/opt/libevent/include" \
-            "EVENT_LIB_PATH=/opt/homebrew/opt/libevent/lib" \
-            "RELEASE=1"
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_QT=ON \
+            -DBUILD_DAEMON=OFF \
+            -DBUILD_TESTS=OFF \
+            -DUSE_UPNP=ON \
+            -DBOOST_ROOT=/opt/homebrew/opt/boost \
+            -DBDB_INCLUDE_PATH=/opt/homebrew/opt/berkeley-db@5/include \
+            -DBDB_LIB_PATH=/opt/homebrew/opt/berkeley-db@5/lib \
+            -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3 \
+            -DEVENT_INCLUDE_PATH=/opt/homebrew/opt/libevent/include \
+            -DEVENT_LIB_PATH=/opt/homebrew/opt/libevent/lib \
+            -DMINIUPNPC_INCLUDE_PATH=/opt/homebrew/opt/miniupnpc/include \
+            -DMINIUPNPC_LIB_PATH=/opt/homebrew/opt/miniupnpc/lib \
+            -DQt5_DIR=/opt/homebrew/opt/qt@5/lib/cmake/Qt5
 
       - name: Build
-        run: |
-          export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
-          make -j$(sysctl -n hw.ncpu)
+        run: cmake --build build -j$(sysctl -n hw.ncpu)
 
       - name: Create .app bundle
         run: |
           export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
-          macdeployqt Triangles-Qt.app -verbose=1
+          macdeployqt build/bin/Triangles-Qt.app -verbose=1 || \
+          macdeployqt build/bin/triangles-qt.app -verbose=1 || true
 
       - name: Bundle non-Qt dylibs into app
         run: |
-          FRAMEWORKS="Triangles-Qt.app/Contents/Frameworks"
-          MACOS="Triangles-Qt.app/Contents/MacOS"
-          BINARY="$MACOS/Triangles-Qt"
+          # Find the .app bundle
+          APP=$(find build/bin -name "*.app" -maxdepth 1 | head -1)
+          if [ -z "$APP" ]; then
+            echo "No .app bundle found, creating one manually..."
+            APP="build/bin/Triangles-Qt.app"
+            mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks"
+            cp build/bin/triangles-qt "$APP/Contents/MacOS/Triangles-Qt"
+          fi
+          FRAMEWORKS="$APP/Contents/Frameworks"
+          BINARY=$(find "$APP/Contents/MacOS" -type f -perm +111 | head -1)
 
           # Copy Homebrew dylibs that macdeployqt doesn't handle
           for lib in boost_system boost_filesystem boost_thread boost_program_options boost_chrono; do
@@ -575,15 +569,17 @@ jobs:
           TOR_VERSION="15.0.8"
           curl -sL "https://dist.torproject.org/torbrowser/${TOR_VERSION}/tor-expert-bundle-macos-aarch64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
           mkdir -p tor-extract && tar -xzf tor-bundle.tar.gz -C tor-extract
-          mkdir -p Triangles-Qt.app/Contents/MacOS/tor
-          cp tor-extract/tor/tor Triangles-Qt.app/Contents/MacOS/tor/
-          chmod +x Triangles-Qt.app/Contents/MacOS/tor/tor
-          [ -d tor-extract/data ] && cp -r tor-extract/data Triangles-Qt.app/Contents/MacOS/tor/data
+          APP=$(find build/bin -name "*.app" -maxdepth 1 | head -1)
+          mkdir -p "$APP/Contents/MacOS/tor"
+          cp tor-extract/tor/tor "$APP/Contents/MacOS/tor/"
+          chmod +x "$APP/Contents/MacOS/tor/tor"
+          [ -d tor-extract/data ] && cp -r tor-extract/data "$APP/Contents/MacOS/tor/data"
 
       - name: Create DMG
         run: |
+          APP=$(find build/bin -name "*.app" -maxdepth 1 | head -1)
           mkdir -p dmg_contents
-          cp -R Triangles-Qt.app dmg_contents/
+          cp -R "$APP" dmg_contents/
           ln -s /Applications dmg_contents/Applications
           hdiutil create -volname "Cryptographic Triangles" \
             -srcfolder dmg_contents \
