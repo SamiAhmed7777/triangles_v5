@@ -148,10 +148,23 @@ if(USE_TOR_EMBEDDED)
     target_compile_definitions(triangles_common PUBLIC ENABLE_TOR_EMBEDDED)
     target_include_directories(triangles_common PUBLIC "${TOR_SOURCE_ROOT}/src/feature/api")
     target_link_directories(triangles_common PUBLIC "${TOR_SOURCE_ROOT}")
-    if(UNIX)
-        target_link_libraries(triangles_common PUBLIC -Wl,--start-group -ltor -Wl,--end-group lzma zstd)
-    else()
-        target_link_libraries(triangles_common PUBLIC tor lzma zstd)
+    # libtor.a has circular deps with libevent/openssl/zlib
+    # OpenSSL and zlib already linked via imported targets above, so only add
+    # libevent and compression libs that libtor needs but aren't yet linked.
+    # --start-group / --end-group resolves circular references between libtor
+    # and its dependencies.
+    # Use --allow-multiple-definition because libtor.a may pull in static
+    # OpenSSL objects that duplicate the DLL import lib already linked above.
+    target_link_libraries(triangles_common PUBLIC
+        -Wl,--allow-multiple-definition
+        -Wl,--start-group
+        -ltor
+        -levent -levent_core -levent_extra -levent_openssl
+        -lssl -lcrypto -lz -llzma -lzstd
+        -Wl,--end-group
+    )
+    if(WIN32)
+        target_link_libraries(triangles_common PUBLIC iphlpapi shlwapi crypt32)
     endif()
 endif()
 

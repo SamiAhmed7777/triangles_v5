@@ -52,6 +52,7 @@ blocks/
 .*.json
 temp/
 tmp/
+testnet-sync/
 
 # Private/Local
 triangles.conf

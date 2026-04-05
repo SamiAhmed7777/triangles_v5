@@ -165,8 +165,13 @@ bool CTorEmbedded::Start(int socks, int hsPort, bool enableHiddenService)
         }
 
         // Quick port check
+#ifdef WIN32
+        SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock != INVALID_SOCKET) {
+#else
         int sock = socket(AF_INET, SOCK_STREAM, 0);
         if (sock >= 0) {
+#endif
             struct sockaddr_in addr;
             memset(&addr, 0, sizeof(addr));
             addr.sin_family = AF_INET;
