@@ -8,7 +8,7 @@
 
 #include "ui_interface.h"
 #include "base58.h"
-#include "json_spirit.h"
+#include "json/json_compat.h"
 
 #include <QSet>
 #include <QTimer>
@@ -265,8 +265,9 @@ public:
 
 private:
     // Get the json value
-    const json_spirit::mValue & find_value(json_spirit::mObject & obj, const char * key)
+    const json_spirit::Value & find_json_value(json_spirit::mObject & obj, const char * key)
     {
+        static const json_spirit::Value null_val;
         std::string newKey = key;
 
         json_spirit::mObject::const_iterator i = obj.find(newKey);
@@ -274,12 +275,12 @@ private:
         if(i != obj.end() && i->first == newKey)
             return i->second;
         else
-            return json_spirit::mValue::null;
+            return null_val;
     }
 
     const std::string get_value(json_spirit::mObject & obj, const char * key)
     {
-        json_spirit::mValue val = find_value(obj, key);
+        const json_spirit::Value& val = find_json_value(obj, key);
 
         if(val.is_null())
             return "";
@@ -291,7 +292,7 @@ private:
     void handleMessageEntry(const MessageTableEntry & message, const bool append)
     {
         addMessageEntry(message, append);
-        json_spirit::mValue mVal;
+        json_spirit::Value mVal;
         json_spirit::read(message.message.toStdString(), mVal);
 
         if(mVal.is_null())
@@ -300,8 +301,8 @@ private:
             return;
         }
 
-        json_spirit::mObject mObj(mVal.get_obj());
-        json_spirit::mValue mvType = find_value(mObj, "type");
+        json_spirit::mObject mObj(mVal.get_map_obj());
+        json_spirit::Value mvType = find_json_value(mObj, "type");
 
     }
 
