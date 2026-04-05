@@ -214,6 +214,17 @@ if(BUILD_QT)
         "${CMAKE_CURRENT_SOURCE_DIR}/qt/plugins/mrichtexteditor"
     )
 
+    # ui_interface.h is a hand-written header (Bitcoin convention), NOT a Qt
+    # Designer file. Disable AutoUic globally and run UIC manually for real .ui files.
+    set(CMAKE_AUTOUIC OFF)
+
+    # Collect all .ui files and run UIC on them explicitly
+    file(GLOB_RECURSE UI_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/qt/forms/*.ui"
+        "${CMAKE_CURRENT_SOURCE_DIR}/qt/plugins/mrichtexteditor/*.ui"
+    )
+    qt5_wrap_ui(UI_HEADERS ${UI_FILES})
+
     set(QT_SOURCES
         qt/triangles.cpp
         qt/trianglesgui.cpp
@@ -303,6 +314,7 @@ if(BUILD_QT)
         ${QT_SOURCES}
         ${QT_RESOURCES}
         ${QT_FORMS}
+        ${UI_HEADERS}
         # Per-target: compiled with QT_GUI define
         init.cpp
         wallet.cpp
@@ -317,6 +329,7 @@ if(BUILD_QT)
     target_include_directories(triangles-qt PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/qt"
         "${CMAKE_CURRENT_SOURCE_DIR}/qt/plugins/mrichtexteditor"
+        "${CMAKE_CURRENT_BINARY_DIR}"
     )
 
     target_link_libraries(triangles-qt PRIVATE
