@@ -22,7 +22,10 @@ if(NOT WIN32)
     add_compile_options(-fno-stack-protector)
     add_compile_options(-fstack-protector-all -Wstack-protector)
     add_compile_definitions(_FORTIFY_SOURCE=2)
-    add_link_options(-Wl,-z,relro -Wl,-z,now)
+    # -z relro/now is ELF-only (Linux); macOS linker doesn't support it
+    if(NOT APPLE)
+        add_link_options(-Wl,-z,relro -Wl,-z,now)
+    endif()
 endif()
 
 # ── PIE (position-independent executables) ──
