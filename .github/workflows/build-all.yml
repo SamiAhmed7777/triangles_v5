@@ -637,8 +637,9 @@ jobs:
       - name: Dispatch tri-pi ARM64 build
         run: |
           curl -f -X POST \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Authorization: token ${{ secrets.TRIPI_BUILD_TOKEN }}" \
-            https://api.github.com/repos/SamiAhmed7777/tri-pi/actions/workflows/build-arm64.yml/dispatches \
-            -d '{"ref":"main","inputs":{"version":"${{ github.ref_name }}"}}'
-          echo "Triggered tri-pi build for ${{ github.ref_name }}"
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.TRIPI_BUILD_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/SamiAhmed7777/tri-pi/dispatches \
+            -d '{"event_type":"new-release","client_payload":{"version":"${{ github.ref_name }}","source_repo":"SamiAhmed7777/triangles_v5"}}'
+          echo "Triggered tri-pi repository_dispatch for ${{ github.ref_name }}"
