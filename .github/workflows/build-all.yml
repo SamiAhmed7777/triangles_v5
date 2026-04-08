@@ -61,7 +61,6 @@ jobs:
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-miniupnpc
             mingw-w64-x86_64-zlib
-            mingw-w64-x86_64-tor
 
       - name: Set VERSION from source
         run: |
@@ -144,16 +143,19 @@ jobs:
       - name: Download Tor
         shell: powershell
         run: |
+          $TOR_VERSION = "15.0.9"
+          $TOR_URL = "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-windows-x86_64-${TOR_VERSION}.tar.gz"
+          Invoke-WebRequest -Uri $TOR_URL -OutFile tor-bundle.tar.gz
+          New-Item -ItemType Directory -Path tor-extract -Force
+          tar -xzf tor-bundle.tar.gz -C tor-extract
           New-Item -ItemType Directory -Path tor-files -Force
-          $torExe = Get-ChildItem -Path C:\msys64\mingw64\bin,C:\msys64\usr\bin -Filter tor.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $torExe) {
-            throw "tor.exe not found in MSYS2 installation"
+          Copy-Item tor-extract/tor/tor.exe tor-files/
+          Copy-Item tor-extract/tor/tor-gencert.exe tor-files/ -ErrorAction SilentlyContinue
+          if (Test-Path tor-extract/tor/pluggable_transports) {
+            Copy-Item -Recurse tor-extract/tor/pluggable_transports tor-files/
           }
-          Copy-Item $torExe.FullName tor-files/
-
-          $torGenCert = Get-ChildItem -Path C:\msys64\mingw64\bin,C:\msys64\usr\bin -Filter tor-gencert.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($torGenCert) {
-            Copy-Item $torGenCert.FullName tor-files/
+          if (Test-Path tor-extract/data) {
+            Copy-Item -Recurse tor-extract/data tor-files/data
           }
 
       - name: Install NSIS via MSYS2
@@ -202,7 +204,6 @@ jobs:
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-miniupnpc
             mingw-w64-x86_64-zlib
-            mingw-w64-x86_64-tor
 
       - name: Configure
         run: |
@@ -231,11 +232,14 @@ jobs:
       - name: Bundle Tor for daemon
         shell: powershell
         run: |
-          $torExe = Get-ChildItem -Path C:\msys64\mingw64\bin,C:\msys64\usr\bin -Filter tor.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $torExe) {
-            throw "tor.exe not found in MSYS2 installation"
+          $TOR_VERSION = "15.0.9"
+          Invoke-WebRequest -Uri "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-windows-x86_64-${TOR_VERSION}.tar.gz" -OutFile tor-bundle.tar.gz
+          New-Item -ItemType Directory -Path tor-extract -Force
+          tar -xzf tor-bundle.tar.gz -C tor-extract
+          Copy-Item tor-extract/tor/tor.exe daemon-dist/tor/
+          if (Test-Path tor-extract/data) {
+            Copy-Item -Recurse tor-extract/data daemon-dist/tor/data
           }
-          Copy-Item $torExe.FullName daemon-dist/tor/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -261,8 +265,7 @@ jobs:
           sudo apt-get install -y build-essential cmake ninja-build \
             qtbase5-dev qttools5-dev-tools \
             libboost-all-dev libssl-dev libdb++-dev \
-            libleveldb-dev libevent-dev libminiupnpc-dev zlib1g-dev \
-            tor
+            libleveldb-dev libevent-dev libminiupnpc-dev zlib1g-dev
 
       - name: Configure
         run: |
@@ -281,6 +284,10 @@ jobs:
 
       - name: Build .deb package (fully self-contained)
         run: |
+          TOR_VERSION="15.0.9"
+          curl -sL "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-linux-x86_64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
+          mkdir -p tor-extract && tar -xzf tor-bundle.tar.gz -C tor-extract
+
           PKG="cryptographic-triangles_${VERSION}_amd64"
           mkdir -p ${PKG}/DEBIAN
           mkdir -p ${PKG}/usr/lib/cryptographic-triangles/lib
@@ -290,8 +297,9 @@ jobs:
           mkdir -p ${PKG}/usr/share/pixmaps
 
           cp build/bin/triangles-qt ${PKG}/usr/lib/cryptographic-triangles/
-          cp /usr/bin/tor ${PKG}/usr/lib/cryptographic-triangles/tor/
+          cp tor-extract/tor/tor ${PKG}/usr/lib/cryptographic-triangles/tor/
           chmod +x ${PKG}/usr/lib/cryptographic-triangles/tor/tor
+          [ -d tor-extract/data ] && cp -r tor-extract/data ${PKG}/usr/lib/cryptographic-triangles/tor/data
 
           # Bundle ALL shared library dependencies (except glibc/kernel)
           ldd build/bin/triangles-qt | grep '=> /' | awk '{print $3}' | while read lib; do
@@ -369,7 +377,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build \
             libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
-            libevent-dev libminiupnpc-dev zlib1g-dev tor
+            libevent-dev libminiupnpc-dev zlib1g-dev
 
       - name: Configure
         run: |
@@ -388,6 +396,10 @@ jobs:
 
       - name: Build .deb package (fully self-contained)
         run: |
+          TOR_VERSION="15.0.9"
+          curl -sL "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-linux-x86_64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
+          mkdir -p tor-extract && tar -xzf tor-bundle.tar.gz -C tor-extract
+
           PKG="cryptographic-triangles-daemon_${VERSION}_amd64"
           mkdir -p ${PKG}/DEBIAN
           mkdir -p ${PKG}/usr/lib/cryptographic-triangles/lib
@@ -396,8 +408,9 @@ jobs:
           mkdir -p ${PKG}/etc/systemd/system
 
           cp build/bin/trianglesd ${PKG}/usr/lib/cryptographic-triangles/
-          cp /usr/bin/tor ${PKG}/usr/lib/cryptographic-triangles/tor/
+          cp tor-extract/tor/tor ${PKG}/usr/lib/cryptographic-triangles/tor/
           chmod +x ${PKG}/usr/lib/cryptographic-triangles/tor/tor
+          [ -d tor-extract/data ] && cp -r tor-extract/data ${PKG}/usr/lib/cryptographic-triangles/tor/data
 
           # Bundle ALL shared library dependencies (except glibc/kernel)
           ldd build/bin/trianglesd | grep '=> /' | awk '{print $3}' | while read lib; do
@@ -487,7 +500,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install cmake ninja qt@5 openssl@3 boost berkeley-db@5 leveldb libevent miniupnpc tor
+          brew install cmake ninja qt@5 openssl@3 boost berkeley-db@5 leveldb libevent miniupnpc
 
       - name: Configure
         run: |
@@ -553,10 +566,14 @@ jobs:
 
       - name: Bundle Tor into app
         run: |
+          TOR_VERSION="15.0.9"
+          curl -sL "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-macos-aarch64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
+          mkdir -p tor-extract && tar -xzf tor-bundle.tar.gz -C tor-extract
           APP=$(find build/bin -name "*.app" -maxdepth 1 | head -1)
           mkdir -p "$APP/Contents/MacOS/tor"
-          cp "$(brew --prefix)/bin/tor" "$APP/Contents/MacOS/tor/"
+          cp tor-extract/tor/tor "$APP/Contents/MacOS/tor/"
           chmod +x "$APP/Contents/MacOS/tor/tor"
+          [ -d tor-extract/data ] && cp -r tor-extract/data "$APP/Contents/MacOS/tor/data"
 
       - name: Create DMG
         run: |
