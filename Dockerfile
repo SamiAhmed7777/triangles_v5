@@ -2,7 +2,7 @@ FROM ubuntu:22.04
 
 LABEL maintainer="Cryptographic Triangles Team"
 LABEL description="Cryptographic Triangles (TRI) headless daemon"
-LABEL version="5.6.0"
+LABEL version="5.7.6"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tor \
     && rm -rf /var/lib/apt/lists/*
 
-ARG VERSION=5.6.0
+ARG VERSION=5.7.6
 RUN curl -L -o /usr/local/bin/trianglesd \
     https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/Cryptographic-Triangles-v${VERSION}-linux-x64-daemon \
     && chmod +x /usr/local/bin/trianglesd

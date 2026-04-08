@@ -1,11 +1,11 @@
 {
-    "version": "5.6.0",
+    "version": "5.7.6",
     "description": "Cryptographic Triangles (TRI) cryptocurrency wallet with PoS staking and encrypted messaging",
     "homepage": "https://cryptographic-triangles.org",
     "license": "MIT",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.6.0/Cryptographic-Triangles-5.6.0-win-x64.zip",
+            "url": "https://github.com/SamiAhmed7777/triangles_v5/releases/download/v5.7.6/Cryptographic-Triangles-5.7.6-win-x64.zip",
             "hash": "6f002a669a7e92aaf3d8dd7b1ae80f06a086c99a15ca05cf107665009ffc06b7"
         }
     },
