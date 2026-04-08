@@ -207,8 +207,12 @@ bool CTorProcess::WriteTorrc()
               << " 127.0.0.1:" << hiddenServicePort << "\n";
     }
 
-    // Reduce bandwidth/resource usage for wallet use
-    torrc << "ClientOnly 1\n";
+    // Only force client-only mode when we are NOT publishing a hidden service.
+    // When HiddenServicePort is configured, Tor needs to behave as a hidden
+    // service host, not just as a pure outbound client proxy.
+    if (!hiddenServiceEnabled) {
+        torrc << "ClientOnly 1\n";
+    }
 
     // Disable unused features
     torrc << "AvoidDiskWrites 1\n";
@@ -321,6 +325,17 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
         }
         if (IsPortInUse(socksPort)) {
             printf("Tor SOCKS proxy ready on port %d (took %ds)\n", socksPort, i + 1);
+
+            // Defensive check: Tor must not directly occupy the node's hidden-service
+            // virtual port. If it does, node startup will fail with a bind collision.
+            if (hiddenServiceEnabled && IsPortInUse(hiddenServicePort)) {
+                printf("ERROR: Tor startup collision: hidden service port %d appears busy before node bind.\n",
+                       hiddenServicePort);
+                printf("       Refusing to treat Tor as healthy because this would block the node listener.\n");
+                Stop();
+                running = false;
+                return false;
+            }
 
             // Read and display the hidden service hostname if available
             if (hiddenServiceEnabled) {
