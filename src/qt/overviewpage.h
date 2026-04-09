@@ -31,6 +31,7 @@ public:
 public slots:
     void setBalance(qint64 balance, qint64 stake, qint64 unconfirmedBalance, qint64 immatureBalance);
     void setTransactionSyncState(bool syncing);
+    void updateOnionAddress();
 
 signals:
     void transactionClicked(const QModelIndex &index);
