@@ -19,6 +19,7 @@ private:
     std::string torBinaryPath;
     std::string torDataDir;
     std::string torrcPath;
+    std::string lastError;
     int socksPort;
     int hiddenServicePort;
     bool hiddenServiceEnabled;
@@ -59,6 +60,7 @@ public:
 
     // Get the Tor binary path (for diagnostics)
     std::string GetBinaryPath() const { return torBinaryPath; }
+    std::string GetLastError() const { return lastError; }
 
     // Singleton access
     static CTorProcess* GetInstance();

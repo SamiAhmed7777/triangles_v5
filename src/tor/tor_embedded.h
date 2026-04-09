@@ -19,6 +19,7 @@ private:
     bool hiddenServiceEnabled;
     std::string torDataDir;
     std::string onionHostname;
+    std::string lastError;
 
 public:
     static CTorEmbedded* GetInstance();
@@ -43,6 +44,8 @@ public:
 
     // Get our .onion address (available after bootstrap)
     std::string GetOnionAddress() const { return onionHostname; }
+    std::string GetLastError() const { return lastError; }
+    void SetLastError(const std::string& value) { lastError = value; }
 
     // Get the hidden service port
     int GetHiddenServicePort() const { return hiddenServicePort; }

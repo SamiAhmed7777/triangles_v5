@@ -114,6 +114,7 @@ bool CTorEmbedded::Start(int socks, int hsPort, bool enableHiddenService)
 {
     if (running.load()) return true;
 
+    lastError.clear();
     socksPort = socks;
     hiddenServiceEnabled = enableHiddenService;
     hiddenServicePort = hiddenServiceEnabled ? hsPort : 0;
@@ -202,11 +203,13 @@ bool CTorEmbedded::Start(int socks, int hsPort, bool enableHiddenService)
         }
 
         if (!running.load()) {
+            lastError = "Embedded Tor thread exited during bootstrap before the SOCKS proxy became available.";
             printf("ERROR: Embedded Tor thread exited during bootstrap\n");
             return false;
         }
     }
 
+    lastError = strprintf("Embedded Tor did not expose SOCKS port %d within 60 seconds.", socksPort);
     printf("WARNING: Embedded Tor started but SOCKS not ready after 60s (still bootstrapping)\n");
     return true;
 }
@@ -241,8 +244,12 @@ bool CTorEmbedded::Start(int socks, int hsPort, bool enableHiddenService)
     hiddenServiceEnabled = enableHiddenService;
     hiddenServicePort = hiddenServiceEnabled ? hsPort : 0;
     onionHostname.clear();
+    lastError.clear();
     torDataDir = (::GetDataDir() / "tor_data").string();
     running.store(StartTorProcess(torDataDir, socksPort, hiddenServicePort, hiddenServiceEnabled));
+    if (!running.load()) {
+        lastError = CTorProcess::GetInstance()->GetLastError();
+    }
     return running.load();
 }
 
