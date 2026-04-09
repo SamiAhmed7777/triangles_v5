@@ -19,11 +19,13 @@
 #include <boost/filesystem.hpp>
 #include <fstream>
 #include <cstdio>
+#include <sstream>
 
 #ifdef WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <tlhelp32.h>
+#include <windows.h>
 #else
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -34,6 +36,28 @@
 #endif
 
 namespace fs = boost::filesystem;
+
+static std::string ReadTailLines(const fs::path& filePath, size_t maxLines)
+{
+    std::ifstream in(filePath.string().c_str());
+    if (!in.is_open()) return "";
+
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(in, line)) {
+        lines.push_back(line);
+        if (lines.size() > maxLines) {
+            lines.erase(lines.begin());
+        }
+    }
+
+    std::ostringstream out;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i) out << " | ";
+        out << lines[i];
+    }
+    return out.str();
+}
 
 static CTorProcess* torProcessInstance = nullptr;
 
@@ -199,6 +223,10 @@ bool CTorProcess::WriteTorrc()
     fs::create_directories(torStateDir);
     torrc << "DataDirectory " << torStateDir.string() << "\n";
 
+    // Persistent Tor log for post-mortem debugging on user machines.
+    fs::path torLogPath = dataPath / "tor.log";
+    torrc << "Log notice file " << torLogPath.string() << "\n";
+
     if (hiddenServiceEnabled) {
         // V3 hidden service so this node is reachable via .onion
         torrc << "HiddenServiceDir " << hsDir.string() << "\n";
@@ -360,7 +388,13 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
 
         // Check if Tor process is still alive
         if (!IsRunning()) {
-            lastError = "Tor process exited during bootstrap before the SOCKS port became ready.";
+            fs::path torLogPath = fs::path(torDataDir) / "tor.log";
+            std::string torLogTail = ReadTailLines(torLogPath, 8);
+            if (!torLogTail.empty()) {
+                lastError = strprintf("Tor process exited during bootstrap before the SOCKS port became ready. Recent tor.log: %s", torLogTail.c_str());
+            } else {
+                lastError = "Tor process exited during bootstrap before the SOCKS port became ready.";
+            }
             printf("ERROR: Tor process exited prematurely\n");
             running = false;
             return false;
