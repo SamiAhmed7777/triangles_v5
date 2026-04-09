@@ -62,12 +62,16 @@ jobs:
             mingw-w64-x86_64-miniupnpc
             mingw-w64-x86_64-zlib
 
-      - name: Set VERSION from source
+      - name: Set VERSION
         run: |
-          MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
-          MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
-          REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
-          echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+          else
+            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
+            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
+            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+            echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
+          fi
 
       - name: Configure
         run: |
@@ -143,8 +147,8 @@ jobs:
       - name: Download Tor
         shell: powershell
         run: |
-          $TOR_VERSION = "15.0.8"
-          $TOR_URL = "https://dist.torproject.org/torbrowser/${TOR_VERSION}/tor-expert-bundle-windows-x86_64-${TOR_VERSION}.tar.gz"
+          $TOR_VERSION = "15.0.9"
+          $TOR_URL = "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-windows-x86_64-${TOR_VERSION}.tar.gz"
           Invoke-WebRequest -Uri $TOR_URL -OutFile tor-bundle.tar.gz
           New-Item -ItemType Directory -Path tor-extract -Force
           tar -xzf tor-bundle.tar.gz -C tor-extract
@@ -232,8 +236,8 @@ jobs:
       - name: Bundle Tor for daemon
         shell: powershell
         run: |
-          $TOR_VERSION = "15.0.8"
-          Invoke-WebRequest -Uri "https://dist.torproject.org/torbrowser/${TOR_VERSION}/tor-expert-bundle-windows-x86_64-${TOR_VERSION}.tar.gz" -OutFile tor-bundle.tar.gz
+          $TOR_VERSION = "15.0.9"
+          Invoke-WebRequest -Uri "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-windows-x86_64-${TOR_VERSION}.tar.gz" -OutFile tor-bundle.tar.gz
           New-Item -ItemType Directory -Path tor-extract -Force
           tar -xzf tor-bundle.tar.gz -C tor-extract
           Copy-Item tor-extract/tor/tor.exe daemon-dist/tor/
@@ -252,12 +256,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set VERSION from source
+      - name: Set VERSION
         run: |
-          MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
-          MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
-          REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
-          echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+          else
+            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
+            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
+            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+            echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
+          fi
 
       - name: Install dependencies
         run: |
@@ -284,8 +292,8 @@ jobs:
 
       - name: Build .deb package (fully self-contained)
         run: |
-          TOR_VERSION="15.0.8"
-          curl -sL "https://dist.torproject.org/torbrowser/${TOR_VERSION}/tor-expert-bundle-linux-x86_64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
+          TOR_VERSION="15.0.9"
+          curl -sL "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-linux-x86_64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
           mkdir -p tor-extract && tar -xzf tor-bundle.tar.gz -C tor-extract
 
           PKG="cryptographic-triangles_${VERSION}_amd64"
@@ -365,12 +373,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set VERSION from source
+      - name: Set VERSION
         run: |
-          MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
-          MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
-          REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
-          echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+          else
+            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
+            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
+            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+            echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
+          fi
 
       - name: Install dependencies
         run: |
@@ -396,8 +408,8 @@ jobs:
 
       - name: Build .deb package (fully self-contained)
         run: |
-          TOR_VERSION="15.0.8"
-          curl -sL "https://dist.torproject.org/torbrowser/${TOR_VERSION}/tor-expert-bundle-linux-x86_64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
+          TOR_VERSION="15.0.9"
+          curl -sL "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-linux-x86_64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
           mkdir -p tor-extract && tar -xzf tor-bundle.tar.gz -C tor-extract
 
           PKG="cryptographic-triangles-daemon_${VERSION}_amd64"
@@ -491,12 +503,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set VERSION from source
+      - name: Set VERSION
         run: |
-          MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
-          MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
-          REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
-          echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+          else
+            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
+            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
+            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+            echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
+          fi
 
       - name: Install dependencies
         run: |
@@ -566,8 +582,8 @@ jobs:
 
       - name: Bundle Tor into app
         run: |
-          TOR_VERSION="15.0.8"
-          curl -sL "https://dist.torproject.org/torbrowser/${TOR_VERSION}/tor-expert-bundle-macos-aarch64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
+          TOR_VERSION="15.0.9"
+          curl -sL "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-macos-aarch64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
           mkdir -p tor-extract && tar -xzf tor-bundle.tar.gz -C tor-extract
           APP=$(find build/bin -name "*.app" -maxdepth 1 | head -1)
           mkdir -p "$APP/Contents/MacOS/tor"
@@ -637,8 +653,9 @@ jobs:
       - name: Dispatch tri-pi ARM64 build
         run: |
           curl -f -X POST \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Authorization: token ${{ secrets.TRIPI_BUILD_TOKEN }}" \
-            https://api.github.com/repos/SamiAhmed7777/tri-pi/actions/workflows/build-arm64.yml/dispatches \
-            -d '{"ref":"main","inputs":{"version":"${{ github.ref_name }}"}}'
-          echo "Triggered tri-pi build for ${{ github.ref_name }}"
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.TRIPI_BUILD_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/SamiAhmed7777/tri-pi/dispatches \
+            -d '{"event_type":"new-release","client_payload":{"version":"${{ github.ref_name }}","source_repo":"SamiAhmed7777/triangles_v5"}}'
+          echo "Triggered tri-pi repository_dispatch for ${{ github.ref_name }}"
