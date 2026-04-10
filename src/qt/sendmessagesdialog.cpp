@@ -8,6 +8,7 @@
 #include "sendmessagesentry.h"
 #include "dialog_move_handler.h"
 #include "guiutil.h"
+#include "tor/onion_v3.h"
 
 #include <QMessageBox>
 #include <QLocale>
@@ -154,6 +155,35 @@ void SendMessagesDialog::on_sendButton_clicked()
 
     if(!valid || recipients.isEmpty())
         return;
+
+    // Resolve any .onion addresses to TRI addresses
+    CTorV3Manager* torMgr = CTorV3Manager::GetInstance();
+    for(int i = 0; i < recipients.size(); ++i)
+    {
+        std::string addr = recipients[i].address.toStdString();
+        if (addr.size() == 62 && addr.substr(addr.size() - 6) == ".onion")
+        {
+            std::string triAddr;
+            if (torMgr && torMgr->LookupCachedOnionAddress(addr, triAddr))
+            {
+                recipients[i].address = QString::fromStdString(triAddr);
+                if (recipients[i].label.isEmpty())
+                    recipients[i].label = QString::fromStdString(addr);
+            }
+            else
+            {
+                if (torMgr)
+                    torMgr->ResolveOnionAddress(addr, triAddr);
+
+                QMessageBox::information(this, tr("Resolving .onion Address"),
+                    tr("Connecting to %1 to resolve their TRI address.\n\n"
+                       "Please wait a moment and try again.")
+                    .arg(recipients[i].address));
+                fNewRecipientAllowed = true;
+                return;
+            }
+        }
+    }
 
     // Format confirmation message
     QStringList formatted;

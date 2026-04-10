@@ -4064,6 +4064,17 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
         pfrom->fSuccessfullyConnected = true;
 
+        // If this is an onion peer and we have a pending resolve, request their wallet address
+        {
+            std::string peerAddr = pfrom->addr.ToStringIP();
+            if (peerAddr.find(".onion") != std::string::npos)
+            {
+                CTorV3Manager* torMgr = CTorV3Manager::GetInstance();
+                if (torMgr)
+                    torMgr->RequestWalletAddress(pfrom);
+            }
+        }
+
         printf("receive version message: version %d, blocks=%d, us=%s, them=%s, peer=%s\n", pfrom->nVersion, pfrom->nStartingHeight, addrMe.ToString().c_str(), addrFrom.ToString().c_str(), pfrom->addr.ToString().c_str());
 
         cPeerBlockCounts.input(pfrom->nStartingHeight);

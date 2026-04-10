@@ -50,11 +50,27 @@ QValidator::State TrianglesAddressValidator::validate(QString &input, int &pos) 
 
     // Validation
     QValidator::State state = QValidator::Acceptable;
+
+    // Allow .onion addresses (base32 lowercase + digits 2-7 + period)
+    bool isOnion = input.endsWith(".onion");
+
     for(int idx=0; idx<input.size(); ++idx)
     {
         int ch = input.at(idx).unicode();
 
-        if(((ch >= '0' && ch<='9') ||
+        if (isOnion)
+        {
+            // V3 onion: base32 (a-z, 2-7) + ".onion" suffix
+            if ((ch >= 'a' && ch <= 'z') || (ch >= '2' && ch <= '7') || ch == '.')
+            {
+                // Valid onion character
+            }
+            else
+            {
+                state = QValidator::Invalid;
+            }
+        }
+        else if(((ch >= '0' && ch<='9') ||
            (ch >= 'a' && ch<='z') ||
            (ch >= 'A' && ch<='Z')) &&
            ch != 'l' && ch != 'I' && ch != '0' && ch != 'O')

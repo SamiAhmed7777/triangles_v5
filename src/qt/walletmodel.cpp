@@ -9,6 +9,7 @@
 #include "walletdb.h" // for BackupWallet
 #include "base58.h"
 #include "main.h"
+#include "tor/onion_v3.h"
 
 #include <QSet>
 #include <QTimer>
@@ -281,8 +282,11 @@ void WalletModel::updateAddressBook(const QString &address, const QString &label
 bool WalletModel::validateAddress(const QString &address)
 {
     std::string sAddr = address.toStdString();
-    
-    
+
+    // Accept V3 .onion addresses (56-char base32 + ".onion" = 62 chars)
+    if (sAddr.size() == 62 && sAddr.substr(sAddr.size() - 6) == ".onion")
+        return CTorV3Service::ValidateOnionAddress(sAddr);
+
     CTrianglesAddress addressParsed(sAddr);
     return addressParsed.IsValid();
 }
