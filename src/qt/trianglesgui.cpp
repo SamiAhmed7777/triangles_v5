@@ -68,6 +68,8 @@
 #include <QFileDialog>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QClipboard>
+#include <QToolTip>
 #include <QDragEnterEvent>
 #if QT_VERSION < 0x050000
 #include <QUrl>
@@ -338,9 +340,11 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
         updateStakingIcon();
     }
 
-    // Onion address in status bar (hidden until populated)
+    // Onion address in status bar (hidden until populated, click to copy)
     labelOnionAddress = ui->label_onion;
     labelOnionAddress->setVisible(false);
+    labelOnionAddress->setCursor(Qt::PointingHandCursor);
+    labelOnionAddress->installEventFilter(this);
 
     // V3 indicator next to staking icon (hidden until onion is active)
     labelV3Icon = ui->label_v3;
@@ -1307,6 +1311,16 @@ bool TrianglesGUI::eventFilter(QObject *object, QEvent *event)
     }
     if (object == ui->pushButton_Overview && event->type() == QEvent::MouseButtonPress)
         gotoOverviewPage();
+    if (object == labelOnionAddress && event->type() == QEvent::MouseButtonPress)
+    {
+        QString addr = labelOnionAddress->text();
+        if (!addr.isEmpty())
+        {
+            QApplication::clipboard()->setText(addr);
+            QToolTip::showText(QCursor::pos(), tr("Copied!"), labelOnionAddress);
+        }
+        return true;
+    }
     return QMainWindow::eventFilter(object, event);
 }
 

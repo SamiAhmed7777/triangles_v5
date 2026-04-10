@@ -1422,16 +1422,16 @@ QLabel {
             </font>
            </property>
            <property name="cursor">
-            <cursorShape>IBeamCursor</cursorShape>
+            <cursorShape>PointingHandCursor</cursorShape>
            </property>
            <property name="toolTip">
-            <string>This wallet's Tor .onion address</string>
+            <string>Click to copy .onion address</string>
            </property>
            <property name="text">
             <string notr="true"/>
            </property>
            <property name="textInteractionFlags">
-            <set>Qt::LinksAccessibleByMouse|Qt::TextSelectableByKeyboard|Qt::TextSelectableByMouse</set>
+            <set>Qt::NoTextInteraction</set>
            </property>
           </widget>
          </item>
