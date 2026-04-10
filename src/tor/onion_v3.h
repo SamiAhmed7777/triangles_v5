@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <mutex>
+#include <functional>
 
 // Forward declarations
 class CNode;
@@ -137,6 +139,25 @@ public:
     void UpdateSeederReputation(const std::string& seederAddress, bool success);
     void RequestSeederListFromPeer(const std::string& peerAddress);
     void ScheduleSeederReannouncement();
+
+    // Onion-to-TRI address resolution
+    struct OnionAddrEntry {
+        std::string triAddress;
+        int64_t timestamp;
+    };
+    std::map<std::string, OnionAddrEntry> mapOnionToAddress;
+    mutable std::mutex cs_onionAddr;
+    std::map<std::string, std::function<void(bool, const std::string&)>> mapPendingResolves;
+
+    void CacheOnionAddress(const std::string& onion, const std::string& triAddr);
+    bool LookupCachedOnionAddress(const std::string& onion, std::string& triAddr) const;
+    void RequestWalletAddress(CNode* pnode);
+    void HandleWalletAddrResponse(CNode* pfrom, const std::string& triAddr,
+                                   const std::vector<unsigned char>& vchSig);
+    bool ResolveOnionAddress(const std::string& onion, std::string& triAddr,
+                             std::function<void(bool, const std::string&)> callback = nullptr);
+    void RegisterResolveCallback(const std::string& onion,
+                                 std::function<void(bool, const std::string&)> callback);
 };
 
 // Tor V3 configuration

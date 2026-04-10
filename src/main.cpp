@@ -13,6 +13,7 @@
 #include "kernel.h"
 #include "smessage.h"
 #include "tor/onion_v3.h"
+#include "tor/tor_embedded.h"
 #ifdef ENABLE_ZMQ
 #include "zmqpublishnotifier.h"
 #endif
@@ -4728,6 +4729,63 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         }
     }
 
+
+    else if (strCommand == "getwalletaddr")
+    {
+        // Peer is requesting our TRI receiving address for onion resolution.
+        // Respond with address + signature proving ownership.
+        if (!pwalletMain)
+            return true;
+
+        // Get our onion address to sign
+        CTorV3Manager* torMgr = CTorV3Manager::GetInstance();
+        std::string ourOnion = torMgr ? torMgr->GetWalletOnionAddress() : "";
+        if (ourOnion.empty())
+        {
+            CTorEmbedded* torEmbed = CTorEmbedded::GetInstance();
+            if (torEmbed)
+                ourOnion = torEmbed->GetOnionAddress();
+        }
+        if (ourOnion.empty())
+            return true; // Can't prove identity without onion address
+
+        // Get the default receiving address
+        CPubKey pubKey;
+        if (!pwalletMain->GetKeyFromPool(pubKey, true))
+            return true;
+
+        CTrianglesAddress addr(pubKey.GetID());
+        std::string strAddr = addr.ToString();
+
+        // Sign our onion address with the wallet key
+        CKeyID keyID;
+        addr.GetKeyID(keyID);
+        CKey key;
+        if (!pwalletMain->GetKey(keyID, key))
+            return true;
+
+        CDataStream ss(SER_GETHASH, 0);
+        ss << strMessageMagic;
+        ss << ourOnion;
+
+        std::vector<unsigned char> vchSig;
+        if (!key.SignCompact(Hash(ss.begin(), ss.end()), vchSig))
+            return true;
+
+        pfrom->PushMessage("walletaddr", strAddr, vchSig);
+    }
+
+    else if (strCommand == "walletaddr")
+    {
+        // Peer is responding with their TRI address + signature
+        std::string triAddr;
+        std::vector<unsigned char> vchSig;
+        vRecv >> triAddr >> vchSig;
+
+        CTorV3Manager* torMgr = CTorV3Manager::GetInstance();
+        if (torMgr)
+            torMgr->HandleWalletAddrResponse(pfrom, triAddr, vchSig);
+    }
 
     else if (strCommand == "seeder")
     {

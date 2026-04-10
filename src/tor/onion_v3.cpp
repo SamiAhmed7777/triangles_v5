@@ -2286,6 +2286,160 @@ void ThreadTorMaintenance(void* parg)
     printf("Tor maintenance thread exited\n");
 }
 
+// ============================================================================
+// Onion-to-TRI address resolution
+// ============================================================================
+
+void CTorV3Manager::CacheOnionAddress(const std::string& onion, const std::string& triAddr)
+{
+    std::lock_guard<std::mutex> lock(cs_onionAddr);
+    mapOnionToAddress[onion] = {triAddr, GetTime()};
+    printf("Cached onion→TRI mapping: %s → %s\n", onion.c_str(), triAddr.c_str());
+}
+
+bool CTorV3Manager::LookupCachedOnionAddress(const std::string& onion, std::string& triAddr) const
+{
+    std::lock_guard<std::mutex> lock(cs_onionAddr);
+    auto it = mapOnionToAddress.find(onion);
+    if (it != mapOnionToAddress.end())
+    {
+        // Cache entries expire after 24 hours
+        if (GetTime() - it->second.timestamp < 86400)
+        {
+            triAddr = it->second.triAddress;
+            return true;
+        }
+    }
+    return false;
+}
+
+void CTorV3Manager::RequestWalletAddress(CNode* pnode)
+{
+    if (pnode)
+        pnode->PushMessage("getwalletaddr");
+}
+
+void CTorV3Manager::HandleWalletAddrResponse(CNode* pfrom, const std::string& triAddr,
+                                              const std::vector<unsigned char>& vchSig)
+{
+    // Extract the peer's onion address from the connection
+    std::string peerOnion = pfrom->addr.ToStringIP();
+    if (peerOnion.find(".onion") == std::string::npos)
+    {
+        printf("walletaddr: peer %s is not an onion address, ignoring\n", peerOnion.c_str());
+        return;
+    }
+
+    // Verify the signature: peer signed their onion address with the TRI key
+    extern const std::string strMessageMagic;
+    CDataStream ss(SER_GETHASH, 0);
+    ss << strMessageMagic;
+    ss << peerOnion;
+
+    CKey key;
+    if (!key.SetCompactSignature(Hash(ss.begin(), ss.end()), vchSig))
+    {
+        printf("walletaddr: invalid signature from %s\n", peerOnion.c_str());
+        return;
+    }
+
+    // Verify the recovered public key matches the claimed TRI address
+    CTrianglesAddress claimedAddr(triAddr);
+    if (!claimedAddr.IsValid())
+    {
+        printf("walletaddr: invalid TRI address '%s' from %s\n", triAddr.c_str(), peerOnion.c_str());
+        return;
+    }
+
+    CKeyID claimedKeyID;
+    if (!claimedAddr.GetKeyID(claimedKeyID))
+    {
+        printf("walletaddr: cannot extract KeyID from %s\n", triAddr.c_str());
+        return;
+    }
+
+    if (key.GetPubKey().GetID() != claimedKeyID)
+    {
+        printf("walletaddr: signature does not match claimed address %s from %s\n",
+               triAddr.c_str(), peerOnion.c_str());
+        return;
+    }
+
+    // Signature valid — cache the mapping
+    CacheOnionAddress(peerOnion, triAddr);
+
+    // Fire any pending resolve callbacks
+    std::function<void(bool, const std::string&)> callback;
+    {
+        std::lock_guard<std::mutex> lock(cs_onionAddr);
+        auto it = mapPendingResolves.find(peerOnion);
+        if (it != mapPendingResolves.end())
+        {
+            callback = it->second;
+            mapPendingResolves.erase(it);
+        }
+    }
+    if (callback)
+        callback(true, triAddr);
+}
+
+bool CTorV3Manager::ResolveOnionAddress(const std::string& onion, std::string& triAddr,
+                                         std::function<void(bool, const std::string&)> callback)
+{
+    // Check cache first
+    if (LookupCachedOnionAddress(onion, triAddr))
+        return true;
+
+    // Find or connect to the peer
+    std::string onionHost = onion;
+    // Strip trailing .onion:port if present
+    size_t colonPos = onionHost.find(':');
+    if (colonPos != std::string::npos)
+        onionHost = onionHost.substr(0, colonPos);
+
+    // Search connected peers for this onion address
+    CNode* pnode = nullptr;
+    {
+        LOCK(cs_vNodes);
+        for (CNode* pn : vNodes)
+        {
+            if (pn->addr.ToStringIP().find(onionHost) != std::string::npos)
+            {
+                pnode = pn;
+                break;
+            }
+        }
+    }
+
+    if (pnode)
+    {
+        // Already connected — request their address
+        if (callback)
+            RegisterResolveCallback(onionHost, callback);
+        RequestWalletAddress(pnode);
+        return false; // async — callback will fire when response arrives
+    }
+
+    // Not connected — try to connect
+    if (callback)
+        RegisterResolveCallback(onionHost, callback);
+
+    int port = GetDefaultPort();
+    ConnectToOnionPeer(onionHost, port);
+
+    // After connection, the version handshake will complete, then we
+    // send the request. We need a short delay to let the connection establish.
+    // The caller should use the callback for async notification.
+    return false;
+}
+
+void CTorV3Manager::RegisterResolveCallback(const std::string& onion,
+                                             std::function<void(bool, const std::string&)> callback)
+{
+    std::lock_guard<std::mutex> lock(cs_onionAddr);
+    mapPendingResolves[onion] = callback;
+}
+
 // Global functions
 bool InitTorV3()
 {
