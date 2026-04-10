@@ -19,11 +19,13 @@
 #include <boost/filesystem.hpp>
 #include <fstream>
 #include <cstdio>
+#include <sstream>
 
 #ifdef WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <tlhelp32.h>
+#include <windows.h>
 #else
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -34,6 +36,28 @@
 #endif
 
 namespace fs = boost::filesystem;
+
+static std::string ReadTailLines(const fs::path& filePath, size_t maxLines)
+{
+    std::ifstream in(filePath.string().c_str());
+    if (!in.is_open()) return "";
+
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(in, line)) {
+        lines.push_back(line);
+        if (lines.size() > maxLines) {
+            lines.erase(lines.begin());
+        }
+    }
+
+    std::ostringstream out;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i) out << " | ";
+        out << lines[i];
+    }
+    return out.str();
+}
 
 static CTorProcess* torProcessInstance = nullptr;
 
@@ -199,6 +223,10 @@ bool CTorProcess::WriteTorrc()
     fs::create_directories(torStateDir);
     torrc << "DataDirectory " << torStateDir.string() << "\n";
 
+    // Persistent Tor log for post-mortem debugging on user machines.
+    fs::path torLogPath = dataPath / "tor.log";
+    torrc << "Log notice file " << torLogPath.string() << "\n";
+
     if (hiddenServiceEnabled) {
         // V3 hidden service so this node is reachable via .onion
         torrc << "HiddenServiceDir " << hsDir.string() << "\n";
@@ -232,6 +260,7 @@ bool CTorProcess::WriteTorrc()
 
 bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool enableHiddenService)
 {
+    lastError.clear();
     socksPort = socks;
     hiddenServiceEnabled = enableHiddenService;
     hiddenServicePort = hiddenServiceEnabled ? hsPort : 0;
@@ -240,6 +269,7 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
     // Check if something is already listening on our SOCKS port
     if (IsPortInUse(socksPort)) {
         printf("Tor SOCKS port %d already in use - assuming Tor is running\n", socksPort);
+        lastError = strprintf("SOCKS port %d is already in use; assuming an existing Tor instance is serving it.", socksPort);
         running = true;
         return true;
     }
@@ -247,6 +277,7 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
     // Find Tor binary
     torBinaryPath = FindTorBinary();
     if (torBinaryPath.empty()) {
+        lastError = "Tor binary was not found in the bundled install or standard search paths.";
         printf("WARNING: Tor binary not found. Install Tor for .onion connectivity.\n");
         printf("  Windows: Download from https://www.torproject.org/download/tor/\n");
         printf("  Linux:   apt install tor  or  yum install tor\n");
@@ -256,6 +287,7 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
 
     // Write configuration
     if (!WriteTorrc()) {
+        lastError = strprintf("Failed to write Tor configuration to %s", torrcPath.c_str());
         printf("ERROR: Failed to write Tor configuration\n");
         return false;
     }
@@ -282,7 +314,9 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
             NULL, NULL,
             &si, &pi))
     {
-        printf("ERROR: Failed to start Tor process (error %lu)\n", GetLastError());
+        DWORD err = GetLastError();
+        lastError = strprintf("CreateProcess failed for Tor binary '%s' with Windows error %lu", torBinaryPath.c_str(), err);
+        printf("ERROR: Failed to start Tor process (error %lu)\n", err);
         return false;
     }
 
@@ -329,6 +363,7 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
             // Defensive check: Tor must not directly occupy the node's hidden-service
             // virtual port. If it does, node startup will fail with a bind collision.
             if (hiddenServiceEnabled && IsPortInUse(hiddenServicePort)) {
+                lastError = strprintf("Port %d is already busy while Tor hidden service is enabled. Another process is likely blocking the node listener.", hiddenServicePort);
                 printf("ERROR: Tor startup collision: hidden service port %d appears busy before node bind.\n",
                        hiddenServicePort);
                 printf("       Refusing to treat Tor as healthy because this would block the node listener.\n");
@@ -353,12 +388,20 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
 
         // Check if Tor process is still alive
         if (!IsRunning()) {
+            fs::path torLogPath = fs::path(torDataDir) / "tor.log";
+            std::string torLogTail = ReadTailLines(torLogPath, 8);
+            if (!torLogTail.empty()) {
+                lastError = strprintf("Tor process exited during bootstrap before the SOCKS port became ready. Recent tor.log: %s", torLogTail.c_str());
+            } else {
+                lastError = "Tor process exited during bootstrap before the SOCKS port became ready.";
+            }
             printf("ERROR: Tor process exited prematurely\n");
             running = false;
             return false;
         }
     }
 
+    lastError = strprintf("Tor process started from '%s' but SOCKS port %d was not ready after 30 seconds.", torBinaryPath.c_str(), socksPort);
     printf("WARNING: Tor started but SOCKS proxy not yet ready after 30s\n");
     printf("  Tor may still be bootstrapping. .onion connections will work once ready.\n");
     return true;

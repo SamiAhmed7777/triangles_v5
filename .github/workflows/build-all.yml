@@ -153,14 +153,15 @@ jobs:
           New-Item -ItemType Directory -Path tor-extract -Force
           tar -xzf tor-bundle.tar.gz -C tor-extract
           New-Item -ItemType Directory -Path tor-files -Force
-          Copy-Item tor-extract/tor/tor.exe tor-files/
-          Copy-Item tor-extract/tor/tor-gencert.exe tor-files/ -ErrorAction SilentlyContinue
+          Copy-Item -Recurse tor-extract/tor/* tor-files/
           if (Test-Path tor-extract/tor/pluggable_transports) {
-            Copy-Item -Recurse tor-extract/tor/pluggable_transports tor-files/
+            Copy-Item -Recurse tor-extract/tor/pluggable_transports tor-files/pluggable_transports -Force
           }
           if (Test-Path tor-extract/data) {
             Copy-Item -Recurse tor-extract/data tor-files/data
           }
+          Write-Host "Bundled Tor runtime files:"
+          Get-ChildItem -Recurse tor-files | Select-Object FullName
 
       - name: Install NSIS via MSYS2
         run: pacman -S --noconfirm mingw-w64-x86_64-nsis
@@ -240,7 +241,7 @@ jobs:
           Invoke-WebRequest -Uri "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-windows-x86_64-${TOR_VERSION}.tar.gz" -OutFile tor-bundle.tar.gz
           New-Item -ItemType Directory -Path tor-extract -Force
           tar -xzf tor-bundle.tar.gz -C tor-extract
-          Copy-Item tor-extract/tor/tor.exe daemon-dist/tor/
+          Copy-Item -Recurse tor-extract/tor/* daemon-dist/tor/
           if (Test-Path tor-extract/data) {
             Copy-Item -Recurse tor-extract/data daemon-dist/tor/data
           }

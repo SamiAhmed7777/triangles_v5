@@ -567,6 +567,7 @@ void TrianglesGUI::setClientModel(ClientModel *clientModel)
 
         if (rpcConsole)
             rpcConsole->setClientModel(clientModel);
+        overviewPage->setClientModel(clientModel);
         addressBookPage->setOptionsModel(clientModel->getOptionsModel());
         receiveCoinsPage->setOptionsModel(clientModel->getOptionsModel());
     }
