@@ -32,6 +32,7 @@ public:
         DetachDatabases,   // bool
         Language,          // QString
         CoinControlFeatures, // bool
+        ShowOnionAddress,    // bool
         OptionIDRowCount,
     };
 
@@ -52,6 +53,7 @@ public:
     int getDisplayUnit();
     bool getDisplayAddresses();
     bool getCoinControlFeatures();
+    bool getShowOnionAddress();
     QString getLanguage() { return language; }
 
 private:
@@ -60,6 +62,7 @@ private:
     bool fMinimizeToTray;
     bool fMinimizeOnClose;
     bool fCoinControlFeatures;
+    bool fShowOnionAddress;
     QString language;
 
 signals:
@@ -67,6 +70,7 @@ signals:
     void transactionFeeChanged(qint64);
     void reserveBalanceChanged(qint64);
     void coinControlFeaturesChanged(bool);
+    void showOnionAddressChanged(bool);
 };
 
 #endif // OPTIONSMODEL_H

@@ -109,6 +109,7 @@ private:
     QLabel *labelStakingIcon;
     QLabel *labelConnectionsIcon;
     QLabel *labelBlocksIcon;
+    QLabel *labelOnionAddress;
     QLabel *progressBarLabel;
     QProgressBar *progressBar;
 
@@ -174,6 +175,7 @@ public slots:
     void setEncryptionStatus(int status);
     void setWalletTransactionSyncState(bool syncing);
     void setWalletTransactionSyncProgress(bool syncing, int pendingNotifications);
+    void updateOnionAddress();
 
     /** Notify the user of an error in the network or transaction handling code. */
     void error(const QString &title, const QString &message, bool modal);

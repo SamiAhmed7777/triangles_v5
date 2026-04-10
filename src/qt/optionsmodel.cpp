@@ -51,6 +51,7 @@ void OptionsModel::Init()
     fMinimizeToTray = settings.value("fMinimizeToTray", false).toBool();
     fMinimizeOnClose = settings.value("fMinimizeOnClose", false).toBool();
     fCoinControlFeatures = settings.value("fCoinControlFeatures", false).toBool();
+    fShowOnionAddress = settings.value("fShowOnionAddress", true).toBool();
     nTransactionFee = settings.value("nTransactionFee").toLongLong();
     nReserveBalance = settings.value("nReserveBalance").toLongLong();
     language = settings.value("language", "").toString();
@@ -126,6 +127,8 @@ QVariant OptionsModel::data(const QModelIndex & index, int role) const
             return settings.value("language", "");
         case CoinControlFeatures:
             return QVariant(fCoinControlFeatures);
+        case ShowOnionAddress:
+            return QVariant(fShowOnionAddress);
         default:
             return QVariant();
         }
@@ -226,6 +229,12 @@ bool OptionsModel::setData(const QModelIndex & index, const QVariant & value, in
             emit coinControlFeaturesChanged(fCoinControlFeatures);
             }
             break;
+        case ShowOnionAddress: {
+            fShowOnionAddress = value.toBool();
+            settings.setValue("fShowOnionAddress", fShowOnionAddress);
+            emit showOnionAddressChanged(fShowOnionAddress);
+            }
+            break;
         default:
             break;
         }
@@ -268,4 +277,9 @@ int OptionsModel::getDisplayUnit()
 bool OptionsModel::getDisplayAddresses()
 {
     return bDisplayAddresses;
+}
+
+bool OptionsModel::getShowOnionAddress()
+{
+    return fShowOnionAddress;
 }

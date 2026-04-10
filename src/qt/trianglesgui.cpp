@@ -40,6 +40,8 @@
 #include "util.h"
 //#include "message_box_dialog.h"
 #include "wallet.h"
+#include "tor/tor_embedded.h"
+#include "tor/onion_v3.h"
 
 #ifdef Q_OS_MAC
 #include "macdockiconhandler.h"
@@ -336,6 +338,14 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
         updateStakingIcon();
     }
 
+    // Onion address in status bar (hidden until populated)
+    labelOnionAddress = ui->label_onion;
+    labelOnionAddress->setVisible(false);
+    QTimer *timerOnion = new QTimer(this);
+    connect(timerOnion, SIGNAL(timeout()), this, SLOT(updateOnionAddress()));
+    timerOnion->start(5000);
+    updateOnionAddress();
+
     QTimer *timerShutdown = new QTimer(this);
     connect(timerShutdown, SIGNAL(timeout()), this, SLOT(detectShutdown()));
     timerShutdown->start(200);
@@ -567,9 +577,11 @@ void TrianglesGUI::setClientModel(ClientModel *clientModel)
 
         if (rpcConsole)
             rpcConsole->setClientModel(clientModel);
-        overviewPage->setClientModel(clientModel);
         addressBookPage->setOptionsModel(clientModel->getOptionsModel());
         receiveCoinsPage->setOptionsModel(clientModel->getOptionsModel());
+
+        connect(clientModel->getOptionsModel(), SIGNAL(showOnionAddressChanged(bool)), this, SLOT(updateOnionAddress()));
+        updateOnionAddress();
     }
 }
 
@@ -1714,6 +1726,29 @@ void TrianglesGUI::detectShutdown()
 {
     if (ShutdownRequested())
         QMetaObject::invokeMethod(QCoreApplication::instance(), "quit", Qt::QueuedConnection);
+}
+
+void TrianglesGUI::updateOnionAddress()
+{
+    // Check if user has opted out via Options > Display
+    if (clientModel && clientModel->getOptionsModel() &&
+        !clientModel->getOptionsModel()->getShowOnionAddress()) {
+        labelOnionAddress->setVisible(false);
+        return;
+    }
+
+    std::string onionAddress = CTorV3Manager::GetInstance()->GetWalletOnionAddress();
+    if (onionAddress.empty())
+        onionAddress = CTorEmbedded::GetInstance()->GetOnionAddress();
+
+    if (onionAddress.empty()) {
+        labelOnionAddress->setVisible(false);
+        return;
+    }
+
+    labelOnionAddress->setText(QString::fromStdString(onionAddress));
+    labelOnionAddress->setToolTip(tr("This wallet's Tor .onion address. Selectable — right-click to copy."));
+    labelOnionAddress->setVisible(true);
 }
 
 

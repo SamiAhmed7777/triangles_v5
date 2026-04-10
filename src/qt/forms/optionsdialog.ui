@@ -1507,6 +1507,27 @@ QCheckBox::indicator:checked {
            </widget>
           </item>
           <item>
+           <widget class="QCheckBox" name="showOnionAddress">
+            <property name="toolTip">
+             <string>Whether to show this wallet's .onion address in the status bar.</string>
+            </property>
+            <property name="styleSheet">
+             <string notr="true">QCheckBox::indicator {
+	border:1px solid #f26522;
+	background-color: #000;
+	}
+
+QCheckBox::indicator:checked {
+	image:url(:/icons/checkbox);
+	padding: 1px;
+	}</string>
+            </property>
+            <property name="text">
+             <string>Show .onion address in status &amp;bar</string>
+            </property>
+           </widget>
+          </item>
+          <item>
            <spacer name="verticalSpacer_Display">
             <property name="orientation">
              <enum>Qt::Vertical</enum>

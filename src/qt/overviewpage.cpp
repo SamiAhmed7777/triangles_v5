@@ -8,8 +8,6 @@
 #include "transactionfilterproxy.h"
 #include "guiutil.h"
 #include "guiconstants.h"
-#include "tor/tor_embedded.h"
-#include "tor/onion_v3.h"
 
 #include <QAbstractItemDelegate>
 #include <QPainter>
@@ -117,10 +115,6 @@ OverviewPage::OverviewPage(QWidget *parent) :
     // start with displaying the "out of sync" warnings
     showOutOfSyncWarning(true);
 
-    QTimer *onionRefreshTimer = new QTimer(this);
-    connect(onionRefreshTimer, SIGNAL(timeout()), this, SLOT(updateOnionAddress()));
-    onionRefreshTimer->start(5000);
-    updateOnionAddress();
 }
 
 void OverviewPage::handleTransactionClicked(const QModelIndex &index)
@@ -137,7 +131,6 @@ OverviewPage::~OverviewPage()
 void OverviewPage::setClientModel(ClientModel *clientModel)
 {
     this->clientModel = clientModel;
-    updateOnionAddress();
 }
 
 void OverviewPage::setBalance(qint64 balance, qint64 stake, qint64 unconfirmedBalance, qint64 immatureBalance)
@@ -229,19 +222,3 @@ void OverviewPage::showOutOfSyncWarning(bool fShow)
     ui->labelTransactionsStatus->setVisible(fShow);
 }
 
-void OverviewPage::updateOnionAddress()
-{
-    std::string onionAddress = CTorV3Manager::GetInstance()->GetWalletOnionAddress();
-    if (onionAddress.empty()) {
-        onionAddress = CTorEmbedded::GetInstance()->GetOnionAddress();
-    }
-
-    if (onionAddress.empty()) {
-        ui->labelOnionAddress->setText(tr("Initializing Tor identity..."));
-        ui->labelOnionAddress->setToolTip(tr("The wallet's .onion address will appear here once Tor and the wallet identity are ready."));
-        return;
-    }
-
-    ui->labelOnionAddress->setText(QString::fromStdString(onionAddress));
-    ui->labelOnionAddress->setToolTip(tr("This wallet's Tor .onion address."));
-}
