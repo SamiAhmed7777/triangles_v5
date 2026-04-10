@@ -360,18 +360,6 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
         if (IsPortInUse(socksPort)) {
             printf("Tor SOCKS proxy ready on port %d (took %ds)\n", socksPort, i + 1);
 
-            // Defensive check: Tor must not directly occupy the node's hidden-service
-            // virtual port. If it does, node startup will fail with a bind collision.
-            if (hiddenServiceEnabled && IsPortInUse(hiddenServicePort)) {
-                lastError = strprintf("Port %d is already busy while Tor hidden service is enabled. Another process is likely blocking the node listener.", hiddenServicePort);
-                printf("ERROR: Tor startup collision: hidden service port %d appears busy before node bind.\n",
-                       hiddenServicePort);
-                printf("       Refusing to treat Tor as healthy because this would block the node listener.\n");
-                Stop();
-                running = false;
-                return false;
-            }
-
             // Read and display the hidden service hostname if available
             if (hiddenServiceEnabled) {
                 fs::path hsHostname = fs::path(torDataDir) / "hidden_service" / "hostname";
