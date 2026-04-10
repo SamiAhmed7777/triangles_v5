@@ -1223,10 +1223,10 @@ bool AppInit2()
             fUseUPnP = false;
             #endif
         } else {
-            std::string torError = CTorEmbedded::GetInstance()->GetLastError();
+            std::string torError = CTorEmbedded::GetInstance()->GetStartupError();
             if (torError.empty())
                 torError = "No detailed Tor startup error was recorded.";
-            return InitError(strprintf(_("Tor failed to start. Triangles requires Tor to operate.\n\nDetails: %s"), torError));
+            return InitError(strprintf(_("Tor failed to start. Triangles requires Tor to operate.\n\nDetails: %s"), torError.c_str()));
         }
 
         // Initialize Tor V3 identity (Ed25519 keys, onion address)

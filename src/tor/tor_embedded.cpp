@@ -248,7 +248,7 @@ bool CTorEmbedded::Start(int socks, int hsPort, bool enableHiddenService)
     torDataDir = (::GetDataDir() / "tor_data").string();
     running.store(StartTorProcess(torDataDir, socksPort, hiddenServicePort, hiddenServiceEnabled));
     if (!running.load()) {
-        lastError = CTorProcess::GetInstance()->GetLastError();
+        lastError = CTorProcess::GetInstance()->GetStartupError();
     }
     return running.load();
 }

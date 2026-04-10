@@ -314,7 +314,7 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
             NULL, NULL,
             &si, &pi))
     {
-        DWORD err = GetLastError();
+        DWORD err = ::GetLastError();
         lastError = strprintf("CreateProcess failed for Tor binary '%s' with Windows error %lu", torBinaryPath.c_str(), err);
         printf("ERROR: Failed to start Tor process (error %lu)\n", err);
         return false;

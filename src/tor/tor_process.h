@@ -60,7 +60,7 @@ public:
 
     // Get the Tor binary path (for diagnostics)
     std::string GetBinaryPath() const { return torBinaryPath; }
-    std::string GetLastError() const { return lastError; }
+    std::string GetStartupError() const { return lastError; }
 
     // Singleton access
     static CTorProcess* GetInstance();

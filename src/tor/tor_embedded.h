@@ -44,8 +44,8 @@ public:
 
     // Get our .onion address (available after bootstrap)
     std::string GetOnionAddress() const { return onionHostname; }
-    std::string GetLastError() const { return lastError; }
-    void SetLastError(const std::string& value) { lastError = value; }
+    std::string GetStartupError() const { return lastError; }
+    void SetStartupError(const std::string& value) { lastError = value; }
 
     // Get the hidden service port
     int GetHiddenServicePort() const { return hiddenServicePort; }
