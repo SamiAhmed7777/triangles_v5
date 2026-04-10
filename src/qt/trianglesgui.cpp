@@ -341,6 +341,11 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     // Onion address in status bar (hidden until populated)
     labelOnionAddress = ui->label_onion;
     labelOnionAddress->setVisible(false);
+
+    // V3 indicator next to staking icon (hidden until onion is active)
+    labelV3Icon = ui->label_v3;
+    labelV3Icon->setVisible(false);
+
     QTimer *timerOnion = new QTimer(this);
     connect(timerOnion, SIGNAL(timeout()), this, SLOT(updateOnionAddress()));
     timerOnion->start(5000);
@@ -1730,18 +1735,31 @@ void TrianglesGUI::detectShutdown()
 
 void TrianglesGUI::updateOnionAddress()
 {
-    // Check if user has opted out via Options > Display
+    std::string onionAddress = CTorV3Manager::GetInstance()->GetWalletOnionAddress();
+    if (onionAddress.empty())
+        onionAddress = CTorEmbedded::GetInstance()->GetOnionAddress();
+
+    bool hasOnion = !onionAddress.empty();
+
+    // V3 indicator — always visible when onion is active, independent of the address toggle
+    if (hasOnion) {
+        labelV3Icon->setStyleSheet("color: #00ff00; font-weight: bold;");
+        labelV3Icon->setToolTip(tr("V3 Tor enabled"));
+        labelV3Icon->setVisible(true);
+    } else {
+        labelV3Icon->setStyleSheet("color: #555555; font-weight: bold;");
+        labelV3Icon->setToolTip(tr("V3 Tor not active"));
+        labelV3Icon->setVisible(true);
+    }
+
+    // Onion address text — respects user preference
     if (clientModel && clientModel->getOptionsModel() &&
         !clientModel->getOptionsModel()->getShowOnionAddress()) {
         labelOnionAddress->setVisible(false);
         return;
     }
 
-    std::string onionAddress = CTorV3Manager::GetInstance()->GetWalletOnionAddress();
-    if (onionAddress.empty())
-        onionAddress = CTorEmbedded::GetInstance()->GetOnionAddress();
-
-    if (onionAddress.empty()) {
+    if (!hasOnion) {
         labelOnionAddress->setVisible(false);
         return;
     }

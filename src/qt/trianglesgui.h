@@ -110,6 +110,7 @@ private:
     QLabel *labelConnectionsIcon;
     QLabel *labelBlocksIcon;
     QLabel *labelOnionAddress;
+    QLabel *labelV3Icon;
     QLabel *progressBarLabel;
     QProgressBar *progressBar;
 
