@@ -2341,6 +2341,12 @@ bool static Reorganize(CTxDB& txdb, CBlockIndex* pindexNew)
                 vResurrect.push_back(tx);
     }
 
+    // Remove disconnected PoS blocks from setStakeSeen so they don't
+    // block acceptance of valid blocks on the winning chain.
+    for (CBlockIndex* pindex : vDisconnect)
+        if (pindex->IsProofOfStake())
+            setStakeSeen.erase(make_pair(pindex->prevoutStake, pindex->nStakeTime));
+
     // Connect longer branch
     vector<CTransaction> vDelete;
     for (unsigned int i = 0; i < vConnect.size(); i++)
@@ -2765,13 +2771,22 @@ bool CBlock::AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const u
 
     // New best — keep the batch open so SetBestChain can add ConnectBlock
     // writes to the same transaction, cutting the per-block commit count in half.
-    // v5.4: deterministic tiebreaker — when two chains have equal trust,
-    // all nodes agree on the one whose tip has the lower block hash.
-    // This prevents permanent forks from PoS blocks with identical difficulty.
+    //
+    // Chain selection rules:
+    //   1. Strictly greater trust always wins (normal case).
+    //   2. Equal trust with shallow fork (parent in main chain): use
+    //      deterministic hash tiebreaker — lower tip hash wins. This
+    //      resolves single-block PoS races where two stakers find valid
+    //      blocks at the same height with identical difficulty.
+    //   3. Equal trust with deep fork (parent NOT in main chain): do NOT
+    //      reorg. Without this rule, Tor-latency-induced multi-block
+    //      forks cause nodes to oscillate between competing chains of
+    //      similar trust, preventing convergence.
     bool fNewBest = false;
     if (pindexNew->nChainTrust > nBestChainTrust)
         fNewBest = true;
     else if (pindexNew->nChainTrust == nBestChainTrust && pindexBest &&
+             pindexNew->pprev && pindexNew->pprev->IsInMainChain() &&
              pindexNew->GetBlockHash() < pindexBest->GetBlockHash())
         fNewBest = true;
 
