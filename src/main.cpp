@@ -247,7 +247,7 @@ static bool AddHeaderSyncNode(const CBlock& header, const uint256& hashHeader)
         return false;
     }
 
-    if (header.GetBlockTime() > FutureDrift(GetAdjustedTime()))
+    if (header.GetBlockTime() > GetTime() + 15 * 60)
     {
         printf("IBD-DIAG: header rejected (future time) hash=%s time=%u\n",
             hashHeader.ToString().substr(0,20).c_str(), header.nTime);
@@ -2829,8 +2829,14 @@ bool CBlock::CheckBlock(bool fCheckPOW, bool fCheckMerkleRoot, bool fCheckSig) c
     if (fCheckPOW && IsProofOfWork() && !CheckProofOfWork(GetHash(), nBits))
         return DoS(50, error("CheckBlock() : proof of work failed"));
 
-    // Check timestamp
-    if (GetBlockTime() > FutureDrift(GetAdjustedTime()))
+    // Check timestamp: reject blocks obviously too far in the future.
+    // Use a generous 15-minute window from the raw system clock.
+    // GetAdjustedTime() is NOT used here because it incorporates peer-reported
+    // time offsets that differ between Tor nodes, causing nondeterministic
+    // block rejection — the primary cause of persistent chain splits.
+    // The deterministic timestamp checks in AcceptBlock (median-time-past,
+    // prev-block-time with 3-min drift) still enforce tight rules.
+    if (GetBlockTime() > GetTime() + 15 * 60)
         return error("CheckBlock() : block timestamp too far in the future");
 
     // First transaction must be coinbase, the rest must not be
