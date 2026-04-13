@@ -293,12 +293,6 @@ bool IntroDialog::pickDataDirectory()
 
             bool success = Bootstrap::DownloadBootstrap(host, dataDirPath, progressFn, strError);
             if (!success) {
-                host = Bootstrap::FALLBACK_HOST;
-                progress.setValue(0);
-                success = Bootstrap::DownloadBootstrap(host, dataDirPath, progressFn, strError);
-            }
-
-            if (!success) {
                 QMessageBox::warning(0, "Triangles",
                     QString("Could not download blockchain snapshot:\n%1\n\n"
                             "The wallet will sync from the network instead.")
