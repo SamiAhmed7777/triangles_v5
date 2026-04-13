@@ -13,7 +13,6 @@ namespace Bootstrap {
 
     // Bootstrap server configuration
     static const char* DEFAULT_HOST = "bootstrap.cryptographic-triangles.org";
-    static const char* FALLBACK_HOST = "194.233.88.206";
     static const char* BASE_PATH = "/";
     static const int PORT = 80;
 

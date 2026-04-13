@@ -1403,7 +1403,32 @@ void ThreadOnionSeed(void* parg)
     // This is the primary discovery mechanism — seeds.cryptographic-triangles.org
     ThreadHTTPSeedFetch2(NULL);
 
-    printf("ThreadOnionSeed: seeding complete\n");
+    printf("ThreadOnionSeed: initial seeding complete\n");
+
+    // Periodic re-seeding: if the node becomes isolated (0 outbound peers),
+    // re-fetch the seed list. Check every 10 minutes, re-seed at most once
+    // per 30 minutes to avoid hammering the seed server.
+    int64_t nLastReseed = GetTime();
+    while (!fShutdown) {
+        for (int i = 0; i < 600 && !fShutdown; i++) // sleep 10 minutes
+            MilliSleep(1000);
+
+        if (fShutdown) break;
+
+        int nOutbound = 0;
+        {
+            LOCK(cs_vNodes);
+            for (CNode* pnode : vNodes)
+                if (!pnode->fInbound)
+                    nOutbound++;
+        }
+
+        if (nOutbound == 0 && GetTime() - nLastReseed > 30 * 60) {
+            printf("ThreadOnionSeed: no outbound peers, re-seeding...\n");
+            ThreadHTTPSeedFetch2(NULL);
+            nLastReseed = GetTime();
+        }
+    }
 }
 
 
@@ -1622,12 +1647,8 @@ void ThreadHTTPSeedFetch2(void* parg)
                 port = atoi(addrStr.substr(onionPos + 7).c_str());
                 addrStr = addrStr.substr(0, onionPos + 6); // keep ".onion"
             } else if (addrStr.find(".onion") == std::string::npos) {
-                // Clearnet address - find last colon for port
-                size_t colonPos = addrStr.rfind(':');
-                if (colonPos != std::string::npos) {
-                    port = atoi(addrStr.substr(colonPos + 1).c_str());
-                    addrStr = addrStr.substr(0, colonPos);
-                }
+                // Tor-native: skip non-.onion addresses
+                continue;
             }
 
             if (port <= 0 || port > 65535)

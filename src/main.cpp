@@ -2034,6 +2034,31 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
         // Track pending UTXOs so later txs in the same block can find inputs.
         if (fAssumeValid)
         {
+            // Track money supply from input/output values
+            int64_t nTxValueOut = tx.GetValueOut();
+            nValueOut += nTxValueOut;
+
+            if (!tx.IsCoinBase())
+            {
+                int64_t nTxValueIn = 0;
+                for (const CTxIn& txin : tx.vin)
+                {
+                    // Check in-block pending UTXOs first, then UTXO database
+                    MapPrevTx::iterator it = mapPendingUtxos.find(txin.prevout);
+                    if (it != mapPendingUtxos.end())
+                        nTxValueIn += it->second.nValue;
+                    else
+                    {
+                        CUtxoEntry utxo;
+                        if (txdb.ReadUtxo(txin.prevout.hash, txin.prevout.n, utxo))
+                            nTxValueIn += utxo.nValue;
+                    }
+                }
+                nValueIn += nTxValueIn;
+                if (!tx.IsCoinStake())
+                    nFees += nTxValueIn - nTxValueOut;
+            }
+
             // Add outputs to pending UTXOs
             for (unsigned int k = 0; k < tx.vout.size(); k++)
             {
@@ -2774,21 +2799,22 @@ bool CBlock::AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const u
     //
     // Chain selection rules:
     //   1. Strictly greater trust always wins (normal case).
-    //   2. Equal trust with shallow fork (parent in main chain): use
-    //      deterministic hash tiebreaker — lower tip hash wins. This
-    //      resolves single-block PoS races where two stakers find valid
-    //      blocks at the same height with identical difficulty.
-    //   3. Equal trust with deep fork (parent NOT in main chain): do NOT
-    //      reorg. Without this rule, Tor-latency-induced multi-block
-    //      forks cause nodes to oscillate between competing chains of
-    //      similar trust, preventing convergence.
+    //   2. Equal trust: deterministic hash tiebreaker — lower tip hash wins.
+    //      This ensures all nodes converge on the same chain even when two
+    //      forks have identical cumulative difficulty (common in PoS).
+    //      Rate-limited to one equal-trust reorg per 10 minutes to prevent
+    //      oscillation from Tor-latency-induced competing announcements.
     bool fNewBest = false;
+    static int64_t nLastEqualTrustReorg = 0;
     if (pindexNew->nChainTrust > nBestChainTrust)
         fNewBest = true;
     else if (pindexNew->nChainTrust == nBestChainTrust && pindexBest &&
-             pindexNew->pprev && pindexNew->pprev->IsInMainChain() &&
-             pindexNew->GetBlockHash() < pindexBest->GetBlockHash())
+             pindexNew->GetBlockHash() < pindexBest->GetBlockHash() &&
+             GetTime() - nLastEqualTrustReorg > 10 * 60)
+    {
         fNewBest = true;
+        nLastEqualTrustReorg = GetTime();
+    }
 
     if (fNewBest)
     {
@@ -3735,10 +3761,6 @@ bool FastImportBlockFile()
             }
             pindexNew->nStakeModifierChecksum = GetStakeModifierChecksum(pindexNew);
 
-            // Money supply tracking
-            pindexNew->nMint = 0;
-            pindexNew->nMoneySupply = (pindexNew->pprev ? pindexNew->pprev->nMoneySupply : 0);
-
             // PoS stake seen set
             if (pindexNew->IsProofOfStake())
                 setStakeSeen.insert(make_pair(pindexNew->prevoutStake, pindexNew->nStakeTime));
@@ -3751,10 +3773,10 @@ bool FastImportBlockFile()
             if (pindexNew->pprev)
                 pindexNew->pprev->pnext = pindexNew;
 
-            // Write block index to batch
-            txdb.WriteBlockIndex(CDiskBlockIndex(pindexNew));
-
-            // Build tx index + UTXO entries
+            // Build tx index + UTXO entries, tracking money supply
+            int64_t nBlockValueIn = 0;
+            int64_t nBlockValueOut = 0;
+            int64_t nFees = 0;
             unsigned int nTxPos = nBlockPos + ::GetSerializeSize(CBlock(), SER_DISK, CLIENT_VERSION)
                                 - (2 * GetSizeOfCompactSize(0)) + GetSizeOfCompactSize(block.vtx.size());
             for (unsigned int i = 0; i < block.vtx.size(); i++)
@@ -3765,11 +3787,23 @@ bool FastImportBlockFile()
                 txdb.UpdateTxIndex(hashTx, CTxIndex(posThisTx, tx.vout.size()));
                 nTxPos += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
 
-                // UTXO entries
+                int64_t nTxValueOut = tx.GetValueOut();
+                nBlockValueOut += nTxValueOut;
+
+                // UTXO entries — read input values before erasing for money supply
                 if (!tx.IsCoinBase())
                 {
+                    int64_t nTxValueIn = 0;
                     for (const CTxIn& txin : tx.vin)
+                    {
+                        CUtxoEntry utxo;
+                        if (txdb.ReadUtxo(txin.prevout.hash, txin.prevout.n, utxo))
+                            nTxValueIn += utxo.nValue;
                         txdb.EraseUtxo(txin.prevout.hash, txin.prevout.n);
+                    }
+                    nBlockValueIn += nTxValueIn;
+                    if (!tx.IsCoinStake())
+                        nFees += nTxValueIn - nTxValueOut;
                 }
                 for (unsigned int k = 0; k < tx.vout.size(); k++)
                 {
@@ -3786,6 +3820,13 @@ bool FastImportBlockFile()
                     }
                 }
             }
+
+            // Money supply tracking — matches ConnectBlock formula
+            pindexNew->nMint = nBlockValueOut - nBlockValueIn + nFees;
+            pindexNew->nMoneySupply = (pindexNew->pprev ? pindexNew->pprev->nMoneySupply : 0) + nBlockValueOut - nBlockValueIn;
+
+            // Write block index to batch
+            txdb.WriteBlockIndex(CDiskBlockIndex(pindexNew));
 
             // Update best chain
             if (pindexNew->nChainTrust > nBestChainTrust)

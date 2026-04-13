@@ -1944,7 +1944,8 @@ Value clearwallettransactions(const Array& params, bool fHelp)
             if (datKey.get_data() == NULL || datValue.get_data() == NULL
                 || ret != 0)
             {
-                snprintf(cbuf, sizeof(cbuf), "wallet DB error %d, %s", ret, db_strerror(ret));
+                const char* dbErr = db_strerror(ret);
+                snprintf(cbuf, sizeof(cbuf), "wallet DB error %d, %s", ret, dbErr ? dbErr : "unknown");
                 throw runtime_error(cbuf);
             };
             

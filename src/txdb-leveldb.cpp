@@ -613,6 +613,50 @@ bool CTxDB::LoadBlockIndex()
       hashBestChain.ToString().substr(0,20).c_str(), nBestHeight, CBigNum(nBestChainTrust).ToString().c_str(),
       DateTimeStrFormat("%x %H:%M:%S", pindexBest->GetBlockTime()).c_str());
 
+    // Re-evaluate best chain: scan for competing tips with equal or greater trust.
+    // This fixes nodes stuck on the wrong fork after consensus rule changes.
+    {
+        CBlockIndex* pindexBetter = NULL;
+        for (const auto& item : mapBlockIndex)
+        {
+            CBlockIndex* pindex = item.second;
+            if (pindex == pindexBest)
+                continue;
+            if (pindex->nChainTrust > nBestChainTrust)
+            {
+                pindexBetter = pindex;
+                break;
+            }
+            if (pindex->nChainTrust == nBestChainTrust &&
+                pindex->GetBlockHash() < pindexBest->GetBlockHash())
+            {
+                if (!pindexBetter || pindex->GetBlockHash() < pindexBetter->GetBlockHash())
+                    pindexBetter = pindex;
+            }
+        }
+        if (pindexBetter)
+        {
+            printf("LoadBlockIndex(): found better chain tip %s at height %d (trust %s vs %s)\n",
+                pindexBetter->GetBlockHash().ToString().substr(0,20).c_str(),
+                pindexBetter->nHeight,
+                CBigNum(pindexBetter->nChainTrust).ToString().c_str(),
+                CBigNum(nBestChainTrust).ToString().c_str());
+            CBlock block;
+            if (block.ReadFromDisk(pindexBetter))
+            {
+                CTxDB txdb2;
+                if (block.SetBestChain(txdb2, pindexBetter))
+                {
+                    hashBestChain = pindexBetter->GetBlockHash();
+                    pindexBest = pindexBetter;
+                    nBestHeight = pindexBetter->nHeight;
+                    nBestChainTrust = pindexBetter->nChainTrust;
+                    printf("LoadBlockIndex(): switched to better chain tip\n");
+                }
+            }
+        }
+    }
+
     // triangles: load hashSyncCheckpoint (best-effort, non-fatal)
     if (!ReadSyncCheckpoint(Checkpoints::hashSyncCheckpoint))
         printf("LoadBlockIndex(): no sync checkpoint in DB, using default\n");

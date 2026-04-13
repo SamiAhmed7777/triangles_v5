@@ -921,11 +921,6 @@ bool AppInit2()
         };
 
         bool success = Bootstrap::DownloadBootstrap(host, dataPath, progressFn, strError);
-        if (!success) {
-            host = Bootstrap::FALLBACK_HOST;
-            printf("\nBootstrap: primary host failed, trying fallback %s...\n", host.c_str());
-            success = Bootstrap::DownloadBootstrap(host, dataPath, progressFn, strError);
-        }
 
         if (!success) {
             printf("\nBootstrap: failed: %s\n", strError.c_str());

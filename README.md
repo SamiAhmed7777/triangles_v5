@@ -1,4 +1,4 @@
-# Cryptographic Triangles (TRI) - v5.1.5
+# Cryptographic Triangles (TRI)
 
 Triangles is a privacy-focused cryptocurrency featuring Proof-of-Stake consensus, Tor v3 onion routing, and built-in encrypted messaging. Originally launched in July 2014, the chain was revived in March 2026 after being frozen since December 2022.
 
@@ -16,7 +16,7 @@ Triangles is a privacy-focused cryptocurrency featuring Proof-of-Stake consensus
 |----------|-------|
 | Algorithm | Hash9 (PoW blocks 0-9000), PoS from block 9001 |
 | Block Time | ~120 seconds |
-| Max Supply | 222,222 TRI |
+| Max Supply | 2,222,222 TRI |
 | PoS Reward | 33% annual, coin-age based |
 | P2P Port | 24112 |
 | RPC Port | 19112 |
@@ -24,11 +24,7 @@ Triangles is a privacy-focused cryptocurrency featuring Proof-of-Stake consensus
 
 ## Network Status
 
-The Triangles network is live with seed nodes operating on both clearnet and Tor:
-
-**Clearnet Seeds:**
-- `194.233.88.206:24112`
-- `74.208.167.19:24112`
+The Triangles network operates exclusively over Tor for privacy:
 
 **Tor v3 Seeds:**
 - `gxvrhv3qitnc6kobrhsrse46bmcfitnybapor3or3oczzuxn6hfzxyid.onion:24112`
@@ -40,32 +36,46 @@ The Triangles network is live with seed nodes operating on both clearnet and Tor
 
 ## Building from Source
 
+Triangles uses CMake. All platforms follow the same build pattern.
+
+### Dependencies
+
+| Dependency | Minimum Version |
+|------------|----------------|
+| CMake | 3.16+ |
+| C++ compiler | C++17 support |
+| OpenSSL | 3.x |
+| Boost | 1.90+ |
+| Berkeley DB | 5.3 (with C++ bindings) |
+| libevent | 2.x |
+| LevelDB | bundled |
+
 ### Linux (Ubuntu 24.04 / Debian 12+)
 
 Install dependencies:
 ```bash
-sudo apt-get install -y build-essential libboost-all-dev libssl-dev \
-    libdb5.3++-dev libevent-dev zlib1g-dev libminiupnpc-dev
+sudo apt-get install -y build-essential cmake ninja-build \
+    libboost-all-dev libssl-dev libdb5.3++-dev libevent-dev \
+    zlib1g-dev libminiupnpc-dev
 ```
 
-Build the daemon:
+For the Qt wallet, also install:
 ```bash
-cd src/leveldb && make libleveldb.a libmemenv.a && cd ..
-make -j$(nproc) -f makefile.unix USE_UPNP=0
-strip trianglesd
+sudo apt-get install -y qtbase5-dev qt5-qmake libqrencode-dev
 ```
 
-Run the unit test suite:
+Build:
 ```bash
-make -C src -f makefile.unix test
+cmake -B build -G Ninja -DBUILD_QT=ON
+cmake --build build
 ```
 
 ### Linux (AlmaLinux 9 / RHEL 9)
 
 Install dependencies:
 ```bash
-sudo dnf install -y gcc-c++ make boost-devel openssl-devel libevent-devel \
-    zlib-devel miniupnpc-devel
+sudo dnf install -y gcc-c++ cmake ninja-build boost-devel openssl-devel \
+    libevent-devel zlib-devel miniupnpc-devel
 ```
 
 BDB 5.3 C++ bindings must be built from source on RHEL-based systems (the `libdb-devel` package does not include C++ headers). Download BDB 5.3.28 from Oracle and build with `--enable-cxx`.
@@ -76,16 +86,26 @@ Then build as above.
 
 Open an MSYS2 MinGW64 shell and install:
 ```bash
-pacman -S mingw-w64-x86_64-boost mingw-w64-x86_64-openssl \
+pacman -S mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja \
+    mingw-w64-x86_64-boost mingw-w64-x86_64-openssl \
     mingw-w64-x86_64-db mingw-w64-x86_64-miniupnpc \
-    mingw-w64-x86_64-qt5-base mingw-w64-x86_64-qrencode
+    mingw-w64-x86_64-qt5-base mingw-w64-x86_64-qrencode \
+    mingw-w64-x86_64-libevent
 ```
 
-Build the Qt wallet:
+Build:
 ```bash
-qmake triangles-qt.pro
-make -j$(nproc)
+cmake -B build -G Ninja -DBUILD_QT=ON
+cmake --build build
 ```
+
+### Build Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `BUILD_QT` | ON | Build the Qt GUI wallet |
+| `BUILD_DAEMON` | ON | Build the headless daemon |
+| `BUILD_TESTS` | OFF | Build unit tests |
 
 ## Running
 
@@ -103,15 +123,13 @@ txindex=1
 listen=1
 server=1
 daemon=1
-addnode=194.233.88.206
-addnode=74.208.167.19
-externalip=<your-public-ip>
+proxy=127.0.0.1:9050
 EOF
 
 trianglesd
 ```
 
-The node will connect to seed nodes and sync the blockchain automatically.
+The node will connect to seed nodes over Tor and sync the blockchain automatically.
 
 ### Existing Wallet Holders
 
@@ -155,7 +173,7 @@ Messages are encrypted end-to-end using AES and distributed through the peer net
 
 ### Tor Support
 
-To connect through Tor, install the Tor daemon and add to your config:
+Triangles is designed as a Tor-only network. Install the Tor daemon and configure your proxy:
 ```
 # triangles.conf
 proxy=127.0.0.1:9050
@@ -199,7 +217,7 @@ Then set `externalip=<your-onion-address>` in `triangles.conf`.
 - **Block 9001+** - Proof-of-Stake only
 - **Block 17,651** - V5 hard fork (removed Tor v2, disabled checkpoint master key)
 - **December 8, 2022** - Chain frozen (all nodes offline)
-- **March 11, 2026** - Chain revived with v5.0.0.0, staking resumed
+- **March 11, 2026** - Chain revived, staking resumed
 
 ## Project Structure
 

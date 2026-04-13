@@ -3,7 +3,6 @@
 
 #include "bootstrap.h"
 
-#include <boost/asio.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
 #include <boost/algorithm/string.hpp>
@@ -12,6 +11,8 @@
 
 #include "version.h"
 #include "uint256.h"
+#include "netbase.h"
+#include "net.h"
 
 #include <fstream>
 #include <sstream>
@@ -19,12 +20,18 @@
 #include <cstring>
 #include <cstdlib>
 
+#ifdef WIN32
+#include <winsock2.h>
+#else
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 // Forward declarations to avoid pulling in heavy consensus headers
 extern bool fTestNet;
 namespace Checkpoints { bool IsKnownCheckpoint(int nHeight, const uint256& hash); }
 
 namespace fs = boost::filesystem;
-using boost::asio::ip::tcp;
 
 namespace Bootstrap {
 
@@ -33,25 +40,47 @@ bool NeedsBootstrap(const fs::path& dataDir)
     return !fs::exists(dataDir / "blk0001.dat");
 }
 
+// Send all bytes on a raw socket
+static bool SendAll(SOCKET sock, const char* data, size_t len)
+{
+    while (len > 0) {
+        int n = send(sock, data, (int)std::min(len, (size_t)65536), MSG_NOSIGNAL);
+        if (n <= 0) return false;
+        data += n;
+        len -= n;
+    }
+    return true;
+}
+
+// Read until `delim` found in received data. Returns data including delimiter.
+static bool RecvUntil(SOCKET sock, std::string& out, const std::string& delim)
+{
+    out.clear();
+    char c;
+    while (true) {
+        int n = recv(sock, &c, 1, 0);
+        if (n <= 0) return false;
+        out += c;
+        if (out.size() >= delim.size() &&
+            out.compare(out.size() - delim.size(), delim.size(), delim) == 0)
+            return true;
+        if (out.size() > 64 * 1024) return false; // header too large
+    }
+}
+
 bool DownloadFile(const std::string& host, const std::string& urlPath,
                   const fs::path& destPath,
                   ProgressCallback progressFn,
                   std::string& strError)
 {
     try {
-        boost::asio::io_context io_context;
-        tcp::resolver resolver(io_context);
-
-        boost::system::error_code resolve_ec;
-        tcp::resolver::results_type endpoints =
-            resolver.resolve(host, std::to_string(PORT), resolve_ec);
-        if (resolve_ec) {
-            strError = "Cannot resolve host: " + host;
+        // Connect through Tor SOCKS proxy (ConnectSocketByName respects SetProxy)
+        SOCKET hSocket = INVALID_SOCKET;
+        CService addr;
+        if (!ConnectSocketByName(addr, hSocket, host.c_str(), PORT, 30)) {
+            strError = "Cannot connect to " + host + " (check Tor proxy)";
             return false;
         }
-
-        tcp::socket socket(io_context);
-        boost::asio::connect(socket, endpoints);
 
         // Send HTTP GET request
         std::string request =
@@ -60,85 +89,81 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
             "Connection: close\r\n"
             "User-Agent: Triangles\r\n"
             "\r\n";
-        boost::asio::write(socket, boost::asio::buffer(request));
+
+        if (!SendAll(hSocket, request.data(), request.size())) {
+            closesocket(hSocket);
+            strError = "Failed to send request to " + host;
+            return false;
+        }
 
         // Read response headers
-        boost::asio::streambuf response_buf;
-        boost::asio::read_until(socket, response_buf, "\r\n\r\n");
+        std::string headerData;
+        if (!RecvUntil(hSocket, headerData, "\r\n\r\n")) {
+            closesocket(hSocket);
+            strError = "Failed to read HTTP headers from " + host;
+            return false;
+        }
 
-        std::istream response_stream(&response_buf);
-
-        // Parse status line
-        std::string http_version;
+        // Parse status code from "HTTP/1.x NNN ..."
         unsigned int status_code = 0;
-        response_stream >> http_version >> status_code;
-        std::string status_message;
-        std::getline(response_stream, status_message);
+        size_t sp = headerData.find(' ');
+        if (sp != std::string::npos)
+            status_code = atoi(headerData.c_str() + sp + 1);
 
         if (status_code != 200) {
+            closesocket(hSocket);
             strError = "HTTP error " + std::to_string(status_code) + " for " + urlPath;
             return false;
         }
 
-        // Parse headers for Content-Length
+        // Parse Content-Length
         int64_t content_length = 0;
-        std::string header_line;
-        while (std::getline(response_stream, header_line) && header_line != "\r") {
-            std::string lower_header = header_line;
-            std::transform(lower_header.begin(), lower_header.end(),
-                           lower_header.begin(), ::tolower);
-            if (lower_header.find("content-length:") == 0) {
-                content_length = std::stoll(header_line.substr(header_line.find(':') + 1));
-            }
+        std::string lowerHeaders = headerData;
+        std::transform(lowerHeaders.begin(), lowerHeaders.end(),
+                       lowerHeaders.begin(), ::tolower);
+        size_t clPos = lowerHeaders.find("content-length:");
+        if (clPos != std::string::npos) {
+            size_t valStart = clPos + 15;
+            size_t lineEnd = lowerHeaders.find("\r\n", valStart);
+            if (lineEnd != std::string::npos)
+                content_length = std::stoll(headerData.substr(valStart, lineEnd - valStart));
         }
 
         // Open output file
         FILE* file = fopen(destPath.string().c_str(), "wb");
         if (!file) {
+            closesocket(hSocket);
             strError = "Cannot create file: " + destPath.string();
             return false;
         }
 
+        // Read body in chunks
         int64_t bytes_written = 0;
-
-        // Write any data remaining in the header buffer (body starts here)
-        if (response_buf.size() > 0) {
-            std::istreambuf_iterator<char> eos;
-            std::string remaining(std::istreambuf_iterator<char>(response_stream), eos);
-            if (!remaining.empty()) {
-                fwrite(remaining.data(), 1, remaining.size(), file);
-                bytes_written += remaining.size();
-            }
-        }
-
-        // Read remaining body in chunks
-        std::vector<char> chunk(65536); // 64 KB
-        boost::system::error_code ec;
         int64_t last_progress = 0;
+        char chunk[65536];
 
         while (true) {
-            size_t n = socket.read_some(boost::asio::buffer(chunk), ec);
-            if (n > 0) {
-                fwrite(chunk.data(), 1, n, file);
-                bytes_written += n;
-
-                // Report progress every 256 KB
-                if (progressFn && (bytes_written - last_progress >= 262144)) {
-                    last_progress = bytes_written;
-                    progressFn(bytes_written, content_length);
-                }
-            }
-            if (ec == boost::asio::error::eof)
-                break;
-            if (ec) {
+            int n = recv(hSocket, chunk, sizeof(chunk), 0);
+            if (n < 0) {
                 fclose(file);
+                closesocket(hSocket);
                 fs::remove(destPath);
-                strError = "Network error: " + ec.message();
+                strError = "Network error during download";
                 return false;
+            }
+            if (n == 0) break; // EOF
+
+            fwrite(chunk, 1, n, file);
+            bytes_written += n;
+
+            if (progressFn && (bytes_written - last_progress >= 262144)) {
+                last_progress = bytes_written;
+                progressFn(bytes_written, content_length);
             }
         }
 
         fclose(file);
+        closesocket(hSocket);
 
         // Verify download size if Content-Length was provided
         if (content_length > 0 && bytes_written != content_length) {

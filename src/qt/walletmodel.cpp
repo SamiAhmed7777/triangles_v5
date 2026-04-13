@@ -389,7 +389,7 @@ WalletModel::SendCoinsReturn WalletModel::sendCoins(const QList<SendCoinsRecipie
         for (it = mapStealthNarr.begin(); it != mapStealthNarr.end(); ++it)
         {
             char key[64];
-            if (snprintf(key, sizeof(key), "n_%u") < 1)
+            if (snprintf(key, sizeof(key), "n_%u", it->first) < 1)
             {
                 printf("CreateStealthTransaction(): Error creating narration key.");
                 continue;
