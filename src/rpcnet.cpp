@@ -2,6 +2,7 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <algorithm>
 #include "net.h"
 #include "addrman.h"
 #include "trianglesrpc.h"
@@ -167,6 +168,76 @@ Value sendalert(const Array& params, bool fHelp)
     if (alert.nCancel > 0)
         result.push_back(Pair("nCancel", alert.nCancel));
     return result;
+}
+
+Value addnode(const Array& params, bool fHelp)
+{
+    string strCommand;
+    if (params.size() == 2)
+        strCommand = params[1].get_str();
+    if (fHelp || params.size() != 2 ||
+        (strCommand != "onetry" && strCommand != "add" && strCommand != "remove"))
+        throw runtime_error(
+            "addnode <node> <add|remove|onetry>\n"
+            "Attempts to add or remove a node from the addnode list,\n"
+            "or try a connection to a node once.\n"
+            "<node> must be a .onion address (Tor-native network).");
+
+    string strNode = params[0].get_str();
+
+    // Tor-native: require .onion addresses
+    if (strNode.find(".onion") == string::npos)
+        throw runtime_error("Only .onion addresses are supported on this network.");
+
+    if (strCommand == "onetry")
+    {
+        CAddress addr;
+        CNode* pnode = ConnectNode(addr, strNode.c_str());
+        if (!pnode)
+            throw runtime_error("Failed to connect to node (may already be connected or unreachable).");
+        pnode->Release();
+        return Value::null;
+    }
+
+    // For add/remove, manipulate the -addnode list that ThreadOpenAddedConnections uses
+    LOCK(cs_vNodes);
+    vector<string>& vAddedNodes = mapMultiArgs["-addnode"];
+
+    if (strCommand == "add")
+    {
+        for (const string& existing : vAddedNodes)
+            if (existing == strNode)
+                throw runtime_error("Node already added.");
+        vAddedNodes.push_back(strNode);
+    }
+    else if (strCommand == "remove")
+    {
+        auto it = std::find(vAddedNodes.begin(), vAddedNodes.end(), strNode);
+        if (it == vAddedNodes.end())
+            throw runtime_error("Node not found in addnode list.");
+        vAddedNodes.erase(it);
+    }
+
+    return Value::null;
+}
+
+Value disconnectnode(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "disconnectnode <node>\n"
+            "Immediately disconnects from the specified node.");
+
+    string strNode = params[0].get_str();
+
+    LOCK(cs_vNodes);
+    for (CNode* pnode : vNodes) {
+        if (pnode->addrName == strNode || pnode->addr.ToString() == strNode) {
+            pnode->CloseSocketDisconnect();
+            return Value::null;
+        }
+    }
+    throw runtime_error("Node not found.");
 }
 
 Value getseedlist(const Array& params, bool fHelp)

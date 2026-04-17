@@ -148,6 +148,8 @@ extern json_spirit::Value getconnectioncount(const json_spirit::Array& params, b
 extern json_spirit::Value getpeerinfo(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getnetworkinfo(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getseedlist(const json_spirit::Array& params, bool fHelp);
+extern json_spirit::Value addnode(const json_spirit::Array& params, bool fHelp);
+extern json_spirit::Value disconnectnode(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getwalletinfo(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value dumpwallet(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value importwallet(const json_spirit::Array& params, bool fHelp);
@@ -220,6 +222,9 @@ extern json_spirit::Value getblockhash(const json_spirit::Array& params, bool fH
 extern json_spirit::Value getblock(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getblockbynumber(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getcheckpoint(const json_spirit::Array& params, bool fHelp);
+extern json_spirit::Value getchaintips(const json_spirit::Array& params, bool fHelp);
+extern json_spirit::Value invalidateblock(const json_spirit::Array& params, bool fHelp);
+extern json_spirit::Value reconsiderblock(const json_spirit::Array& params, bool fHelp);
 
 extern json_spirit::Value getaddressbalance(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getaddressutxos(const json_spirit::Array& params, bool fHelp);

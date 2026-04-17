@@ -598,3 +598,166 @@ Value getaddresstxids(const Array& params, bool fHelp)
 
     return result;
 }
+
+Value getchaintips(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error(
+            "getchaintips\n"
+            "Return information about all known tips in the block tree,\n"
+            "including the main chain as well as orphaned branches.\n"
+            "Essential for diagnosing chain forks.");
+
+    // Collect all block indices that are tips (nothing points to them as pprev)
+    set<CBlockIndex*> setTips;
+
+    {
+        LOCK(cs_main);
+        for (const auto& item : mapBlockIndex)
+            setTips.insert(item.second);
+
+        for (const auto& item : mapBlockIndex) {
+            if (item.second->pprev)
+                setTips.erase(item.second->pprev);
+        }
+    }
+
+    Array res;
+    LOCK(cs_main);
+    for (CBlockIndex* tip : setTips)
+    {
+        Object obj;
+        obj.push_back(Pair("height", tip->nHeight));
+        obj.push_back(Pair("hash", tip->GetBlockHash().GetHex()));
+        obj.push_back(Pair("chaintrust", tip->nChainTrust.GetHex()));
+
+        int branchLen = 0;
+        CBlockIndex* pWalk = tip;
+        while (pWalk && !pWalk->IsInMainChain()) {
+            branchLen++;
+            pWalk = pWalk->pprev;
+        }
+
+        string status;
+        if (tip == pindexBest)
+            status = "active";
+        else if (branchLen > 0)
+            status = "valid-fork";
+        else
+            status = "unknown";
+
+        obj.push_back(Pair("branchlen", branchLen));
+        obj.push_back(Pair("status", status));
+
+        if (pWalk && !tip->IsInMainChain())
+            obj.push_back(Pair("forkpoint", pWalk->GetBlockHash().GetHex()));
+
+        res.push_back(obj);
+    }
+
+    return res;
+}
+
+Value invalidateblock(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "invalidateblock <hash>\n"
+            "Permanently marks a block as invalid and rewinds the chain.\n"
+            "This forces the node to reorganize to the parent chain.\n"
+            "Use reconsiderblock to undo.");
+
+    string strHash = params[0].get_str();
+    uint256 hash(strHash);
+
+    LOCK(cs_main);
+
+    if (mapBlockIndex.count(hash) == 0)
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
+
+    CBlockIndex* pindex = mapBlockIndex[hash];
+
+    if (pindex->IsInMainChain())
+    {
+        CTxDB txdb;
+        if (!txdb.TxnBegin())
+            throw runtime_error("Failed to begin transaction.");
+
+        CBlockIndex* pindexWalk = pindexBest;
+
+        // Disconnect blocks from best back to (but not including) pindex's parent
+        while (pindexWalk && pindexWalk != pindex->pprev)
+        {
+            CBlock block;
+            if (!block.ReadFromDisk(pindexWalk))
+                throw runtime_error("Failed to read block from disk during invalidation.");
+
+            if (!block.DisconnectBlock(txdb, pindexWalk))
+                throw runtime_error("Failed to disconnect block during invalidation.");
+
+            // Remove disconnected PoS blocks from setStakeSeen
+            if (pindexWalk->IsProofOfStake())
+            {
+                extern set<pair<COutPoint, unsigned int> > setStakeSeen;
+                setStakeSeen.erase(make_pair(pindexWalk->prevoutStake, pindexWalk->nStakeTime));
+            }
+
+            pindexWalk->pprev->pnext = NULL;
+            pindexWalk = pindexWalk->pprev;
+        }
+
+        // Update best block to the fork point
+        if (pindex->pprev) {
+            pindexBest = pindex->pprev;
+            extern uint256 nBestChainTrust;
+            nBestChainTrust = pindexBest->nChainTrust;
+            nBestHeight = pindexBest->nHeight;
+            txdb.WriteHashBestChain(pindexBest->GetBlockHash());
+            if (!txdb.TxnCommit())
+                throw runtime_error("Failed to commit transaction.");
+            printf("invalidateblock: rewound chain to height %d hash %s\n",
+                   pindexBest->nHeight, pindexBest->GetBlockHash().ToString().c_str());
+        }
+    }
+
+    return Value::null;
+}
+
+Value reconsiderblock(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "reconsiderblock <hash>\n"
+            "Reconsiders a previously invalidated block for activation.\n"
+            "If it has more chain trust than current best, triggers a reorg.");
+
+    string strHash = params[0].get_str();
+    uint256 hash(strHash);
+
+    LOCK(cs_main);
+
+    if (mapBlockIndex.count(hash) == 0)
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
+
+    CBlockIndex* pindex = mapBlockIndex[hash];
+
+    extern uint256 nBestChainTrust;
+    if (pindex->nChainTrust > nBestChainTrust)
+    {
+        CBlock block;
+        if (!block.ReadFromDisk(pindex))
+            throw runtime_error("Failed to read block from disk.");
+
+        CTxDB txdb;
+        block.SetBestChain(txdb, pindex);
+        printf("reconsiderblock: reconsidered block %s at height %d, new best height=%d\n",
+               hash.ToString().c_str(), pindex->nHeight, nBestHeight);
+    }
+    else
+    {
+        printf("reconsiderblock: block %s does not have more trust than current best\n",
+               hash.ToString().c_str());
+    }
+
+    return Value::null;
+}
