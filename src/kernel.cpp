@@ -334,9 +334,11 @@ bool CheckStakeKernelHash(unsigned int nBits, const CBlock& blockFrom, unsigned 
     // Now check if proof-of-stake hash meets target protocol
     if (CBigNum(hashProofOfStake) > bnCoinDayWeight * bnTargetPerCoinDay)
     {
+        // Guard against null pindexBest during early startup / IBD
+        int nCurrentHeight = pindexBest ? pindexBest->nHeight : 0;
+
         // triangles fix: accept hash to get blockchain moving again with Pharao release (v 4.0.0.1) for first 10 blocks after release
-        //printf(">>>> pindexBest->nHeight %d\n",pindexBest->nHeight);
-        if (pindexBest->nHeight > CRAPCHAIN_CUTOFF_BLOCK)
+        if (nCurrentHeight > CRAPCHAIN_CUTOFF_BLOCK)
         {
             if(fDebug)
             {
@@ -349,8 +351,8 @@ bool CheckStakeKernelHash(unsigned int nBits, const CBlock& blockFrom, unsigned 
         else
         {
             //accept hash
-            if (pindexBest->nHeight % 10000 == 0 || pindexBest->nHeight > 2186900)
-                printf(">>>> pindexBest->nHeight %d, Pharao release - hash accepted\n", pindexBest->nHeight);
+            if (nCurrentHeight % 10000 == 0 || nCurrentHeight > 2186900)
+                printf(">>>> pindexBest->nHeight %d, Pharao release - hash accepted\n", nCurrentHeight);
         }
     }
 

@@ -1504,8 +1504,12 @@ void static InvalidChainFound(CBlockIndex* pindexNew)
         uiInterface.NotifyBlocksChanged();
     }
 
-    uint256 nBestInvalidBlockTrust = pindexNew->nChainTrust - pindexNew->pprev->nChainTrust;
-    uint256 nBestBlockTrust = pindexBest->nHeight != 0 ? (pindexBest->nChainTrust - pindexBest->pprev->nChainTrust) : pindexBest->nChainTrust;
+    uint256 nBestInvalidBlockTrust = pindexNew->pprev
+        ? pindexNew->nChainTrust - pindexNew->pprev->nChainTrust
+        : pindexNew->nChainTrust;
+    uint256 nBestBlockTrust = (pindexBest && pindexBest->nHeight != 0 && pindexBest->pprev)
+        ? (pindexBest->nChainTrust - pindexBest->pprev->nChainTrust)
+        : (pindexBest ? pindexBest->nChainTrust : uint256(0));
 
     printf("InvalidChainFound: invalid block=%s  height=%d  trust=%s  blocktrust=%" PRId64 "  date=%s\n",
       pindexNew->GetBlockHash().ToString().substr(0,20).c_str(), pindexNew->nHeight,
@@ -1513,9 +1517,9 @@ void static InvalidChainFound(CBlockIndex* pindexNew)
       DateTimeStrFormat("%x %H:%M:%S", pindexNew->GetBlockTime()).c_str());
     printf("InvalidChainFound:  current best=%s  height=%d  trust=%s  blocktrust=%" PRId64 "  date=%s\n",
       hashBestChain.ToString().substr(0,20).c_str(), nBestHeight,
-      CBigNum(pindexBest->nChainTrust).ToString().c_str(),
+      pindexBest ? CBigNum(pindexBest->nChainTrust).ToString().c_str() : "0",
       nBestBlockTrust.Get64(),
-      DateTimeStrFormat("%x %H:%M:%S", pindexBest->GetBlockTime()).c_str());
+      pindexBest ? DateTimeStrFormat("%x %H:%M:%S", pindexBest->GetBlockTime()).c_str() : "unknown");
 }
 
 
@@ -2536,7 +2540,7 @@ bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
     nTimeBestReceived = GetTime();
     nTransactionsUpdated++;
 
-    uint256 nBestBlockTrust = pindexBest->nHeight != 0 ? (pindexBest->nChainTrust - pindexBest->pprev->nChainTrust) : pindexBest->nChainTrust;
+    uint256 nBestBlockTrust = (pindexBest->nHeight != 0 && pindexBest->pprev) ? (pindexBest->nChainTrust - pindexBest->pprev->nChainTrust) : pindexBest->nChainTrust;
 
     // Log every 5000 blocks during sync, every block once caught up
     if (nBestHeight % 5000 == 0 || !IsInitialBlockDownload())
@@ -3165,7 +3169,7 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         }
 
         // Ask this guy to fill in what we're missing
-        if (pfrom)
+        if (pfrom && pindexBest)
         {
             pfrom->PushGetBlocks(pindexBest, GetOrphanRoot(pblock2));
             // triangles: getblocks may not obtain the ancestor block rejected
