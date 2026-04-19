@@ -27,12 +27,14 @@ Triangles is a privacy-focused cryptocurrency featuring Proof-of-Stake consensus
 The Triangles network operates exclusively over Tor for privacy:
 
 **Tor v3 Seeds:**
-- `gxvrhv3qitnc6kobrhsrse46bmcfitnybapor3or3oczzuxn6hfzxyid.onion:24112`
-- `futmtrvh6j34t7s6yjdxfia6iwuyfzwh4k5eqfof5kfhoqk3xmi3qoqd.onion:24112`
+- `jbpfhe7zw3qm67wy3j2ayysp3mnrjobopthnko3b3sgahqtecblwqmid.onion:24112`
+- `uddaxjbo3lh2zskg7w6gwln4ty5cel7q4c5jbx7fdtv6zf2j47gdlyad.onion:24112`
+- `el5sirhhleecuctpeeprelzubpqmoqivvra3rzlwbjttinxa4fq3wnid.onion:24112`
+- `sj5dhybnlp3v4y5niyc5unrnd6s43lyx5ibup7rolyosjbi2u2hsbvyd.onion:24112`
+- `i3kr5meha7se4ns3wss3h7v46m6uksfzv4wrohdqxpj6n35wyo2bvlid.onion:24112`
 
-**DNS Seeds:**
-- `seed1.cryptographic-triangles.org`
-- `seed2.cryptographic-triangles.org`
+**HTTP Seed List:**
+- `seeds.cryptographic-triangles.org/seeds.txt` - Dynamically updated list of active onion peers
 
 ## Building from Source
 

@@ -116,8 +116,10 @@ static CCriticalSection cs_PostIbdWork;
 static bool fPostIbdWorkStarted = false;
 
 static const unsigned int MAX_HEADER_SYNC_CACHE = 50000;
-static const unsigned int HEADER_DOWNLOAD_WINDOW = 128;
+static const unsigned int HEADER_DOWNLOAD_WINDOW = 512;  // Increased from 128 for parallel downloads
+static const unsigned int HEADER_DOWNLOAD_PER_PEER = 64;   // Max blocks to request from each peer
 static const int64_t HEADER_REQUEST_TIMEOUT_MICROS = 30 * 1000000;
+static const int64_t HEADER_REDUNDANT_REQUEST_MICROS = 10 * 1000000;  // Request from another peer after 10s
 
 static void ThreadPostIbdWork(void* parg)
 {
@@ -403,6 +405,89 @@ static void ContinueHeaderSync(CNode* pfrom, const uint256& hashTip)
         return;
 
     pfrom->PushMessage("getheaders", locator, uint256(0));
+}
+
+// Parallel block downloading: distribute blocks across all available peers
+static unsigned int QueueHeaderSyncBlocksParallel(unsigned int nWindow)
+{
+    if (hashBestHeaderSync == 0)
+        return 0;
+
+    const std::vector<uint256> vPath = GetHeaderSyncDownloadPath(hashBestHeaderSync);
+    if (vPath.empty())
+        return 0;
+
+    // Collect eligible peers
+    std::vector<CNode*> vEligiblePeers;
+    {
+        LOCK(cs_vNodes);
+        for (CNode* pnode : vNodes)
+        {
+            if (!pnode->fClient && pnode->nVersion != 0 && !pnode->fDisconnect)
+                vEligiblePeers.push_back(pnode);
+        }
+    }
+
+    if (vEligiblePeers.empty())
+        return 0;
+
+    const int64_t nNow = GetTime() * 1000000;
+    unsigned int nInFlight = CountHeaderSyncInFlight();
+    unsigned int nQueued = 0;
+    unsigned int nPeerIndex = 0;
+
+    // Distribute blocks across peers in round-robin fashion
+    for (std::vector<uint256>::const_iterator it = vPath.begin(); it != vPath.end(); ++it)
+    {
+        if (nInFlight + nQueued >= nWindow)
+            break;
+
+        std::map<uint256, CHeaderSyncNode>::iterator mi = mapHeaderSync.find(*it);
+        if (mi == mapHeaderSync.end())
+            continue;
+
+        // Check if already requested recently
+        bool fNeedsRequest = false;
+        if (!mi->second.fRequested)
+        {
+            // Never requested - request now
+            fNeedsRequest = true;
+        }
+        else if (nNow - mi->second.nLastRequestTime >= HEADER_REQUEST_TIMEOUT_MICROS)
+        {
+            // Timeout expired - retry
+            fNeedsRequest = true;
+        }
+        else if (nNow - mi->second.nLastRequestTime >= HEADER_REDUNDANT_REQUEST_MICROS)
+        {
+            // Redundant request: ask another peer if original is slow
+            // This creates parallel downloads for slow blocks
+            fNeedsRequest = true;
+        }
+
+        if (!fNeedsRequest)
+            continue;
+
+        // Round-robin across peers to distribute load
+        CNode* pnode = vEligiblePeers[nPeerIndex % vEligiblePeers.size()];
+        pnode->AskFor(CInv(MSG_BLOCK, *it));
+
+        // Update tracking (only on first request, not redundant)
+        if (!mi->second.fRequested || nNow - mi->second.nLastRequestTime >= HEADER_REQUEST_TIMEOUT_MICROS)
+        {
+            mi->second.fRequested = true;
+            mi->second.nLastRequestTime = nNow;
+        }
+
+        ++nQueued;
+        ++nPeerIndex;
+    }
+
+    if (nQueued > 0)
+        printf("IBD-DIAG: parallel queue distributed %u blocks across %zu peers (window=%u, inflight=%u)\n",
+            nQueued, vEligiblePeers.size(), nWindow, nInFlight);
+
+    return nQueued;
 }
 
 } // namespace
@@ -3229,9 +3314,10 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     if (nBestHeight % 5000 == 0 || !IsInitialBlockDownload())
         printf("ProcessBlock: ACCEPTED block %d\n", nBestHeight);
 
-    if (pfrom && hashBestHeaderSync != 0)
+    if (hashBestHeaderSync != 0)
     {
-        const unsigned int nQueued = QueueHeaderSyncBlocks(pfrom, HEADER_DOWNLOAD_WINDOW);
+        // Use parallel queue to distribute across all peers
+        const unsigned int nQueued = QueueHeaderSyncBlocksParallel(HEADER_DOWNLOAD_WINDOW);
         if (nQueued > 0)
             printf("IBD-DIAG: queued %u more blocks from header planner after accepting %s\n",
                 nQueued, hash.ToString().substr(0,20).c_str());
@@ -4540,7 +4626,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
         int nRequested = 0;
         if (hashBestHeaderSync != 0)
-            nRequested = QueueHeaderSyncBlocks(pfrom, HEADER_DOWNLOAD_WINDOW);
+            nRequested = QueueHeaderSyncBlocksParallel(HEADER_DOWNLOAD_WINDOW);
 
         if (nNewHeaders > 0 || nRequested > 0)
             printf("IBD-DIAG: accepted %d new headers, queued %d blocks from %zu headers (peer=%s bestHeader=%s)\n",
