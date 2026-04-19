@@ -236,6 +236,7 @@ public:
     bool WriteUtxo(const uint256& hash, unsigned int n, const CUtxoEntry& entry);
     bool EraseUtxo(const uint256& hash, unsigned int n);
     bool HaveUtxo(const uint256& hash, unsigned int n);
+    int64_t SumUtxoValues(int& nCount);
 
 private:
     bool LoadBlockIndexGuts();

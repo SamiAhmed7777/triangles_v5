@@ -78,7 +78,8 @@ Value getstakinginfo(const Array& params, bool fHelp)
     if (fHelp || params.size() != 0)
         throw runtime_error(
             "getstakinginfo\n"
-            "Returns an object containing staking-related information.");
+            "Returns an object containing staking-related information.\n"
+            "Includes diagnostic details about why staking may be disabled.");
 
     uint64_t nMinWeight = 0, nMaxWeight = 0, nWeight = 0;
     pwalletMain->GetStakeWeight(*pwalletMain, nMinWeight, nMaxWeight, nWeight);
@@ -86,6 +87,26 @@ Value getstakinginfo(const Array& params, bool fHelp)
     uint64_t nNetworkWeight = GetPoSKernelPS();
     bool staking = nLastCoinStakeSearchInterval && nWeight;
     int nExpectedTime = staking ? (nTargetSpacing * nNetworkWeight / nWeight) : -1;
+
+    // Diagnostic: determine why staking might be disabled
+    Array stakingDisabledReasons;
+    if (!GetBoolArg("-staking", true))
+        stakingDisabledReasons.push_back("staking disabled via -staking=0 flag");
+
+    if (pwalletMain->IsLocked())
+        stakingDisabledReasons.push_back("wallet is locked (use walletpassphrase <pw> <timeout> true)");
+
+    if (vNodes.empty())
+        stakingDisabledReasons.push_back("no network connections (need at least 1 peer)");
+
+    if (IsInitialBlockDownload())
+        stakingDisabledReasons.push_back("initial block download in progress");
+
+    if (nWeight == 0)
+        stakingDisabledReasons.push_back("no mature coins available (coins need 520 confirmations)");
+
+    if (!staking && nLastCoinStakeSearchInterval == 0)
+        stakingDisabledReasons.push_back("stake miner thread not running");
 
     Object obj;
 
@@ -104,6 +125,16 @@ Value getstakinginfo(const Array& params, bool fHelp)
     obj.push_back(Pair("netstakeweight", (uint64_t)nNetworkWeight));
 
     obj.push_back(Pair("expectedtime", nExpectedTime));
+
+    // Add detailed diagnostics
+    obj.push_back(Pair("walletlocked", pwalletMain->IsLocked()));
+    obj.push_back(Pair("walletunlockedforstakingonly", pwalletMain->fWalletUnlockStakingOnly));
+    obj.push_back(Pair("connections", (int)vNodes.size()));
+    obj.push_back(Pair("initialblockdownload", IsInitialBlockDownload()));
+    obj.push_back(Pair("maturecoins", nWeight > 0));
+
+    if (!stakingDisabledReasons.empty())
+        obj.push_back(Pair("staking_disabled_reasons", stakingDisabledReasons));
 
     return obj;
 }

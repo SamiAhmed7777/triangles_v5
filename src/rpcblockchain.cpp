@@ -360,6 +360,49 @@ Value gettxoutsetinfo(const Array& params, bool fHelp)
     return obj;
 }
 
+Value recalculatesupply(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error(
+            "recalculatesupply\n"
+            "Recalculates the money supply by summing all unspent transaction outputs.\n"
+            "Updates the stored money supply value at the chain tip and persists it to disk.\n"
+            "Returns the old and new supply values for comparison.\n"
+            "\nWARNING: This modifies blockchain index state. Only use if money supply is incorrect.");
+
+    if (!pindexBest)
+        throw runtime_error("recalculatesupply: no best block");
+
+    int nUtxoCount = 0;
+    CTxDB txdb;
+    int64_t nCalculatedSupply = txdb.SumUtxoValues(nUtxoCount);
+    int64_t nOldSupply = pindexBest->nMoneySupply;
+    int64_t nDifference = nCalculatedSupply - nOldSupply;
+
+    // Sanity check: difference should be reasonable (not millions of TRI)
+    // Max supply is 2,222,222 TRI, so any difference > 1M TRI is suspicious
+    if (abs64(nDifference) > 1000000 * COIN)
+        throw runtime_error(strprintf(
+            "recalculatesupply: calculated supply differs by %s TRI - this is abnormal, refusing to update",
+            FormatMoney(abs64(nDifference)).c_str()));
+
+    // Update the chain tip's money supply
+    pindexBest->nMoneySupply = nCalculatedSupply;
+
+    // Persist to LevelDB
+    CTxDB txdbWrite;
+    if (!txdbWrite.WriteBlockIndex(CDiskBlockIndex(pindexBest)))
+        throw runtime_error("recalculatesupply: failed to write updated block index");
+
+    Object result;
+    result.push_back(Pair("height", (int)nBestHeight));
+    result.push_back(Pair("old_supply", ValueFromAmount(nOldSupply)));
+    result.push_back(Pair("new_supply", ValueFromAmount(nCalculatedSupply)));
+    result.push_back(Pair("difference", ValueFromAmount(nDifference)));
+    result.push_back(Pair("utxo_count", nUtxoCount));
+    return result;
+}
+
 // triangles: get information of sync-checkpoint
 Value getcheckpoint(const Array& params, bool fHelp)
 {

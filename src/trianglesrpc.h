@@ -225,6 +225,7 @@ extern json_spirit::Value getcheckpoint(const json_spirit::Array& params, bool f
 extern json_spirit::Value getchaintips(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value invalidateblock(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value reconsiderblock(const json_spirit::Array& params, bool fHelp);
+extern json_spirit::Value recalculatesupply(const json_spirit::Array& params, bool fHelp);
 
 extern json_spirit::Value getaddressbalance(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getaddressutxos(const json_spirit::Array& params, bool fHelp);

@@ -952,6 +952,18 @@ bool AppInit2()
         return false;
     }
 
+    // Handle -reindex: delete the LevelDB block index so it gets rebuilt
+    // from the raw blk*.dat files via FastImportBlockFile().
+    // This recalculates money supply, tx index, and UTXO set from scratch.
+    if (GetBoolArg("-reindex", false))
+    {
+        printf("Reindex requested: removing block index database...\n");
+        uiInterface.InitMessage(_("Removing block index for reindex..."));
+        fs::path txleveldbPath = GetDataDir() / "txleveldb";
+        if (fs::exists(txleveldbPath))
+            fs::remove_all(txleveldbPath);
+    }
+
     uiInterface.InitMessage(_("Loading block index..."));
     printf("Loading block index...\n");
     nStart = GetTimeMillis();

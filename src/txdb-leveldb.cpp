@@ -904,3 +904,35 @@ bool CTxDB::HaveUtxo(const uint256& hash, unsigned int n)
     return false;
 }
 
+int64_t CTxDB::SumUtxoValues(int& nCount)
+{
+    nCount = 0;
+    int64_t nTotal = 0;
+
+    // Seek to the start of UTXO entries (key prefix "u")
+    CDataStream ssKeyPrefix(SER_DISK, CLIENT_VERSION);
+    ssKeyPrefix << make_pair(string("u"), make_pair(uint256(0), (unsigned int)0));
+    std::string strPrefixBegin = ssKeyPrefix.str();
+
+    leveldb::Iterator* it = pdb->NewIterator(leveldb::ReadOptions());
+    for (it->Seek(strPrefixBegin); it->Valid(); it->Next())
+    {
+        // Check key prefix is still "u"
+        CDataStream ssKey(it->key().data(), it->key().data() + it->key().size(), SER_DISK, CLIENT_VERSION);
+        std::string strKeyType;
+        ssKey >> strKeyType;
+        if (strKeyType != "u")
+            break;
+
+        // Deserialize the UTXO entry and sum the value
+        CDataStream ssValue(it->value().data(), it->value().data() + it->value().size(), SER_DISK, CLIENT_VERSION);
+        CUtxoEntry entry;
+        ssValue >> entry;
+
+        nTotal += entry.nValue;
+        nCount++;
+    }
+    delete it;
+    return nTotal;
+}
+

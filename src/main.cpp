@@ -2324,7 +2324,15 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
 
 bool static Reorganize(CTxDB& txdb, CBlockIndex* pindexNew)
 {
-    printf("REORGANIZE\n");
+    printf("REORGANIZE: Switching chains\n");
+    printf("  Old tip: %s height %d trust %s\n",
+        pindexBest->GetBlockHash().ToString().substr(0,20).c_str(),
+        pindexBest->nHeight,
+        CBigNum(pindexBest->nChainTrust).ToString().c_str());
+    printf("  New tip: %s height %d trust %s\n",
+        pindexNew->GetBlockHash().ToString().substr(0,20).c_str(),
+        pindexNew->nHeight,
+        CBigNum(pindexNew->nChainTrust).ToString().c_str());
 
     // Find the fork
     CBlockIndex* pfork = pindexBest;
@@ -2351,8 +2359,17 @@ bool static Reorganize(CTxDB& txdb, CBlockIndex* pindexNew)
         vConnect.push_back(pindex);
     reverse(vConnect.begin(), vConnect.end());
 
-    printf("REORGANIZE: Disconnect %" PRIszu " blocks; %s..%s\n", vDisconnect.size(), pfork->GetBlockHash().ToString().substr(0,20).c_str(), pindexBest->GetBlockHash().ToString().substr(0,20).c_str());
-    printf("REORGANIZE: Connect %" PRIszu " blocks; %s..%s\n", vConnect.size(), pfork->GetBlockHash().ToString().substr(0,20).c_str(), pindexNew->GetBlockHash().ToString().substr(0,20).c_str());
+    printf("REORGANIZE: Fork point at height %d: %s\n",
+        pfork->nHeight,
+        pfork->GetBlockHash().ToString().substr(0,20).c_str());
+    printf("REORGANIZE: Disconnect %" PRIszu " blocks (heights %d..%d)\n",
+        vDisconnect.size(),
+        pfork->nHeight + 1,
+        pindexBest->nHeight);
+    printf("REORGANIZE: Connect %" PRIszu " blocks (heights %d..%d)\n",
+        vConnect.size(),
+        pfork->nHeight + 1,
+        pindexNew->nHeight);
 
     // Disconnect shorter branch
     vector<CTransaction> vResurrect;

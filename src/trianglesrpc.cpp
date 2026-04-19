@@ -317,6 +317,7 @@ static const CRPCCommand vRPCCommands[] =
     { "getchaintips",           &getchaintips,           true,   false },
     { "invalidateblock",        &invalidateblock,        false,  false },
     { "reconsiderblock",        &reconsiderblock,        false,  false },
+    { "recalculatesupply",      &recalculatesupply,      false,  false },
     { "reservebalance",         &reservebalance,         false,  true},
     { "checkwallet",            &checkwallet,            false,  true},
     { "repairwallet",           &repairwallet,           false,  true},
