@@ -1407,6 +1407,48 @@ uint256 WantedByOrphan(const CBlock* pblockOrphan)
     return pblockOrphan->hashPrevBlock;
 }
 
+// Evict excess orphan blocks when limit is exceeded
+// Returns number of orphans evicted
+unsigned int LimitOrphanBlocks(unsigned int nMaxOrphans)
+{
+    unsigned int nEvicted = 0;
+    while (mapOrphanBlocks.size() > nMaxOrphans)
+    {
+        // Evict a random orphan
+        uint256 randomhash = GetRandHash();
+        auto it = mapOrphanBlocks.lower_bound(randomhash);
+        if (it == mapOrphanBlocks.end())
+            it = mapOrphanBlocks.begin();
+
+        if (it == mapOrphanBlocks.end())
+            break;  // No orphans to evict
+
+        CBlock* pblockEvict = it->second;
+        uint256 evictHash = it->first;
+
+        // Remove from by-prev index
+        for (auto range = mapOrphanBlocksByPrev.equal_range(pblockEvict->hashPrevBlock);
+             range.first != range.second; ++range.first)
+        {
+            if (range.first->second == pblockEvict) {
+                mapOrphanBlocksByPrev.erase(range.first);
+                break;
+            }
+        }
+
+        setStakeSeenOrphan.erase(pblockEvict->GetProofOfStake());
+        delete pblockEvict;
+        mapOrphanBlocks.erase(evictHash);
+        nEvicted++;
+    }
+
+    if (nEvicted > 0)
+        printf("LimitOrphanBlocks: evicted %u orphan(s), %u remain\n",
+               nEvicted, (unsigned int)mapOrphanBlocks.size());
+
+    return nEvicted;
+}
+
 // miner's coin base reward
 int64_t GetProofOfWorkReward(int64_t nFees)
 {
@@ -1500,9 +1542,13 @@ static unsigned int GetNextTargetRequired_(const CBlockIndex* pindexLast, bool f
         return bnTargetLimit.GetCompact(); // genesis block
 
     const CBlockIndex* pindexPrev = GetLastBlockIndex(pindexLast, fProofOfStake);
+    if (pindexPrev == NULL)
+        return bnTargetLimit.GetCompact(); // no previous block of this type
     if (pindexPrev->pprev == NULL)
         return bnTargetLimit.GetCompact(); // first block
     const CBlockIndex* pindexPrevPrev = GetLastBlockIndex(pindexPrev->pprev, fProofOfStake);
+    if (pindexPrevPrev == NULL)
+        return bnTargetLimit.GetCompact(); // no second previous block of this type
     if (pindexPrevPrev->pprev == NULL)
         return bnTargetLimit.GetCompact(); // second block
 
@@ -2472,12 +2518,6 @@ bool static Reorganize(CTxDB& txdb, CBlockIndex* pindexNew)
                 vResurrect.push_back(tx);
     }
 
-    // Remove disconnected PoS blocks from setStakeSeen so they don't
-    // block acceptance of valid blocks on the winning chain.
-    for (CBlockIndex* pindex : vDisconnect)
-        if (pindex->IsProofOfStake())
-            setStakeSeen.erase(make_pair(pindex->prevoutStake, pindex->nStakeTime));
-
     // Connect longer branch
     vector<CTransaction> vDelete;
     for (unsigned int i = 0; i < vConnect.size(); i++)
@@ -2505,19 +2545,37 @@ bool static Reorganize(CTxDB& txdb, CBlockIndex* pindexNew)
     if (!txdb.TxnCommit())
         return error("Reorganize() : TxnCommit failed");
 
-    // Disconnect shorter branch
+    // ======================================================================
+    // CRITICAL: All operations below this point must be in-memory only and
+    // should never fail. The DB transaction is committed, so we cannot abort.
+    // ======================================================================
+
+    // Disconnect shorter branch (in-memory only)
     for (CBlockIndex* pindex : vDisconnect)
         if (pindex->pprev)
             pindex->pprev->pnext = NULL;
 
-    // Connect longer branch
+    // Connect longer branch (in-memory only)
     for (CBlockIndex* pindex : vConnect)
         if (pindex->pprev)
             pindex->pprev->pnext = pindex;
 
+    // Remove disconnected PoS blocks from setStakeSeen so they don't
+    // block acceptance of valid blocks on the winning chain.
+    // This MUST happen after commit to maintain consistency.
+    for (CBlockIndex* pindex : vDisconnect)
+        if (pindex->IsProofOfStake())
+            setStakeSeen.erase(make_pair(pindex->prevoutStake, pindex->nStakeTime));
+
     // Resurrect memory transactions that were in the disconnected branch
+    unsigned int nResurrected = 0;
     for (CTransaction& tx : vResurrect)
-        tx.AcceptToMemoryPool(txdb, false);
+    {
+        if (tx.AcceptToMemoryPool(txdb, false))
+            nResurrected++;
+    }
+    if (nResurrected > 0)
+        printf("REORGANIZE: resurrected %u transactions to mempool\n", nResurrected);
 
     // Delete redundant memory transactions that are in the connected branch
     for (CTransaction& tx : vDelete) {
@@ -2525,7 +2583,8 @@ bool static Reorganize(CTxDB& txdb, CBlockIndex* pindexNew)
         mempool.removeConflicts(tx);
     }
 
-    printf("REORGANIZE: done\n");
+    printf("REORGANIZE: done (fork at height %d, %zu disconnected, %zu connected)\n",
+           pfork->nHeight, vDisconnect.size(), vConnect.size());
 
     return true;
 }
@@ -2714,6 +2773,9 @@ bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
         if (fWasInitialDownload && !fIsInitialDownload)
         {
             printf("*** Initial block download complete at height %d ***\n", nBestHeight);
+
+            // Trim orphan blocks to normal limit now that IBD is done
+            LimitOrphanBlocks(MAX_ORPHAN_BLOCKS);
 
             // Update wallet best chain locator now that IBD is done
             const CBlockLocator locator(pindexBest);
@@ -3246,29 +3308,7 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         // Allow more orphans during IBD so out-of-order blocks from parallel
         // downloads don't get evicted and re-requested.
         unsigned int nMaxOrphans = IsInitialBlockDownload() ? MAX_ORPHAN_BLOCKS_IBD : MAX_ORPHAN_BLOCKS;
-        if (mapOrphanBlocks.size() > nMaxOrphans)
-        {
-            // Evict a random orphan
-            uint256 randomhash = GetRandHash();
-            auto it = mapOrphanBlocks.lower_bound(randomhash);
-            if (it == mapOrphanBlocks.end())
-                it = mapOrphanBlocks.begin();
-            CBlock* pblockEvict = it->second;
-            uint256 evictHash = it->first;
-            // Remove from by-prev index
-            for (auto range = mapOrphanBlocksByPrev.equal_range(pblockEvict->hashPrevBlock);
-                 range.first != range.second; ++range.first)
-            {
-                if (range.first->second == pblockEvict) {
-                    mapOrphanBlocksByPrev.erase(range.first);
-                    break;
-                }
-            }
-            setStakeSeenOrphan.erase(pblockEvict->GetProofOfStake());
-            delete pblockEvict;
-            mapOrphanBlocks.erase(evictHash);
-            printf("ProcessBlock: orphan eviction, %u orphans remain\n", (unsigned int)mapOrphanBlocks.size());
-        }
+        LimitOrphanBlocks(nMaxOrphans);
 
         // Ask this guy to fill in what we're missing
         if (pfrom && pindexBest)

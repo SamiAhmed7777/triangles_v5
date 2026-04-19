@@ -162,7 +162,9 @@ bool CTxDB::TxnCommit()
     delete activeBatch;
     activeBatch = NULL;
     if (!status.ok()) {
-        printf("LevelDB batch commit failure: %s\n", status.ToString().c_str());
+        printf("ERROR: LevelDB batch commit failure: %s\n", status.ToString().c_str());
+        printf("ERROR: This may indicate disk full, corruption, or permissions issue.\n");
+        printf("ERROR: Chain state may be inconsistent - immediate investigation required!\n");
         return false;
     }
     return true;

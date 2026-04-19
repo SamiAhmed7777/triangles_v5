@@ -136,6 +136,7 @@ bool IsInitialBlockDownload();
 std::string GetWarnings(std::string strFor);
 bool GetTransaction(const uint256 &hash, CTransaction &tx, uint256 &hashBlock);
 uint256 WantedByOrphan(const CBlock* pblockOrphan);
+unsigned int LimitOrphanBlocks(unsigned int nMaxOrphans);
 const CBlockIndex* GetLastBlockIndex(const CBlockIndex* pindex, bool fProofOfStake);
 void StakeMiner(CWallet *pwallet);
 void ResendWalletTransactions(bool fForce = false);
