@@ -17,6 +17,40 @@ static uint64_t nAccountingEntryNumber = 0;
 extern bool fWalletUnlockStakingOnly;
 
 //
+// Auto-backup wallet before flush/rewrite operations.
+// Copies wallet.dat to wallet.dat.auto.bak if the backup is older than the wallet.
+// Returns true if backup was created or already up to date.
+//
+bool AutoBackupWallet(const fs::path& walletPath)
+{
+    fs::path backupPath = walletPath.string() + ".auto.bak";
+    try {
+        // Only back up if wallet exists and is non-trivial (>1KB)
+        if (!fs::exists(walletPath))
+            return true;
+        uintmax_t walletSize = fs::file_size(walletPath);
+        if (walletSize < 1024) {
+            printf("AutoBackupWallet: wallet.dat is only %llu bytes (possibly corrupt), skipping auto-backup\n",
+                   (unsigned long long)walletSize);
+            return false;
+        }
+        // Skip if backup exists and is same size (already backed up this version)
+        if (fs::exists(backupPath)) {
+            uintmax_t backupSize = fs::file_size(backupPath);
+            if (backupSize == walletSize)
+                return true;
+        }
+        fs::copy_file(walletPath, backupPath, fs::copy_options::overwrite_existing);
+        printf("AutoBackupWallet: backed up wallet.dat (%llu bytes) to wallet.dat.auto.bak\n",
+               (unsigned long long)walletSize);
+        return true;
+    } catch (const fs::filesystem_error& e) {
+        printf("AutoBackupWallet: failed - %s\n", e.what());
+        return false;
+    }
+}
+
+//
 // CWalletDB
 //
 
@@ -579,6 +613,10 @@ void ThreadFlushWalletDB(void* parg)
                         printf("Flushing wallet.dat\n");
                         nLastFlushed = nWalletDBUpdated;
                         int64_t nStart = GetTimeMillis();
+
+                        // Auto-backup before flush (protects against corruption)
+                        fs::path walletPath = GetDataDir() / strFile;
+                        AutoBackupWallet(walletPath);
 
                         // Flush wallet.dat so it's self contained
                         bitdb.CloseDb(strFile);

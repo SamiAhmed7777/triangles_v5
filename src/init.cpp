@@ -1041,6 +1041,21 @@ bool AppInit2()
     nStart = GetTimeMillis();
     bool fFirstRun = true;
     pwalletMain = new CWallet(strWalletFileName);
+
+    // Auto-backup wallet.dat before loading (protects against corruption during load/flush)
+    {
+        fs::path walletPath = GetDataDir() / strWalletFileName;
+        if (fs::exists(walletPath)) {
+            uintmax_t wsize = fs::file_size(walletPath);
+            printf("Wallet file size: %llu bytes\n", (unsigned long long)wsize);
+            if (wsize < 1024) {
+                strErrors << _("WARNING: wallet.dat is suspiciously small (") << wsize << _(" bytes). It may be corrupt.\n");
+                printf("WARNING: wallet.dat is only %llu bytes - possibly corrupt!\n", (unsigned long long)wsize);
+            }
+            AutoBackupWallet(walletPath);
+        }
+    }
+
     DBErrors nLoadWalletRet = pwalletMain->LoadWallet(fFirstRun);
     if (nLoadWalletRet != DB_LOAD_OK)
     {
