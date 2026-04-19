@@ -128,7 +128,7 @@ Value getstakinginfo(const Array& params, bool fHelp)
 
     // Add detailed diagnostics
     obj.push_back(Pair("walletlocked", pwalletMain->IsLocked()));
-    obj.push_back(Pair("walletunlockedforstakingonly", pwalletMain->fWalletUnlockStakingOnly));
+    obj.push_back(Pair("walletunlockedforstakingonly", fWalletUnlockStakingOnly));
     obj.push_back(Pair("connections", (int)vNodes.size()));
     obj.push_back(Pair("initialblockdownload", IsInitialBlockDownload()));
     obj.push_back(Pair("maturecoins", nWeight > 0));
