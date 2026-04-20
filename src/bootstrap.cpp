@@ -22,8 +22,10 @@
 
 #ifdef WIN32
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #else
 #include <sys/socket.h>
+#include <netdb.h>
 #include <unistd.h>
 #endif
 
@@ -68,52 +70,170 @@ static bool RecvUntil(SOCKET sock, std::string& out, const std::string& delim)
     }
 }
 
+// Direct TCP connection bypassing Tor SOCKS proxy.
+// Used for bootstrap downloads where the server is on clearnet.
+static SOCKET ConnectDirectTCP(const std::string& host, int port, std::string& strError)
+{
+    struct addrinfo hints, *result, *rp;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    std::string portStr = std::to_string(port);
+    int rc = getaddrinfo(host.c_str(), portStr.c_str(), &hints, &result);
+    if (rc != 0) {
+        strError = "DNS resolution failed for " + host;
+        return INVALID_SOCKET;
+    }
+
+    SOCKET hSocket = INVALID_SOCKET;
+    for (rp = result; rp != NULL; rp = rp->ai_next) {
+        hSocket = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (hSocket == INVALID_SOCKET)
+            continue;
+
+        if (connect(hSocket, rp->ai_addr, (int)rp->ai_addrlen) == 0)
+            break; // success
+
+        closesocket(hSocket);
+        hSocket = INVALID_SOCKET;
+    }
+    freeaddrinfo(result);
+
+    if (hSocket == INVALID_SOCKET)
+        strError = "Cannot connect to " + host + ":" + portStr;
+
+    return hSocket;
+}
+
 bool DownloadFile(const std::string& host, const std::string& urlPath,
                   const fs::path& destPath,
                   ProgressCallback progressFn,
-                  std::string& strError)
+                  std::string& strError,
+                  bool noProxy)
 {
     try {
-        // Connect through Tor SOCKS proxy (ConnectSocketByName respects SetProxy)
+        std::string currentHost = host;
+        std::string currentPath = urlPath;
         SOCKET hSocket = INVALID_SOCKET;
-        CService addr;
-        if (!ConnectSocketByName(addr, hSocket, host.c_str(), PORT, 30)) {
-            strError = "Cannot connect to " + host + " (check Tor proxy)";
-            return false;
-        }
-
-        // Send HTTP GET request
-        std::string request =
-            "GET " + urlPath + " HTTP/1.1\r\n"
-            "Host: " + host + "\r\n"
-            "Connection: close\r\n"
-            "User-Agent: Triangles\r\n"
-            "\r\n";
-
-        if (!SendAll(hSocket, request.data(), request.size())) {
-            closesocket(hSocket);
-            strError = "Failed to send request to " + host;
-            return false;
-        }
-
-        // Read response headers
         std::string headerData;
-        if (!RecvUntil(hSocket, headerData, "\r\n\r\n")) {
-            closesocket(hSocket);
-            strError = "Failed to read HTTP headers from " + host;
-            return false;
-        }
+        int redirectCount = 0;
+        const int MAX_REDIRECTS = 5;
 
-        // Parse status code from "HTTP/1.x NNN ..."
-        unsigned int status_code = 0;
-        size_t sp = headerData.find(' ');
-        if (sp != std::string::npos)
-            status_code = atoi(headerData.c_str() + sp + 1);
+        // Connection + redirect loop
+        while (true) {
+            if (noProxy) {
+                hSocket = ConnectDirectTCP(currentHost, PORT, strError);
+                if (hSocket == INVALID_SOCKET)
+                    return false;
+            } else {
+                CService addr;
+                if (!ConnectSocketByName(addr, hSocket, currentHost.c_str(), PORT, 30)) {
+                    strError = "Cannot connect to " + currentHost + " (check Tor proxy)";
+                    return false;
+                }
+            }
 
-        if (status_code != 200) {
-            closesocket(hSocket);
-            strError = "HTTP error " + std::to_string(status_code) + " for " + urlPath;
-            return false;
+            // Send HTTP GET request
+            std::string request =
+                "GET " + currentPath + " HTTP/1.1\r\n"
+                "Host: " + currentHost + "\r\n"
+                "Connection: close\r\n"
+                "User-Agent: Triangles\r\n"
+                "\r\n";
+
+            if (!SendAll(hSocket, request.data(), request.size())) {
+                closesocket(hSocket);
+                strError = "Failed to send request to " + currentHost;
+                return false;
+            }
+
+            // Read response headers
+            if (!RecvUntil(hSocket, headerData, "\r\n\r\n")) {
+                closesocket(hSocket);
+                strError = "Failed to read HTTP headers from " + currentHost;
+                return false;
+            }
+
+            // Parse status code from "HTTP/1.x NNN ..."
+            unsigned int status_code = 0;
+            size_t sp = headerData.find(' ');
+            if (sp != std::string::npos)
+                status_code = atoi(headerData.c_str() + sp + 1);
+
+            // Handle HTTP redirects
+            if (status_code == 301 || status_code == 302 ||
+                status_code == 307 || status_code == 308) {
+                closesocket(hSocket);
+                hSocket = INVALID_SOCKET;
+
+                if (++redirectCount > MAX_REDIRECTS) {
+                    strError = "Too many redirects for " + urlPath;
+                    return false;
+                }
+
+                // Find Location header (case-insensitive)
+                std::string lowerHdr = headerData;
+                std::transform(lowerHdr.begin(), lowerHdr.end(),
+                               lowerHdr.begin(), ::tolower);
+                size_t locPos = lowerHdr.find("\nlocation:");
+                if (locPos == std::string::npos) {
+                    strError = "Redirect " + std::to_string(status_code) + " without Location header";
+                    return false;
+                }
+
+                size_t valStart = locPos + 10; // skip "\nlocation:"
+                while (valStart < headerData.size() && headerData[valStart] == ' ')
+                    valStart++;
+                size_t lineEnd = headerData.find("\r\n", valStart);
+                std::string location;
+                if (lineEnd != std::string::npos)
+                    location = headerData.substr(valStart, lineEnd - valStart);
+                else
+                    location = headerData.substr(valStart);
+                boost::trim(location);
+
+                // Reject HTTPS redirects (no TLS support)
+                if (location.compare(0, 8, "https://") == 0) {
+                    strError = "Server redirected to HTTPS (not supported). "
+                              "Configure bootstrap server for plain HTTP.";
+                    return false;
+                }
+
+                // Parse redirect URL
+                if (location.compare(0, 7, "http://") == 0) {
+                    std::string rest = location.substr(7);
+                    size_t pathStart = rest.find('/');
+                    if (pathStart != std::string::npos) {
+                        currentHost = rest.substr(0, pathStart);
+                        currentPath = rest.substr(pathStart);
+                    } else {
+                        currentHost = rest;
+                        currentPath = "/";
+                    }
+                    // Strip port from host if present
+                    size_t colonPos = currentHost.find(':');
+                    if (colonPos != std::string::npos)
+                        currentHost = currentHost.substr(0, colonPos);
+                } else if (!location.empty() && location[0] == '/') {
+                    currentPath = location;
+                } else {
+                    strError = "Unsupported redirect location: " + location;
+                    return false;
+                }
+
+                printf("Bootstrap: redirect %d -> %s%s\n",
+                       status_code, currentHost.c_str(), currentPath.c_str());
+                continue;
+            }
+
+            if (status_code != 200) {
+                closesocket(hSocket);
+                strError = "HTTP error " + std::to_string(status_code) + " for " + currentPath;
+                return false;
+            }
+
+            break; // Got 200, proceed to download
         }
 
         // Parse Content-Length
@@ -183,13 +303,14 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
 
 bool FetchFileList(const std::string& host,
                    std::vector<std::string>& files,
-                   std::string& strError)
+                   std::string& strError,
+                   bool noProxy)
 {
     // Download filelist.txt to a temp file
     fs::path tmpPath = fs::temp_directory_path() / "triangles_bootstrap_filelist.txt";
 
     std::string urlPath = std::string(BASE_PATH) + "filelist.txt";
-    if (!DownloadFile(host, urlPath, tmpPath, nullptr, strError))
+    if (!DownloadFile(host, urlPath, tmpPath, nullptr, strError, noProxy))
         return false;
 
     // Read lines
@@ -458,10 +579,12 @@ bool DownloadBootstrap(const std::string& host,
     bool gotBlockFile = false;
 
     // Try downloading bootstrap.tar.gz first
+    // Bootstrap server is on clearnet — bypass Tor proxy for DNS + HTTP
+    const bool noProxy = true;
     fs::path tmpTarGz = dataDir / "bootstrap.tar.gz.tmp";
     std::string tarUrl = std::string(BASE_PATH) + "triangles-bootstrap.tar.gz";
 
-    bool tarDownloaded = DownloadFile(host, tarUrl, tmpTarGz, progressFn, strError);
+    bool tarDownloaded = DownloadFile(host, tarUrl, tmpTarGz, progressFn, strError, noProxy);
 
     if (tarDownloaded) {
         bool extractOk = ExtractTarGz(tmpTarGz, dataDir, strError);
@@ -476,7 +599,7 @@ bool DownloadBootstrap(const std::string& host,
         // Fallback: try filelist.txt + individual file downloads
         std::string fallbackError;
         std::vector<std::string> files;
-        if (!FetchFileList(host, files, fallbackError)) {
+        if (!FetchFileList(host, files, fallbackError, noProxy)) {
             if (!tarDownloaded)
                 strError = strError + " (fallback also failed: " + fallbackError + ")";
             else
@@ -489,7 +612,7 @@ bool DownloadBootstrap(const std::string& host,
             fs::create_directories(destPath.parent_path());
 
             std::string urlPath = std::string(BASE_PATH) + files[i];
-            if (!DownloadFile(host, urlPath, destPath, progressFn, strError))
+            if (!DownloadFile(host, urlPath, destPath, progressFn, strError, noProxy))
                 return false;
         }
 

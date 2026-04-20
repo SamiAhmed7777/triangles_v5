@@ -22,16 +22,20 @@ namespace Bootstrap {
     // Check if data dir already has blockchain data
     bool NeedsBootstrap(const boost::filesystem::path& dataDir);
 
-    // Download a single file via HTTP GET, write to destPath
+    // Download a single file via HTTP GET, write to destPath.
+    // If noProxy is true, bypass Tor SOCKS proxy and connect directly
+    // (used for clearnet bootstrap downloads).
     bool DownloadFile(const std::string& host, const std::string& urlPath,
                       const boost::filesystem::path& destPath,
                       ProgressCallback progressFn,
-                      std::string& strError);
+                      std::string& strError,
+                      bool noProxy = false);
 
     // Fetch the file manifest (list of relative paths to download)
     bool FetchFileList(const std::string& host,
                        std::vector<std::string>& files,
-                       std::string& strError);
+                       std::string& strError,
+                       bool noProxy = false);
 
     // Download bootstrap.tar.gz and extract to dataDir.
     // Falls back to filelist.txt + individual file download if tar.gz unavailable.
