@@ -20,6 +20,7 @@
 #include "notificationqueue.h"
 #include "addressindex.h"
 #include <algorithm>
+#include <deque>
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -436,7 +437,24 @@ static unsigned int QueueHeaderSyncBlocksParallel(unsigned int nWindow)
     unsigned int nQueued = 0;
     unsigned int nPeerIndex = 0;
 
-    // Distribute blocks across peers in round-robin fashion
+    // Sort peers by blocks delivered (descending) for speed-weighted assignment.
+    // Faster peers get more blocks assigned to them, improving IBD throughput
+    // on Tor networks where latency varies significantly between peers.
+    std::sort(vEligiblePeers.begin(), vEligiblePeers.end(),
+        [](const CNode* a, const CNode* b) {
+            return a->nBlocksDelivered > b->nBlocksDelivered;
+        });
+
+    // Build a weighted distribution: top peer gets 3 slots per round, second gets 2, rest get 1.
+    std::vector<CNode*> vWeightedPeers;
+    for (size_t i = 0; i < vEligiblePeers.size(); i++)
+    {
+        int nWeight = (i == 0) ? 3 : (i == 1) ? 2 : 1;
+        for (int w = 0; w < nWeight; w++)
+            vWeightedPeers.push_back(vEligiblePeers[i]);
+    }
+
+    // Distribute blocks across peers using speed-weighted assignment
     for (std::vector<uint256>::const_iterator it = vPath.begin(); it != vPath.end(); ++it)
     {
         if (nInFlight + nQueued >= nWindow)
@@ -468,8 +486,8 @@ static unsigned int QueueHeaderSyncBlocksParallel(unsigned int nWindow)
         if (!fNeedsRequest)
             continue;
 
-        // Round-robin across peers to distribute load
-        CNode* pnode = vEligiblePeers[nPeerIndex % vEligiblePeers.size()];
+        // Speed-weighted assignment across peers
+        CNode* pnode = vWeightedPeers[nPeerIndex % vWeightedPeers.size()];
         pnode->AskFor(CInv(MSG_BLOCK, *it));
 
         // Update tracking (only on first request, not redundant)
@@ -1407,24 +1425,33 @@ uint256 WantedByOrphan(const CBlock* pblockOrphan)
     return pblockOrphan->hashPrevBlock;
 }
 
-// Evict excess orphan blocks when limit is exceeded
-// Returns number of orphans evicted
+// Track orphan insertion order for smart eviction (oldest first)
+static std::deque<uint256> dequeOrphanOrder;
+
+// Evict excess orphan blocks when limit is exceeded.
+// Evicts oldest orphans first (FIFO) instead of random — this ensures
+// legitimate out-of-order blocks from recent parallel downloads survive,
+// while stale orphans that will likely never connect get cleaned up.
 unsigned int LimitOrphanBlocks(unsigned int nMaxOrphans)
 {
     unsigned int nEvicted = 0;
     while (mapOrphanBlocks.size() > nMaxOrphans)
     {
-        // Evict a random orphan
-        uint256 randomhash = GetRandHash();
-        auto it = mapOrphanBlocks.lower_bound(randomhash);
-        if (it == mapOrphanBlocks.end())
-            it = mapOrphanBlocks.begin();
+        // Evict the oldest orphan (front of insertion queue)
+        while (!dequeOrphanOrder.empty() && !mapOrphanBlocks.count(dequeOrphanOrder.front()))
+            dequeOrphanOrder.pop_front();  // skip already-removed entries
 
+        if (dequeOrphanOrder.empty())
+            break;
+
+        uint256 evictHash = dequeOrphanOrder.front();
+        dequeOrphanOrder.pop_front();
+
+        auto it = mapOrphanBlocks.find(evictHash);
         if (it == mapOrphanBlocks.end())
-            break;  // No orphans to evict
+            continue;
 
         CBlock* pblockEvict = it->second;
-        uint256 evictHash = it->first;
 
         // Remove from by-prev index
         for (auto range = mapOrphanBlocksByPrev.equal_range(pblockEvict->hashPrevBlock);
@@ -1443,7 +1470,7 @@ unsigned int LimitOrphanBlocks(unsigned int nMaxOrphans)
     }
 
     if (nEvicted > 0)
-        printf("LimitOrphanBlocks: evicted %u orphan(s), %u remain\n",
+        printf("LimitOrphanBlocks: evicted %u oldest orphan(s), %u remain\n",
                nEvicted, (unsigned int)mapOrphanBlocks.size());
 
     return nEvicted;
@@ -2479,6 +2506,17 @@ bool static Reorganize(CTxDB& txdb, CBlockIndex* pindexNew)
             return error("Reorganize() : pfork->pprev is null");
     }
 
+    // Finality: reject reorgs deeper than MAX_REORG_DEPTH blocks.
+    // This prevents long-range attacks on the PoS chain. During IBD
+    // we allow deep reorgs since we haven't settled on a tip yet.
+    unsigned int nDisconnectDepth = pindexBest->nHeight - pfork->nHeight;
+    if (!IsInitialBlockDownload() && nDisconnectDepth > MAX_REORG_DEPTH)
+    {
+        printf("REORGANIZE: REJECTED — depth %u exceeds finality limit %u (fork at %d)\n",
+            nDisconnectDepth, MAX_REORG_DEPTH, pfork->nHeight);
+        return error("Reorganize() : reorg depth %u exceeds maximum %u", nDisconnectDepth, MAX_REORG_DEPTH);
+    }
+
     // List of what to disconnect
     vector<CBlockIndex*> vDisconnect;
     for (CBlockIndex* pindex = pindexBest; pindex != pfork; pindex = pindex->pprev)
@@ -2967,21 +3005,30 @@ bool CBlock::AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const u
     //
     // Chain selection rules:
     //   1. Strictly greater trust always wins (normal case).
-    //   2. Equal trust: deterministic hash tiebreaker — lower tip hash wins.
-    //      This ensures all nodes converge on the same chain even when two
-    //      forks have identical cumulative difficulty (common in PoS).
-    //      Rate-limited to one equal-trust reorg per 2 minutes — short enough
-    //      for fast convergence but long enough to prevent oscillation on Tor.
+    //   2. Equal trust: deterministic tiebreaker with timestamp preference.
+    //      First prefer the block with the earlier timestamp (lower nTime),
+    //      then break remaining ties by lower hash. This converges faster
+    //      because the earlier block is more likely to have propagated first.
+    //      Rate-limited to one equal-trust reorg per 2 minutes.
     bool fNewBest = false;
     static int64_t nLastEqualTrustReorg = 0;
     if (pindexNew->nChainTrust > nBestChainTrust)
         fNewBest = true;
     else if (pindexNew->nChainTrust == nBestChainTrust && pindexBest &&
-             pindexNew->GetBlockHash() < pindexBest->GetBlockHash() &&
              GetTime() - nLastEqualTrustReorg > 2 * 60)
     {
-        fNewBest = true;
-        nLastEqualTrustReorg = GetTime();
+        // Prefer earlier timestamp, then lower hash as final tiebreaker
+        bool fPreferNew = false;
+        if (pindexNew->nTime < pindexBest->nTime)
+            fPreferNew = true;
+        else if (pindexNew->nTime == pindexBest->nTime)
+            fPreferNew = (pindexNew->GetBlockHash() < pindexBest->GetBlockHash());
+
+        if (fPreferNew)
+        {
+            fNewBest = true;
+            nLastEqualTrustReorg = GetTime();
+        }
     }
 
     if (fNewBest)
@@ -3190,16 +3237,16 @@ bool CBlock::AcceptBlock()
     if (!AddToBlockIndex(nFile, nBlockPos, hashProofOfStake))
         return error("AcceptBlock() : AddToBlockIndex failed");
 
-    // Push new tip block directly to all peers.  On a small Tor-only
-    // network the inv→getdata→block round-trip adds 1-2 seconds of latency
-    // per hop — enough for a competing staker to create a fork.  Pushing
-    // the full block immediately cuts propagation to a single hop.
-    int nBlockEstimate = Checkpoints::GetTotalBlocksEstimate();
+    // Push new tip block directly to peers that are near our tip.
+    // On a small Tor-only network the inv->getdata->block round-trip adds
+    // 1-2 seconds of latency per hop. Pushing immediately cuts propagation
+    // to a single hop. Only push to peers within 10 blocks of our tip —
+    // pushing full blocks to syncing peers wastes bandwidth and slows IBD.
     if (hashBestChain == hash)
     {
         LOCK(cs_vNodes);
         for (CNode* pnode : vNodes)
-            if (nBestHeight > (pnode->nStartingHeight != -1 ? pnode->nStartingHeight - 2000 : nBlockEstimate))
+            if (pnode->nStartingHeight >= nBestHeight - 10)
             {
                 pnode->PushMessage("block", *this);
                 pnode->AddInventoryKnown(CInv(MSG_BLOCK, hash));
@@ -3309,6 +3356,7 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         }
         mapOrphanBlocks.insert(make_pair(hash, pblock2));
         mapOrphanBlocksByPrev.insert(make_pair(pblock2->hashPrevBlock, pblock2));
+        dequeOrphanOrder.push_back(hash);  // track insertion order for FIFO eviction
 
         // Limit orphan blocks to prevent memory exhaustion.
         // Allow more orphans during IBD so out-of-order blocks from parallel
@@ -4780,6 +4828,9 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         CInv inv(MSG_BLOCK, hashBlock);
         pfrom->AddInventoryKnown(inv);
 
+        // Track block delivery for peer latency scoring
+        pfrom->nBlocksDelivered++;
+
         if (ProcessBlock(pfrom, &block))
         {
             mapAlreadyAskedFor.erase(inv);
@@ -5326,6 +5377,50 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
             pto->nLastTipCheck = GetTime();
             pto->pindexLastGetBlocksBegin = NULL;  // reset dedup to force request
             pto->PushGetBlocks(pindexBest, uint256(0));
+        }
+
+        //
+        // Slow-peer eviction: every 5 minutes during sync, identify the
+        // outbound peer with the fewest blocks delivered and disconnect it
+        // to free the slot for a potentially faster peer. This is critical
+        // on Tor networks with high latency variance.
+        //
+        if (nBestHeight < GetNumBlocksOfPeers() && !pto->fClient && !pto->fInbound)
+        {
+            static int64_t nLastEvictionCheck = 0;
+            if (GetTime() - nLastEvictionCheck > 5 * 60)
+            {
+                nLastEvictionCheck = GetTime();
+                CNode* pWorst = NULL;
+                int nWorstBlocks = INT_MAX;
+                int nOutbound = 0;
+                {
+                    LOCK(cs_vNodes);
+                    for (CNode* pnode : vNodes)
+                    {
+                        if (pnode->fInbound || pnode->fDisconnect || pnode->fClient)
+                            continue;
+                        nOutbound++;
+                        // Only consider peers connected for at least 3 minutes
+                        if (GetTime() - pnode->nTimeConnected < 3 * 60)
+                            continue;
+                        if (pnode->nBlocksDelivered < nWorstBlocks)
+                        {
+                            nWorstBlocks = pnode->nBlocksDelivered;
+                            pWorst = pnode;
+                        }
+                    }
+                    // Only evict if we have at least 3 outbound peers and the worst
+                    // peer has delivered significantly fewer blocks than average
+                    if (pWorst && nOutbound >= 3 && nWorstBlocks == 0)
+                    {
+                        printf("PEER-EVICT: disconnecting slow peer %s (0 blocks delivered in %ds)\n",
+                            pWorst->addr.ToString().c_str(),
+                            (int)(GetTime() - pWorst->nTimeConnected));
+                        pWorst->fDisconnect = true;
+                    }
+                }
+            }
         }
 
         //

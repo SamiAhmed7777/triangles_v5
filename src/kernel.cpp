@@ -31,9 +31,13 @@ int64_t GetWeight(int64_t nIntervalBeginning, int64_t nIntervalEnd)
     if (nAge < 0)
         return 0;
 
-    // After v5 fork: remove max age cap so coins aged during the freeze can stake
+    // After v5 fork: use soft cap of 7 days instead of hard nStakeMaxAge.
+    // This prevents "stake surprise" where a whale who was offline for weeks
+    // comes back with massively amplified staking power and dominates blocks.
+    // The 7-day cap still allows generous accumulation while limiting abuse.
+    static const int64_t STAKE_AGE_SOFT_CAP = 7 * 24 * 60 * 60; // 7 days
     if (pindexBest && pindexBest->nHeight >= FORK_HEIGHT_V5)
-        return nAge;
+        return min(nAge, STAKE_AGE_SOFT_CAP);
 
     return min(nAge, (int64_t)nStakeMaxAge);
 }

@@ -4,6 +4,7 @@
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 
 #include <map>
+#include <unordered_map>
 
 #include <boost/version.hpp>
 #include <boost/filesystem.hpp>
@@ -872,26 +873,117 @@ bool CTxDB::GetAddressTxIds(int nType, const uint160& hashBytes, int nStartHeigh
     return true;
 }
 
+// ---------- In-memory UTXO cache ----------
+//
+// Read-through cache that avoids hitting LevelDB for every FetchInputs call.
+// On a 2M+ block chain with millions of UTXOs, this dramatically reduces I/O
+// during both IBD (ConnectBlock validation reads inputs) and normal operation
+// (mempool acceptance, staking). Writes/erases update both cache and LevelDB.
+
+struct COutPointHasher {
+    size_t operator()(const COutPoint& op) const {
+        // Mix the lower 64 bits of the hash with the output index
+        return op.hash.Get64() ^ (std::hash<unsigned int>()(op.n) * 0x9e3779b97f4a7c15ULL);
+    }
+};
+
+// Cache entry: the UTXO data plus a flag indicating "known absent from DB"
+struct CUtxoCacheEntry {
+    CUtxoEntry utxo;
+    bool fPresent;  // true = UTXO exists, false = known deleted/absent
+    CUtxoCacheEntry() : fPresent(false) {}
+    CUtxoCacheEntry(const CUtxoEntry& u, bool p) : utxo(u), fPresent(p) {}
+};
+
+static std::unordered_map<COutPoint, CUtxoCacheEntry, COutPointHasher> mapUtxoCache;
+static CCriticalSection cs_utxoCache;
+static const size_t UTXO_CACHE_MAX_ENTRIES = 2000000;  // ~400MB at ~200 bytes each
+
 // ---------- UTXO database methods ----------
 
 bool CTxDB::ReadUtxo(const uint256& hash, unsigned int n, CUtxoEntry& entry)
 {
     entry.SetNull();
-    return Read(make_pair(string("u"), make_pair(hash, n)), entry);
+    COutPoint outpoint(hash, n);
+
+    {
+        LOCK(cs_utxoCache);
+        auto it = mapUtxoCache.find(outpoint);
+        if (it != mapUtxoCache.end())
+        {
+            if (it->second.fPresent) {
+                entry = it->second.utxo;
+                return true;
+            }
+            return false;  // cached as absent
+        }
+    }
+
+    // Cache miss — read from LevelDB
+    bool fFound = Read(make_pair(string("u"), make_pair(hash, n)), entry);
+
+    {
+        LOCK(cs_utxoCache);
+        // Only cache if under limit (don't evict here — eviction is periodic)
+        if (mapUtxoCache.size() < UTXO_CACHE_MAX_ENTRIES)
+        {
+            if (fFound)
+                mapUtxoCache[outpoint] = CUtxoCacheEntry(entry, true);
+            else
+                mapUtxoCache[outpoint] = CUtxoCacheEntry(CUtxoEntry(), false);
+        }
+    }
+
+    return fFound;
 }
 
 bool CTxDB::WriteUtxo(const uint256& hash, unsigned int n, const CUtxoEntry& entry)
 {
+    COutPoint outpoint(hash, n);
+
+    {
+        LOCK(cs_utxoCache);
+        mapUtxoCache[outpoint] = CUtxoCacheEntry(entry, true);
+
+        // Periodic eviction: if cache is over limit, clear half of it.
+        // This is a simple but effective strategy — the cache will quickly
+        // repopulate with the hot working set.
+        if (mapUtxoCache.size() > UTXO_CACHE_MAX_ENTRIES)
+        {
+            size_t nTarget = UTXO_CACHE_MAX_ENTRIES / 2;
+            auto it = mapUtxoCache.begin();
+            while (mapUtxoCache.size() > nTarget && it != mapUtxoCache.end())
+                it = mapUtxoCache.erase(it);
+        }
+    }
+
     return Write(make_pair(string("u"), make_pair(hash, n)), entry);
 }
 
 bool CTxDB::EraseUtxo(const uint256& hash, unsigned int n)
 {
+    COutPoint outpoint(hash, n);
+
+    {
+        LOCK(cs_utxoCache);
+        // Mark as absent in cache (negative cache) so future reads don't hit DB
+        mapUtxoCache[outpoint] = CUtxoCacheEntry(CUtxoEntry(), false);
+    }
+
     return Erase(make_pair(string("u"), make_pair(hash, n)));
 }
 
 bool CTxDB::HaveUtxo(const uint256& hash, unsigned int n)
 {
+    COutPoint outpoint(hash, n);
+
+    {
+        LOCK(cs_utxoCache);
+        auto it = mapUtxoCache.find(outpoint);
+        if (it != mapUtxoCache.end())
+            return it->second.fPresent;
+    }
+
     if (Exists(make_pair(string("u"), make_pair(hash, n))))
         return true;
 

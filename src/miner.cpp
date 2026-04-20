@@ -446,9 +446,20 @@ void StakeMiner(CWallet *pwallet)
         {
             printf("StakeMiner(): A proof-of-stake block has been found! %s\n", pblock->GetHash().ToString().c_str());
             SetThreadPriority(THREAD_PRIORITY_NORMAL);
-            CheckStake(pblock.get(), *pwallet);
+            bool fAccepted = CheckStake(pblock.get(), *pwallet);
             SetThreadPriority(THREAD_PRIORITY_LOWEST);
-            MilliSleep(500);
+            if (fAccepted)
+            {
+                MilliSleep(500);
+            }
+            else
+            {
+                // Block was orphaned or rejected — apply a cooldown to reduce
+                // fork oscillation. Without this, the staker immediately retries
+                // with a different timestamp, potentially creating competing forks.
+                printf("StakeMiner(): block not accepted, cooldown 30s\n");
+                MilliSleep(30000);
+            }
         }
         else
           MilliSleep(500);

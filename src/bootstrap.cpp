@@ -14,6 +14,9 @@
 #include "netbase.h"
 #include "net.h"
 
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+
 #include <fstream>
 #include <sstream>
 #include <cstdio>
@@ -40,34 +43,6 @@ namespace Bootstrap {
 bool NeedsBootstrap(const fs::path& dataDir)
 {
     return !fs::exists(dataDir / "blk0001.dat");
-}
-
-// Send all bytes on a raw socket
-static bool SendAll(SOCKET sock, const char* data, size_t len)
-{
-    while (len > 0) {
-        int n = send(sock, data, (int)std::min(len, (size_t)65536), MSG_NOSIGNAL);
-        if (n <= 0) return false;
-        data += n;
-        len -= n;
-    }
-    return true;
-}
-
-// Read until `delim` found in received data. Returns data including delimiter.
-static bool RecvUntil(SOCKET sock, std::string& out, const std::string& delim)
-{
-    out.clear();
-    char c;
-    while (true) {
-        int n = recv(sock, &c, 1, 0);
-        if (n <= 0) return false;
-        out += c;
-        if (out.size() >= delim.size() &&
-            out.compare(out.size() - delim.size(), delim.size(), delim) == 0)
-            return true;
-        if (out.size() > 64 * 1024) return false; // header too large
-    }
 }
 
 // Direct TCP connection bypassing Tor SOCKS proxy.
@@ -106,6 +81,128 @@ static SOCKET ConnectDirectTCP(const std::string& host, int port, std::string& s
     return hSocket;
 }
 
+// RAII wrapper for an HTTP(S) connection (socket + optional TLS)
+struct HttpConn {
+    SOCKET sock;
+    SSL_CTX* ctx;
+    SSL* ssl;
+
+    HttpConn() : sock(INVALID_SOCKET), ctx(nullptr), ssl(nullptr) {}
+    ~HttpConn() { Close(); }
+
+    void Close() {
+        if (ssl)  { SSL_shutdown(ssl); SSL_free(ssl); ssl = nullptr; }
+        if (ctx)  { SSL_CTX_free(ctx); ctx = nullptr; }
+        if (sock != INVALID_SOCKET) { closesocket(sock); sock = INVALID_SOCKET; }
+    }
+
+    bool Send(const char* data, size_t len) {
+        while (len > 0) {
+            int n = ssl ? SSL_write(ssl, data, (int)std::min(len, (size_t)65536))
+                        : send(sock, data, (int)std::min(len, (size_t)65536), MSG_NOSIGNAL);
+            if (n <= 0) return false;
+            data += n;
+            len -= n;
+        }
+        return true;
+    }
+
+    int Recv(char* buf, int len) {
+        return ssl ? SSL_read(ssl, buf, len) : recv(sock, buf, len, 0);
+    }
+
+    // Read until delimiter found. Returns data including delimiter.
+    bool RecvUntil(std::string& out, const std::string& delim) {
+        out.clear();
+        char c;
+        while (true) {
+            int n = Recv(&c, 1);
+            if (n <= 0) return false;
+            out += c;
+            if (out.size() >= delim.size() &&
+                out.compare(out.size() - delim.size(), delim.size(), delim) == 0)
+                return true;
+            if (out.size() > 64 * 1024) return false; // header too large
+        }
+    }
+
+    // Establish TLS on an already-connected socket
+    bool StartTLS(const std::string& hostname, std::string& strError) {
+        ctx = SSL_CTX_new(TLS_client_method());
+        if (!ctx) {
+            strError = "Failed to create SSL context";
+            return false;
+        }
+        // Skip cert verification — we verify data integrity via checkpoint hashes
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+
+        ssl = SSL_new(ctx);
+        if (!ssl) {
+            strError = "Failed to create SSL object";
+            return false;
+        }
+        SSL_set_fd(ssl, (int)sock);
+        SSL_set_tlsext_host_name(ssl, hostname.c_str()); // SNI
+
+        if (SSL_connect(ssl) != 1) {
+            unsigned long err = ERR_get_error();
+            char errBuf[256];
+            ERR_error_string_n(err, errBuf, sizeof(errBuf));
+            strError = "TLS handshake failed with " + hostname + ": " + errBuf;
+            return false;
+        }
+        return true;
+    }
+};
+
+// Parse host, port, and path from an absolute URL.
+// Sets useSSL, host, port, path. Returns false for unsupported schemes.
+static bool ParseAbsoluteUrl(const std::string& url,
+                              bool& useSSL, std::string& host,
+                              int& port, std::string& path)
+{
+    if (url.compare(0, 8, "https://") == 0) {
+        useSSL = true;
+        std::string rest = url.substr(8);
+        size_t pathStart = rest.find('/');
+        if (pathStart != std::string::npos) {
+            host = rest.substr(0, pathStart);
+            path = rest.substr(pathStart);
+        } else {
+            host = rest;
+            path = "/";
+        }
+        size_t colonPos = host.find(':');
+        if (colonPos != std::string::npos) {
+            port = std::atoi(host.c_str() + colonPos + 1);
+            host = host.substr(0, colonPos);
+        } else {
+            port = 443;
+        }
+        return true;
+    } else if (url.compare(0, 7, "http://") == 0) {
+        useSSL = false;
+        std::string rest = url.substr(7);
+        size_t pathStart = rest.find('/');
+        if (pathStart != std::string::npos) {
+            host = rest.substr(0, pathStart);
+            path = rest.substr(pathStart);
+        } else {
+            host = rest;
+            path = "/";
+        }
+        size_t colonPos = host.find(':');
+        if (colonPos != std::string::npos) {
+            port = std::atoi(host.c_str() + colonPos + 1);
+            host = host.substr(0, colonPos);
+        } else {
+            port = 80;
+        }
+        return true;
+    }
+    return false;
+}
+
 bool DownloadFile(const std::string& host, const std::string& urlPath,
                   const fs::path& destPath,
                   ProgressCallback progressFn,
@@ -115,23 +212,36 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
     try {
         std::string currentHost = host;
         std::string currentPath = urlPath;
-        SOCKET hSocket = INVALID_SOCKET;
+        int currentPort = PORT;
+        bool useSSL = false;
         std::string headerData;
         int redirectCount = 0;
         const int MAX_REDIRECTS = 5;
 
+        HttpConn conn;
+
         // Connection + redirect loop
         while (true) {
+            conn.Close(); // clean slate for each attempt
+
             if (noProxy) {
-                hSocket = ConnectDirectTCP(currentHost, PORT, strError);
-                if (hSocket == INVALID_SOCKET)
+                conn.sock = ConnectDirectTCP(currentHost, currentPort, strError);
+                if (conn.sock == INVALID_SOCKET)
                     return false;
             } else {
                 CService addr;
-                if (!ConnectSocketByName(addr, hSocket, currentHost.c_str(), PORT, 30)) {
+                if (!ConnectSocketByName(addr, conn.sock, currentHost.c_str(), currentPort, 30)) {
                     strError = "Cannot connect to " + currentHost + " (check Tor proxy)";
                     return false;
                 }
+            }
+
+            // Establish TLS when needed
+            if (useSSL) {
+                if (!conn.StartTLS(currentHost, strError))
+                    return false;
+                printf("Bootstrap: TLS established with %s:%d\n",
+                       currentHost.c_str(), currentPort);
             }
 
             // Send HTTP GET request
@@ -142,15 +252,13 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
                 "User-Agent: Triangles\r\n"
                 "\r\n";
 
-            if (!SendAll(hSocket, request.data(), request.size())) {
-                closesocket(hSocket);
+            if (!conn.Send(request.data(), request.size())) {
                 strError = "Failed to send request to " + currentHost;
                 return false;
             }
 
             // Read response headers
-            if (!RecvUntil(hSocket, headerData, "\r\n\r\n")) {
-                closesocket(hSocket);
+            if (!conn.RecvUntil(headerData, "\r\n\r\n")) {
                 strError = "Failed to read HTTP headers from " + currentHost;
                 return false;
             }
@@ -164,8 +272,6 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
             // Handle HTTP redirects
             if (status_code == 301 || status_code == 302 ||
                 status_code == 307 || status_code == 308) {
-                closesocket(hSocket);
-                hSocket = INVALID_SOCKET;
 
                 if (++redirectCount > MAX_REDIRECTS) {
                     strError = "Too many redirects for " + urlPath;
@@ -193,28 +299,14 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
                     location = headerData.substr(valStart);
                 boost::trim(location);
 
-                // Reject HTTPS redirects (no TLS support)
-                if (location.compare(0, 8, "https://") == 0) {
-                    strError = "Server redirected to HTTPS (not supported). "
-                              "Configure bootstrap server for plain HTTP.";
-                    return false;
-                }
-
-                // Parse redirect URL
-                if (location.compare(0, 7, "http://") == 0) {
-                    std::string rest = location.substr(7);
-                    size_t pathStart = rest.find('/');
-                    if (pathStart != std::string::npos) {
-                        currentHost = rest.substr(0, pathStart);
-                        currentPath = rest.substr(pathStart);
-                    } else {
-                        currentHost = rest;
-                        currentPath = "/";
+                // Parse redirect URL — supports http://, https://, and relative paths
+                if (location.compare(0, 7, "http://") == 0 ||
+                    location.compare(0, 8, "https://") == 0) {
+                    if (!ParseAbsoluteUrl(location, useSSL, currentHost,
+                                          currentPort, currentPath)) {
+                        strError = "Unsupported redirect location: " + location;
+                        return false;
                     }
-                    // Strip port from host if present
-                    size_t colonPos = currentHost.find(':');
-                    if (colonPos != std::string::npos)
-                        currentHost = currentHost.substr(0, colonPos);
                 } else if (!location.empty() && location[0] == '/') {
                     currentPath = location;
                 } else {
@@ -222,13 +314,13 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
                     return false;
                 }
 
-                printf("Bootstrap: redirect %d -> %s%s\n",
-                       status_code, currentHost.c_str(), currentPath.c_str());
+                printf("Bootstrap: redirect %d -> %s%s%s (port %d)\n",
+                       status_code, useSSL ? "https://" : "http://",
+                       currentHost.c_str(), currentPath.c_str(), currentPort);
                 continue;
             }
 
             if (status_code != 200) {
-                closesocket(hSocket);
                 strError = "HTTP error " + std::to_string(status_code) + " for " + currentPath;
                 return false;
             }
@@ -252,7 +344,6 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
         // Open output file
         FILE* file = fopen(destPath.string().c_str(), "wb");
         if (!file) {
-            closesocket(hSocket);
             strError = "Cannot create file: " + destPath.string();
             return false;
         }
@@ -263,10 +354,9 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
         char chunk[65536];
 
         while (true) {
-            int n = recv(hSocket, chunk, sizeof(chunk), 0);
+            int n = conn.Recv(chunk, sizeof(chunk));
             if (n < 0) {
                 fclose(file);
-                closesocket(hSocket);
                 fs::remove(destPath);
                 strError = "Network error during download";
                 return false;
@@ -283,7 +373,7 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
         }
 
         fclose(file);
-        closesocket(hSocket);
+        // conn destructor handles socket + SSL cleanup
 
         // Verify download size if Content-Length was provided
         if (content_length > 0 && bytes_written != content_length) {
