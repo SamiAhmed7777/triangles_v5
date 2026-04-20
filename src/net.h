@@ -272,6 +272,7 @@ public:
     CBlockIndex* pindexLastGetHeadersBegin;
     uint256 hashLastGetHeadersEnd;
     int nStartingHeight;
+    int64_t nLastTipCheck;   // last time we asked this peer for chain tip
 
     // flood relay
     std::vector<CAddress> vAddrToSend;
@@ -319,6 +320,7 @@ public:
         pindexLastGetHeadersBegin = 0;
         hashLastGetHeadersEnd = 0;
         nStartingHeight = -1;
+        nLastTipCheck = 0;
         fGetAddr = false;
         nMisbehavior = 0;
         hashCheckpointKnown = 0;

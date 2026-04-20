@@ -2970,15 +2970,15 @@ bool CBlock::AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const u
     //   2. Equal trust: deterministic hash tiebreaker — lower tip hash wins.
     //      This ensures all nodes converge on the same chain even when two
     //      forks have identical cumulative difficulty (common in PoS).
-    //      Rate-limited to one equal-trust reorg per 10 minutes to prevent
-    //      oscillation from Tor-latency-induced competing announcements.
+    //      Rate-limited to one equal-trust reorg per 2 minutes — short enough
+    //      for fast convergence but long enough to prevent oscillation on Tor.
     bool fNewBest = false;
     static int64_t nLastEqualTrustReorg = 0;
     if (pindexNew->nChainTrust > nBestChainTrust)
         fNewBest = true;
     else if (pindexNew->nChainTrust == nBestChainTrust && pindexBest &&
              pindexNew->GetBlockHash() < pindexBest->GetBlockHash() &&
-             GetTime() - nLastEqualTrustReorg > 10 * 60)
+             GetTime() - nLastEqualTrustReorg > 2 * 60)
     {
         fNewBest = true;
         nLastEqualTrustReorg = GetTime();
@@ -3190,14 +3190,20 @@ bool CBlock::AcceptBlock()
     if (!AddToBlockIndex(nFile, nBlockPos, hashProofOfStake))
         return error("AcceptBlock() : AddToBlockIndex failed");
 
-    // Relay inventory, but don't relay old inventory during initial block download
+    // Push new tip block directly to all peers.  On a small Tor-only
+    // network the inv→getdata→block round-trip adds 1-2 seconds of latency
+    // per hop — enough for a competing staker to create a fork.  Pushing
+    // the full block immediately cuts propagation to a single hop.
     int nBlockEstimate = Checkpoints::GetTotalBlocksEstimate();
     if (hashBestChain == hash)
     {
         LOCK(cs_vNodes);
         for (CNode* pnode : vNodes)
             if (nBestHeight > (pnode->nStartingHeight != -1 ? pnode->nStartingHeight - 2000 : nBlockEstimate))
-                pnode->PushInventory(CInv(MSG_BLOCK, hash));
+            {
+                pnode->PushMessage("block", *this);
+                pnode->AddInventoryKnown(CInv(MSG_BLOCK, hash));
+            }
     }
 
     return true;
@@ -5307,6 +5313,20 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
         if (!vInv.empty())
             pto->PushMessage("inv", vInv);
 
+
+        //
+        // Periodic chain-tip sync: every 45 seconds, ask each peer if they
+        // have blocks we don't.  On a small Tor-only network, transient
+        // partitions can cause forks that persist silently — this ensures
+        // nodes discover the longer chain even without explicit announcement.
+        //
+        if (!IsInitialBlockDownload() && !pto->fClient && pindexBest &&
+            GetTime() - pto->nLastTipCheck > 45)
+        {
+            pto->nLastTipCheck = GetTime();
+            pto->pindexLastGetBlocksBegin = NULL;  // reset dedup to force request
+            pto->PushGetBlocks(pindexBest, uint256(0));
+        }
 
         //
         // Stall detection: if we're still catching up and no new blocks for

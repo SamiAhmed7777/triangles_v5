@@ -59,10 +59,10 @@ static const int fHaveUPnP = false;
 
 static const uint256 hashGenesisBlockOfficial("0x7e7a6e4dd5fe895106fca912dfbacaeaf2a89e76c6a588df8ff96e0e18b96021");
 static const uint256 hashGenesisBlockTestNet ("0x7e7a6e4dd5fe895106fca912dfbacaeaf2a89e76c6a588df8ff96e0e18b96021");
-inline int64_t GetMaxTimeDrift(int nHeight) { return (nHeight >= FORK_HEIGHT_V5_4) ? 3 * 60 : 10 * 60; }
+inline int64_t GetMaxTimeDrift(int nHeight) { return (nHeight >= FORK_HEIGHT_V5_4) ? 90 : 10 * 60; }
 inline int64_t PastDrift(int64_t nTime, int nHeight)   { return nTime - GetMaxTimeDrift(nHeight); }
 inline int64_t FutureDrift(int64_t nTime, int nHeight)  { return nTime + GetMaxTimeDrift(nHeight); }
-// Height-less overloads always use post-V5.4 rules (3-min drift).
+// Height-less overloads always use post-V5.4 rules (90-second drift).
 // All nodes are well past FORK_HEIGHT_V5_4; using the global nBestHeight
 // here previously caused nodes at different heights to disagree on block
 // validity during the fork transition — a consensus-splitting bug.
