@@ -97,6 +97,9 @@ Value getpeerinfo(const Array& params, bool fHelp)
         obj.push_back(Pair("inbound", stats.fInbound));
         obj.push_back(Pair("startingheight", stats.nStartingHeight));
         obj.push_back(Pair("banscore", stats.nMisbehavior));
+        obj.push_back(Pair("pingtime", stats.nPingUsecTime > 0 ? (double)stats.nPingUsecTime / 1000000.0 : -1.0));
+        obj.push_back(Pair("blocksdelivered", stats.nBlocksDelivered));
+        obj.push_back(Pair("avglatency", stats.nAvgBlockLatencyUs > 0 ? (double)stats.nAvgBlockLatencyUs / 1000.0 : -1.0));
 
         ret.push_back(obj);
     }
@@ -263,4 +266,86 @@ Value getseedlist(const Array& params, bool fHelp)
     }
 
     return ret;
+}
+
+Value getnetworkstability(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error(
+            "getnetworkstability\n"
+            "Returns detailed network stability metrics including peer quality,\n"
+            "connection health, and isolation risk assessment.");
+
+    int nOutbound = 0, nInbound = 0, nTotal = 0;
+    int64_t nBestPing = INT64_MAX, nWorstPing = 0, nTotalPing = 0;
+    int nPingCount = 0;
+    int nTotalBlocksDelivered = 0;
+    int64_t nOldestConnection = 0;
+    int64_t nNewestConnection = INT64_MAX;
+
+    {
+        LOCK(cs_vNodes);
+        nTotal = vNodes.size();
+        for (CNode* pnode : vNodes) {
+            if (pnode->fInbound)
+                nInbound++;
+            else
+                nOutbound++;
+
+            if (pnode->nPingUsecTime > 0) {
+                nTotalPing += pnode->nPingUsecTime;
+                nPingCount++;
+                if (pnode->nPingUsecTime < nBestPing)
+                    nBestPing = pnode->nPingUsecTime;
+                if (pnode->nPingUsecTime > nWorstPing)
+                    nWorstPing = pnode->nPingUsecTime;
+            }
+
+            nTotalBlocksDelivered += pnode->nBlocksDelivered;
+
+            int64_t uptime = GetTime() - pnode->nTimeConnected;
+            if (uptime > nOldestConnection)
+                nOldestConnection = uptime;
+            if (uptime < nNewestConnection)
+                nNewestConnection = uptime;
+        }
+    }
+
+    // Determine isolation risk
+    string strRisk;
+    if (nOutbound == 0 && nInbound == 0)
+        strRisk = "critical";
+    else if (nOutbound == 0)
+        strRisk = "high";
+    else if (nOutbound == 1)
+        strRisk = "elevated";
+    else if (nOutbound < 3)
+        strRisk = "moderate";
+    else
+        strRisk = "low";
+
+    Object obj;
+    obj.push_back(Pair("connections_total", nTotal));
+    obj.push_back(Pair("connections_outbound", nOutbound));
+    obj.push_back(Pair("connections_inbound", nInbound));
+    obj.push_back(Pair("isolation_risk", strRisk));
+    obj.push_back(Pair("blocks_delivered_total", nTotalBlocksDelivered));
+    obj.push_back(Pair("known_addresses", (int)addrman.size()));
+
+    Object pingObj;
+    pingObj.push_back(Pair("best_ms", nPingCount > 0 ? (double)nBestPing / 1000.0 : -1.0));
+    pingObj.push_back(Pair("worst_ms", nPingCount > 0 ? (double)nWorstPing / 1000.0 : -1.0));
+    pingObj.push_back(Pair("avg_ms", nPingCount > 0 ? (double)nTotalPing / nPingCount / 1000.0 : -1.0));
+    pingObj.push_back(Pair("peers_measured", nPingCount));
+    obj.push_back(Pair("ping", pingObj));
+
+    Object uptimeObj;
+    uptimeObj.push_back(Pair("newest_sec", nTotal > 0 ? (boost::int64_t)nNewestConnection : 0));
+    uptimeObj.push_back(Pair("oldest_sec", nTotal > 0 ? (boost::int64_t)nOldestConnection : 0));
+    obj.push_back(Pair("connection_uptime", uptimeObj));
+
+    obj.push_back(Pair("seconds_since_last_block", (boost::int64_t)(GetTime() - nTimeBestReceived)));
+    obj.push_back(Pair("current_height", nBestHeight));
+
+    return obj;
 }

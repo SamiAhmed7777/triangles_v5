@@ -37,7 +37,7 @@ extern "C" {
 // int tor_main(int argc, char *argv[]);
 }
 
-static const int MAX_OUTBOUND_CONNECTIONS = 16;
+static const int MAX_OUTBOUND_CONNECTIONS = 8;  // reduced from 16 for Tor-only small networks
 
 void ThreadMessageHandler2(void* parg);
 void ThreadSocketHandler2(void* parg);
@@ -690,6 +690,9 @@ void CNode::copyStats(CNodeStats &stats)
     X(fInbound);
     X(nStartingHeight);
     X(nMisbehavior);
+    X(nPingUsecTime);
+    X(nBlocksDelivered);
+    X(nAvgBlockLatencyUs);
 }
 #undef X
 
@@ -1029,10 +1032,6 @@ void ThreadSocketHandler2(void* parg)
                 if (nErr != WSAEWOULDBLOCK)
                     printf("socket error accept failed: %d\n", nErr);
             }
-            else if (nInbound >= GetArg("-maxconnections", 125) - MAX_OUTBOUND_CONNECTIONS)
-            {
-                closesocket(hSocket);
-            }
             else if (CNode::IsBanned(addr))
             {
                 printf("connection from %s dropped (banned)\n", addr.ToString().c_str());
@@ -1040,12 +1039,36 @@ void ThreadSocketHandler2(void* parg)
             }
             else
             {
-                printf("accepted connection %s\n", addr.ToString().c_str());
-                CNode* pnode = new CNode(hSocket, addr, "", true);
-                pnode->AddRef();
-                {
-                    LOCK(cs_vNodes);
-                    vNodes.push_back(pnode);
+                int nMaxInbound = GetArg("-maxconnections", 125) - MAX_OUTBOUND_CONNECTIONS;
+                bool fAccept = (nInbound < nMaxInbound);
+
+                // Reserve 2 extra inbound slots for known seed nodes
+                if (!fAccept) {
+                    bool fIsSeed = false;
+                    static const char *(*strOnionSeedCheck)[1] = fTestNet ? strTestNetOnionSeed : strMainNetOnionSeed;
+                    std::string incomingAddr = addr.ToStringIP();
+                    for (unsigned int si = 0; strOnionSeedCheck[si][0] != NULL; si++) {
+                        if (incomingAddr.find(strOnionSeedCheck[si][0]) != std::string::npos) {
+                            fIsSeed = true;
+                            break;
+                        }
+                    }
+                    if (fIsSeed && nInbound < nMaxInbound + 2) {
+                        fAccept = true;
+                        printf("accepted seed node %s (reserved slot)\n", addr.ToString().c_str());
+                    }
+                }
+
+                if (fAccept) {
+                    printf("accepted connection %s\n", addr.ToString().c_str());
+                    CNode* pnode = new CNode(hSocket, addr, "", true);
+                    pnode->AddRef();
+                    {
+                        LOCK(cs_vNodes);
+                        vNodes.push_back(pnode);
+                    }
+                } else {
+                    closesocket(hSocket);
                 }
             }
         }
@@ -1137,14 +1160,14 @@ void ThreadSocketHandler2(void* parg)
                     printf("socket no message in first 60 seconds, %d %d\n", pnode->nLastRecv != 0, pnode->nLastSend != 0);
                     pnode->fDisconnect = true;
                 }
-                else if (GetTime() - pnode->nLastSend > 90*60 && GetTime() - pnode->nLastSendEmpty > 90*60)
+                else if (GetTime() - pnode->nLastSend > 10*60 && GetTime() - pnode->nLastSendEmpty > 10*60)
                 {
-                    printf("socket not sending\n");
+                    printf("socket not sending (10min timeout)\n");
                     pnode->fDisconnect = true;
                 }
-                else if (GetTime() - pnode->nLastRecv > 90*60)
+                else if (GetTime() - pnode->nLastRecv > 10*60)
                 {
-                    printf("socket inactivity timeout\n");
+                    printf("socket inactivity timeout (10min)\n");
                     pnode->fDisconnect = true;
                 }
             }
@@ -1432,16 +1455,12 @@ void ThreadOnionSeed(void* parg)
     printf("ThreadOnionSeed: initial seeding complete\n");
 
     // Periodic re-seeding for isolated or under-connected nodes.
-    // Check every 2 minutes, re-seed when < 2 outbound peers.
-    // First re-seed after 5 min cooldown, then 15 min for subsequent.
+    // EMERGENCY MODE: When 0 outbound peers, check every 15 seconds
+    // NORMAL MODE: Check every 2 minutes, re-seed when < 2 outbound peers
     int64_t nLastReseed = GetTime();
     bool bFirstReseed = true;
     while (!fShutdown) {
-        for (int i = 0; i < 120 && !fShutdown; i++) // sleep 2 minutes
-            MilliSleep(1000);
-
-        if (fShutdown) break;
-
+        // Count outbound peers to determine check interval
         int nOutbound = 0;
         {
             LOCK(cs_vNodes);
@@ -1450,12 +1469,44 @@ void ThreadOnionSeed(void* parg)
                     nOutbound++;
         }
 
-        int64_t nCooldown = bFirstReseed ? 5 * 60 : 15 * 60;
+        // Emergency mode: 0 peers = check every 15 seconds
+        // Low mode: 1 peer = check every 30 seconds
+        // Normal: 2+ peers = check every 2 minutes
+        int nSleepSeconds = (nOutbound == 0) ? 15 : (nOutbound < 2) ? 30 : 120;
+        for (int i = 0; i < nSleepSeconds && !fShutdown; i++)
+            MilliSleep(1000);
+
+        if (fShutdown) break;
+
+        // Recount after sleep
+        nOutbound = 0;
+        {
+            LOCK(cs_vNodes);
+            for (CNode* pnode : vNodes)
+                if (!pnode->fInbound)
+                    nOutbound++;
+        }
+
+        // Emergency (0 peers): no cooldown, reseed immediately
+        // Low (1 peer): 60 second cooldown
+        // Normal (<2): 5 min first, 15 min subsequent
+        int64_t nCooldown;
+        if (nOutbound == 0)
+            nCooldown = 0;  // immediate
+        else if (nOutbound < 2)
+            nCooldown = bFirstReseed ? 60 : 5 * 60;
+        else
+            nCooldown = bFirstReseed ? 5 * 60 : 15 * 60;
+
         if (nOutbound < 2 && GetTime() - nLastReseed > nCooldown) {
-            printf("ThreadOnionSeed: low outbound peers (%d), re-seeding...\n", nOutbound);
+            if (nOutbound == 0)
+                printf("ThreadOnionSeed: EMERGENCY - 0 outbound peers, re-seeding immediately!\n");
+            else
+                printf("ThreadOnionSeed: low outbound peers (%d), re-seeding...\n", nOutbound);
+
             ThreadHTTPSeedFetch2(NULL);
 
-            // Also re-queue hardcoded seeds for direct connection
+            // Re-queue hardcoded seeds for direct connection
             for (unsigned int seed_idx = 0; strOnionSeed[seed_idx][0] != NULL; seed_idx++) {
                 std::string oneShotAddr = std::string(strOnionSeed[seed_idx][0])
                                         + ":" + std::to_string(GetDefaultPort());
@@ -2341,8 +2392,11 @@ void StartNode(void* parg)
     RenameThread("Triangles-start");
 
     if (semOutbound == NULL) {
-        // initialize semaphore
-        int nMaxOutbound = min(MAX_OUTBOUND_CONNECTIONS, (int)GetArg("-maxconnections", 125));
+        // initialize semaphore — use -maxoutbound if specified, else default
+        int nMaxOutbound = (int)GetArg("-maxoutbound", MAX_OUTBOUND_CONNECTIONS);
+        nMaxOutbound = min(nMaxOutbound, (int)GetArg("-maxconnections", 125));
+        nMaxOutbound = max(nMaxOutbound, 1);  // at least 1 outbound
+        printf("Max outbound connections: %d\n", nMaxOutbound);
         semOutbound = new CSemaphore(nMaxOutbound);
     }
 
@@ -2412,9 +2466,13 @@ bool StopNode()
     fShutdown = true;
     nTransactionsUpdated++;
     int64_t nStart = GetTime();
-    if (semOutbound)
-        for (int i=0; i<MAX_OUTBOUND_CONNECTIONS; i++)
+    if (semOutbound) {
+        int nMaxOutbound = (int)GetArg("-maxoutbound", MAX_OUTBOUND_CONNECTIONS);
+        nMaxOutbound = min(nMaxOutbound, (int)GetArg("-maxconnections", 125));
+        nMaxOutbound = max(nMaxOutbound, 1);
+        for (int i=0; i<nMaxOutbound; i++)
             semOutbound->post();
+    }
     do
     {
         int nThreadsRunning = 0;

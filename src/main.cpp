@@ -139,7 +139,7 @@ static const unsigned int HEADER_DOWNLOAD_WINDOW = 512;  // Increased from 128 f
 static const unsigned int HEADER_DOWNLOAD_PER_PEER = 32;   // Reduced from 64 for Tor circuit stability
 static const int64_t HEADER_REQUEST_TIMEOUT_MICROS = 60 * 1000000;    // 60s for Tor latency (was 30s)
 static const int64_t HEADER_REDUNDANT_REQUEST_MICROS = 5 * 1000000;   // 5s redundant request (reduced for Tor)
-static const int64_t HEADER_SYNC_TTL_MICROS = 5 * 60 * 1000000;      // 5-minute TTL for cache entries
+static const int64_t HEADER_SYNC_TTL_MICROS = 15 * 60 * 1000000;     // 15-minute TTL for cache entries (extended for Tor latency)
 
 static void ThreadPostIbdWork(void* parg)
 {
@@ -4461,8 +4461,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
                     pfrom->PushAddress(addr);
             }
 
-            // Get recent addresses
-            if (pfrom->fOneShot || pfrom->nVersion >= CADDR_TIME_VERSION || addrman.size() < 1000)
+            // Always request addresses — critical for Tor-only small networks
             {
                 pfrom->PushMessage("getaddr");
                 pfrom->fGetAddr = true;
@@ -4473,6 +4472,11 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             {
                 addrman.Add(addrFrom, addrFrom);
                 addrman.Good(addrFrom);
+            }
+            // Also request addresses from inbound peers (small network optimization)
+            if (!pfrom->fGetAddr) {
+                pfrom->PushMessage("getaddr");
+                pfrom->fGetAddr = true;
             }
         }
 
@@ -5408,18 +5412,34 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         {
             uint64_t nonce = 0;
             vRecv >> nonce;
-            // Echo the message back with the nonce. This allows for two useful features:
-            //
-            // 1) A remote node can quickly check if the connection is operational
-            // 2) Remote nodes can measure the latency of the network thread. If this node
-            //    is overloaded it won't respond to pings quickly and the remote node can
-            //    avoid sending us more work, like chain download requests.
-            //
-            // The nonce stops the remote getting confused between different pings: without
-            // it, if the remote node sends a ping once per second and this node takes 5
-            // seconds to respond to each, the 5th ping the remote sends would appear to
-            // return very quickly.
             pfrom->PushMessage("pong", nonce);
+        }
+    }
+
+
+    else if (strCommand == "pong")
+    {
+        if (pfrom->nVersion > BIP0031_VERSION)
+        {
+            uint64_t nonce = 0;
+            vRecv >> nonce;
+            // Only accept pong if it matches our outstanding ping nonce
+            if (nonce != 0 && nonce == pfrom->nPingNonceSent) {
+                int64_t nRtt = GetTimeMicros() - pfrom->nPingUsecStart;
+                if (nRtt > 0) {
+                    pfrom->nPingUsecTime = nRtt;
+                    // Update rolling average block latency if not set
+                    if (pfrom->nAvgBlockLatencyUs == 0)
+                        pfrom->nAvgBlockLatencyUs = nRtt;
+                    else
+                        pfrom->nAvgBlockLatencyUs = (pfrom->nAvgBlockLatencyUs * 3 + nRtt) / 4;
+                }
+                pfrom->nPingNonceSent = 0;
+                pfrom->nPingUsecStart = 0;
+                pfrom->nPingRetryCount = 0;
+                if (fDebug)
+                    printf("pong from %s: %.1fms\n", pfrom->addr.ToString().c_str(), (double)nRtt / 1000.0);
+            }
         }
     }
 
@@ -5563,7 +5583,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
     // Update the last seen time for this node's address
     if (pfrom->fNetworkNode)
-        if (strCommand == "version" || strCommand == "addr" || strCommand == "inv" || strCommand == "getdata" || strCommand == "ping")
+        if (strCommand == "version" || strCommand == "addr" || strCommand == "inv" || strCommand == "getdata" || strCommand == "ping" || strCommand == "pong")
             AddressCurrentlyConnected(pfrom->addr);
 
 
@@ -5691,22 +5711,48 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
         if (pto->nVersion == 0)
             return true;
 
-        // Keep-alive ping. We send a nonce of zero because we don't use it anywhere
-        // right now.
-        if (pto->nLastSend && GetTime() - pto->nLastSend > 30 * 60 && pto->ssSend.empty()) {
-            uint64_t nonce = 0;
-            if (pto->nVersion > BIP0031_VERSION)
-                pto->PushMessage("ping", nonce);
-            else
-                pto->PushMessage("ping");
+        // Keep-alive ping every 2 minutes (critical for Tor connections that
+        // can be silently dropped). Also measures round-trip latency.
+        {
+            bool fPingNeeded = false;
+            // Send ping every 2 minutes if no recent send activity
+            if (pto->nLastSend && GetTime() - pto->nLastSend > 120 && pto->ssSend.empty())
+                fPingNeeded = true;
+            // Also ping if we haven't sent one in 2 minutes regardless
+            if (pto->nPingUsecStart == 0 && GetTime() - pto->nTimeConnected > 120)
+                fPingNeeded = true;
+            if (pto->nPingUsecStart > 0 && GetTimeMicros() - pto->nPingUsecStart > 120 * 1000000)
+                fPingNeeded = true; // outstanding ping timed out, retry
+
+            if (fPingNeeded) {
+                // Check for dead peer: 3 consecutive unanswered pings = disconnect
+                if (pto->nPingNonceSent != 0 && pto->nPingUsecStart > 0) {
+                    pto->nPingRetryCount++;
+                    if (pto->nPingRetryCount >= 3) {
+                        printf("ping timeout: %s (no pong for %d pings, %.1fs)\n",
+                            pto->addr.ToString().c_str(), pto->nPingRetryCount,
+                            (double)(GetTimeMicros() - pto->nPingUsecStart) / 1000000.0);
+                        pto->fDisconnect = true;
+                    }
+                }
+                if (!pto->fDisconnect) {
+                    uint64_t nonce = 0;
+                    while (nonce == 0)
+                        RAND_bytes((unsigned char*)&nonce, sizeof(nonce));
+                    pto->nPingNonceSent = nonce;
+                    pto->nPingUsecStart = GetTimeMicros();
+                    pto->PushMessage("ping", nonce);
+                }
+            }
         }
 
         // Resend wallet transactions that haven't gotten in a block yet
         ResendWalletTransactions();
 
-        // Address refresh broadcast
+        // Address refresh broadcast — every hour for small Tor-only networks
+        // (was 24 hours, but small networks need faster address propagation)
         static int64_t nLastRebroadcast;
-        if (!IsInitialBlockDownload() && (GetTime() - nLastRebroadcast > 24 * 60 * 60))
+        if (!IsInitialBlockDownload() && (GetTime() - nLastRebroadcast > 60 * 60))
         {
             {
                 LOCK(cs_vNodes);
@@ -5722,6 +5768,14 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
                         CAddress addr = GetLocalAddress(&pnode->addr);
                         if (addr.IsRoutable())
                             pnode->PushAddress(addr);
+                    }
+
+                    // Periodically re-request addresses (every hour)
+                    // Helps small networks discover all peers faster
+                    if (!pnode->fGetAddr && pnode->fSuccessfullyConnected)
+                    {
+                        pnode->PushMessage("getaddr");
+                        pnode->fGetAddr = true;
                     }
                 }
             }

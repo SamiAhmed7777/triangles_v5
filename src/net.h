@@ -146,6 +146,9 @@ public:
     bool fInbound;
     int nStartingHeight;
     int nMisbehavior;
+    int64_t nPingUsecTime;
+    int nBlocksDelivered;
+    int64_t nAvgBlockLatencyUs;
 };
 
 
@@ -279,6 +282,12 @@ public:
     int nBestKnownHeight;        // highest block height known to this peer (updated from inv/block msgs)
     int nIncompatibleGetblocks;  // count of getblocks with no common blocks (fork detection)
 
+    // BIP 31 ping/pong latency tracking
+    uint64_t nPingNonceSent;     // nonce of last ping sent (0 = no outstanding ping)
+    int64_t nPingUsecStart;      // microsecond timestamp when last ping was sent
+    int64_t nPingUsecTime;       // last measured round-trip time (microseconds), 0 = unknown
+    int nPingRetryCount;         // consecutive pings without pong response
+
     // flood relay
     std::vector<CAddress> vAddrToSend;
     mruset<CAddress> setAddrKnown;
@@ -331,6 +340,10 @@ public:
         nBlocksDelivered = 0;
         nBestKnownHeight = -1;
         nIncompatibleGetblocks = 0;
+        nPingNonceSent = 0;
+        nPingUsecStart = 0;
+        nPingUsecTime = 0;
+        nPingRetryCount = 0;
         fGetAddr = false;
         nMisbehavior = 0;
         hashCheckpointKnown = 0;
