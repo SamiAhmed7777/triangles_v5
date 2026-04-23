@@ -2526,6 +2526,27 @@ bool static Reorganize(CTxDB& txdb, CBlockIndex* pindexNew)
                 nDisconnectDepth, MAX_REORG_DEPTH, pfork->nHeight);
             return error("Reorganize() : reorg depth %u exceeds maximum %u", nDisconnectDepth, MAX_REORG_DEPTH);
         }
+        // Deep reorgs (>6 blocks): require 10% more cumulative trust.
+        // Shallow reorgs (1-6 blocks) converge freely so nodes don't
+        // get stuck on their own fork.  Deep reorgs need a substantial
+        // trust advantage to prevent long-range attacks.
+        if (nDisconnectDepth > 6)
+        {
+            CBigNum bnNewTrust(pindexNew->nChainTrust);
+            CBigNum bnBestTrust(pindexBest->nChainTrust);
+            if (bnNewTrust * 10 <= bnBestTrust * 11)
+            {
+                printf("REORGANIZE: REJECTED — deep reorg (%u blocks) has insufficient trust delta "
+                       "(need >10%%, have %s vs %s)\n",
+                       nDisconnectDepth,
+                       bnNewTrust.ToString().c_str(),
+                       bnBestTrust.ToString().c_str());
+                return error("Reorganize() : deep reorg %u blocks with insufficient trust delta",
+                    nDisconnectDepth);
+            }
+            printf("REORGANIZE: Deep reorg (%u blocks) accepted — trust delta sufficient\n",
+                nDisconnectDepth);
+        }
     }
 
     // List of what to disconnect
@@ -3032,12 +3053,11 @@ bool CBlock::AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const u
     // writes to the same transaction, cutting the per-block commit count in half.
     //
     // Chain selection rules:
-    //   1. Linear extension: always accept (no reorg needed).
-    //   2. Side-chain reorg: require 10% more cumulative trust than current
-    //      best chain.  This gives a strong "first-seen" advantage and
-    //      prevents endless fork-thrashing on a small network.
-    //      During IBD the delta is waived so the heaviest chain wins.
-    //   3. Equal trust: deterministic tiebreaker with timestamp preference.
+    //   1. Strictly greater trust always wins (normal case).
+    //      Deep reorgs are further gated by a 10% trust-delta check
+    //      inside Reorganize() to prevent long-range attacks while
+    //      still allowing natural short-fork convergence.
+    //   2. Equal trust: deterministic tiebreaker with timestamp preference.
     //      First prefer the block with the earlier timestamp (lower nTime),
     //      then break remaining ties by lower hash. This converges faster
     //      because the earlier block is more likely to have propagated first.
@@ -3045,33 +3065,7 @@ bool CBlock::AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const u
     bool fNewBest = false;
     static int64_t nLastEqualTrustReorg = 0;
     if (pindexNew->nChainTrust > nBestChainTrust)
-    {
-        bool fLinearExtension = (pindexNew->pprev == pindexBest);
-        if (fLinearExtension || IsInitialBlockDownload())
-        {
-            fNewBest = true;
-        }
-        else
-        {
-            // Side-chain reorg: require 10% more trust.
-            // new * 10 > best * 11  ⟺  new > best * 1.1
-            CBigNum bnNewTrust(pindexNew->nChainTrust);
-            CBigNum bnBestTrust(nBestChainTrust);
-            if (bnNewTrust * 10 > bnBestTrust * 11)
-            {
-                fNewBest = true;
-                printf("CHAIN: Side-chain reorg accepted (trust delta sufficient)\n");
-            }
-            else
-            {
-                printf("CHAIN: Side-chain at height %d REJECTED — insufficient trust delta "
-                       "(need >10%% more, have %s vs %s)\n",
-                       pindexNew->nHeight,
-                       bnNewTrust.ToString().c_str(),
-                       bnBestTrust.ToString().c_str());
-            }
-        }
-    }
+        fNewBest = true;
     else if (pindexNew->nChainTrust == nBestChainTrust && pindexBest &&
              GetTime() - nLastEqualTrustReorg > 2 * 60)
     {

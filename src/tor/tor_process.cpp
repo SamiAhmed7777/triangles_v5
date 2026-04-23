@@ -76,6 +76,7 @@ CTorProcess::CTorProcess()
     , running(false)
 #ifdef WIN32
     , hProcess(NULL)
+    , hJob(NULL)
     , processId(0)
 #else
     , processId(0)
@@ -195,6 +196,46 @@ bool CTorProcess::IsPortInUse(int port)
 #endif
 }
 
+#ifdef WIN32
+bool CTorProcess::KillOrphanedTor()
+{
+    // Walk all processes looking for tor.exe listening on our SOCKS port.
+    // We identify orphans by matching the executable name AND checking that
+    // the Tor data directory inside our wallet data dir has a matching PID lock.
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap == INVALID_HANDLE_VALUE) return false;
+
+    PROCESSENTRY32 pe;
+    pe.dwSize = sizeof(pe);
+    bool killed = false;
+
+    if (Process32First(hSnap, &pe)) {
+        do {
+            // Case-insensitive compare against "tor.exe"
+            if (_stricmp(pe.szExeFile, "tor.exe") != 0)
+                continue;
+
+            printf("Found orphaned tor.exe (PID %lu), terminating...\n", pe.th32ProcessID);
+            HANDLE h = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pe.th32ProcessID);
+            if (h) {
+                TerminateProcess(h, 0);
+                WaitForSingleObject(h, 5000);
+                CloseHandle(h);
+                killed = true;
+            }
+        } while (Process32Next(hSnap, &pe));
+    }
+
+    CloseHandle(hSnap);
+
+    if (killed) {
+        // Give the OS a moment to release the port
+        MilliSleep(1000);
+    }
+    return killed;
+}
+#endif
+
 bool CTorProcess::WriteTorrc()
 {
     fs::path dataPath(torDataDir);
@@ -268,10 +309,44 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
 
     // Check if something is already listening on our SOCKS port
     if (IsPortInUse(socksPort)) {
-        printf("Tor SOCKS port %d already in use - assuming Tor is running\n", socksPort);
-        lastError = strprintf("SOCKS port %d is already in use; assuming an existing Tor instance is serving it.", socksPort);
-        running = true;
-        return true;
+#ifdef WIN32
+        // An orphaned tor.exe from a previous wallet session is likely still
+        // running.  Kill it so we can start a fresh one under our Job Object.
+        printf("Tor SOCKS port %d already in use - killing orphaned tor.exe\n", socksPort);
+        KillOrphanedTor();
+        // If the port is STILL in use after killing all tor.exe, something
+        // else owns it.  Fall through and let the new Tor fail gracefully
+        // rather than silently adopting an unknown process.
+        if (IsPortInUse(socksPort)) {
+            printf("WARNING: Port %d still in use after killing tor.exe - another process owns it\n", socksPort);
+        }
+#else
+        // On Linux the child is reaped via waitpid, so orphans are less common.
+        // If the port is busy, assume a system Tor or leftover process.
+        printf("Tor SOCKS port %d already in use - killing orphaned tor\n", socksPort);
+        // Try to find and kill by PID file
+        fs::path pidFile = fs::path(torDataDir) / "state" / "pid";
+        if (fs::exists(pidFile)) {
+            std::ifstream f(pidFile.string().c_str());
+            pid_t oldPid = 0;
+            if (f >> oldPid && oldPid > 0) {
+                printf("Found stale Tor PID %d, sending SIGTERM...\n", oldPid);
+                kill(oldPid, SIGTERM);
+                for (int i = 0; i < 30; i++) {
+                    MilliSleep(100);
+                    if (kill(oldPid, 0) != 0) break;
+                }
+                if (kill(oldPid, 0) == 0) {
+                    printf("Tor PID %d still alive, sending SIGKILL...\n", oldPid);
+                    kill(oldPid, SIGKILL);
+                    MilliSleep(500);
+                }
+            }
+        }
+        if (IsPortInUse(socksPort)) {
+            printf("WARNING: Port %d still in use after cleanup - another process owns it\n", socksPort);
+        }
+#endif
     }
 
     // Find Tor binary
@@ -323,6 +398,21 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
     hProcess = pi.hProcess;
     processId = pi.dwProcessId;
     CloseHandle(pi.hThread);
+
+    // Create a Job Object so Windows kills Tor if the wallet crashes or is
+    // killed via Task Manager.  JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE means
+    // all processes in the job die when the last handle to the job closes
+    // (i.e. when our process exits for any reason).
+    hJob = CreateJobObject(NULL, NULL);
+    if (hJob) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobInfo = {};
+        jobInfo.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(hJob, JobObjectExtendedLimitInformation,
+                                &jobInfo, sizeof(jobInfo));
+        if (!AssignProcessToJobObject(hJob, hProcess)) {
+            printf("WARNING: Could not assign Tor to Job Object (error %lu)\n", GetLastError());
+        }
+    }
 
     printf("Tor process started (PID %lu)\n", processId);
 #else
@@ -406,6 +496,10 @@ void CTorProcess::Stop()
         WaitForSingleObject(hProcess, 5000);
         CloseHandle(hProcess);
         hProcess = NULL;
+    }
+    if (hJob != NULL) {
+        CloseHandle(hJob);
+        hJob = NULL;
     }
 #else
     if (processId > 0) {

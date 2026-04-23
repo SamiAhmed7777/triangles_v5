@@ -27,7 +27,11 @@ private:
 
 #ifdef WIN32
     HANDLE hProcess;
+    HANDLE hJob;       // Job Object: kills Tor if wallet crashes/exits
     DWORD processId;
+
+    // Find and kill an orphaned Tor process from a previous wallet session
+    bool KillOrphanedTor();
 #else
     pid_t processId;
 #endif
