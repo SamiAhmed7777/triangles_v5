@@ -87,6 +87,19 @@ set<pair<COutPoint, unsigned int> > setStakeSeenOrphan;
 map<uint256, CTransaction> mapOrphanTransactions;
 map<uint256, set<uint256> > mapOrphanTransactionsByPrev;
 
+// Compact block relay: partial blocks awaiting missing transactions
+struct CPartialBlock
+{
+    CCompactBlock cmpctblock;
+    std::vector<CTransaction> vTxFilled;    // filled transactions (indexed by position)
+    std::set<uint16_t> setMissing;          // indices still needed
+    int64_t nReceiveTime;
+    CNode* pfrom;
+};
+static std::map<uint256, CPartialBlock> mapPartialBlocks;
+static const unsigned int MAX_PARTIAL_BLOCKS = 5;
+static const int64_t PARTIAL_BLOCK_TTL = 30; // seconds
+
 // Constant stuff for coinbase transactions we create:
 CScript COINBASE_FLAGS;
 
@@ -112,6 +125,7 @@ struct CHeaderSyncNode
     uint256 nChainTrust;
     bool fRequested;
     int64_t nLastRequestTime;
+    int64_t nFirstRequestTime;  // when this block was first requested (for latency tracking)
     int64_t nInsertTime;
 };
 
@@ -124,7 +138,7 @@ static const unsigned int MAX_HEADER_SYNC_CACHE = 15000;
 static const unsigned int HEADER_DOWNLOAD_WINDOW = 512;  // Increased from 128 for parallel downloads
 static const unsigned int HEADER_DOWNLOAD_PER_PEER = 32;   // Reduced from 64 for Tor circuit stability
 static const int64_t HEADER_REQUEST_TIMEOUT_MICROS = 60 * 1000000;    // 60s for Tor latency (was 30s)
-static const int64_t HEADER_REDUNDANT_REQUEST_MICROS = 20 * 1000000;  // 20s redundant request (was 10s)
+static const int64_t HEADER_REDUNDANT_REQUEST_MICROS = 5 * 1000000;   // 5s redundant request (reduced for Tor)
 static const int64_t HEADER_SYNC_TTL_MICROS = 5 * 60 * 1000000;      // 5-minute TTL for cache entries
 
 static void ThreadPostIbdWork(void* parg)
@@ -322,6 +336,7 @@ static bool AddHeaderSyncNode(const CBlock& header, const uint256& hashHeader)
     node.nChainTrust = nPrevChainTrust + GetHeaderSyncTrust(header.nBits);
     node.fRequested = false;
     node.nLastRequestTime = 0;
+    node.nFirstRequestTime = 0;
     node.nInsertTime = GetTime() * 1000000;
 
     mapHeaderSync.insert(std::make_pair(hashHeader, node));
@@ -426,6 +441,15 @@ static unsigned int QueueHeaderSyncBlocks(CNode* pfrom, unsigned int nWindow)
     return nQueued;
 }
 
+// Returns the first request time (microseconds) for a block in the header sync cache, or 0
+static int64_t GetHeaderSyncRequestTime(const uint256& hashBlock)
+{
+    std::map<uint256, CHeaderSyncNode>::const_iterator mi = mapHeaderSync.find(hashBlock);
+    if (mi == mapHeaderSync.end())
+        return 0;
+    return mi->second.nFirstRequestTime;
+}
+
 static void MarkHeaderSyncBlockAccepted(const uint256& hashBlock)
 {
     std::map<uint256, CHeaderSyncNode>::iterator mi = mapHeaderSync.find(hashBlock);
@@ -495,6 +519,26 @@ static unsigned int QueueHeaderSyncBlocksParallel(unsigned int nWindow)
             vWeightedPeers.push_back(vEligiblePeers[i]);
     }
 
+    // Adaptive timeout: use average peer latency to set timeouts.
+    // If peers average 2s, timeout at 10s. If peers average 15s, timeout at 45s.
+    // Clamp between 10s and 60s. Default to 60s when no latency data.
+    int64_t nAdaptiveTimeout = HEADER_REQUEST_TIMEOUT_MICROS;
+    {
+        int64_t nTotalLatency = 0;
+        int nPeersWithLatency = 0;
+        for (const CNode* pnode : vEligiblePeers) {
+            if (pnode->nAvgBlockLatencyUs > 0) {
+                nTotalLatency += pnode->nAvgBlockLatencyUs;
+                ++nPeersWithLatency;
+            }
+        }
+        if (nPeersWithLatency > 0) {
+            int64_t nAvgLatency = nTotalLatency / nPeersWithLatency;
+            nAdaptiveTimeout = std::max((int64_t)(10 * 1000000),
+                               std::min((int64_t)(60 * 1000000), nAvgLatency * 5));
+        }
+    }
+
     // Distribute blocks across peers using speed-weighted assignment
     for (std::vector<uint256>::const_iterator it = vPath.begin(); it != vPath.end(); ++it)
     {
@@ -505,16 +549,16 @@ static unsigned int QueueHeaderSyncBlocksParallel(unsigned int nWindow)
         if (mi == mapHeaderSync.end())
             continue;
 
-        // Check if already requested recently
+        // Check if already requested recently (using adaptive timeout)
         bool fNeedsRequest = false;
         if (!mi->second.fRequested)
         {
             // Never requested - request now
             fNeedsRequest = true;
         }
-        else if (nNow - mi->second.nLastRequestTime >= HEADER_REQUEST_TIMEOUT_MICROS)
+        else if (nNow - mi->second.nLastRequestTime >= nAdaptiveTimeout)
         {
-            // Timeout expired - retry
+            // Adaptive timeout expired - retry
             fNeedsRequest = true;
         }
         else if (nNow - mi->second.nLastRequestTime >= HEADER_REDUNDANT_REQUEST_MICROS)
@@ -531,9 +575,22 @@ static unsigned int QueueHeaderSyncBlocksParallel(unsigned int nWindow)
         CNode* pnode = vWeightedPeers[nPeerIndex % vWeightedPeers.size()];
         pnode->AskFor(CInv(MSG_BLOCK, *it));
 
+        // During IBD with 2+ peers: also request from a second peer immediately.
+        // Doubles bandwidth but halves worst-case latency when one peer is slow.
+        // The AlreadyHave() check in getdata construction automatically skips
+        // the duplicate once the first response arrives.
+        if (IsInitialBlockDownload() && vWeightedPeers.size() >= 2 && !mi->second.fRequested)
+        {
+            CNode* pnode2 = vWeightedPeers[(nPeerIndex + 1) % vWeightedPeers.size()];
+            if (pnode2 != pnode)
+                pnode2->AskFor(CInv(MSG_BLOCK, *it));
+        }
+
         // Update tracking (only on first request, not redundant)
         if (!mi->second.fRequested || nNow - mi->second.nLastRequestTime >= HEADER_REQUEST_TIMEOUT_MICROS)
         {
+            if (!mi->second.fRequested)
+                mi->second.nFirstRequestTime = nNow;
             mi->second.fRequested = true;
             mi->second.nLastRequestTime = nNow;
         }
@@ -3339,17 +3396,52 @@ bool CBlock::AcceptBlock()
     // Push new tip block directly to peers that are near our tip.
     // On a small Tor-only network the inv->getdata->block round-trip adds
     // 1-2 seconds of latency per hop. Pushing immediately cuts propagation
-    // to a single hop. Only push to peers within 10 blocks of our tip —
-    // pushing full blocks to syncing peers wastes bandwidth and slows IBD.
+    // to a single hop. Uses nBestKnownHeight (updated from inv/block msgs)
+    // rather than nStartingHeight (static, set at connect time only).
+    //
+    // For peers with fPreferHeaders (sendheaders negotiated), send a header
+    // announcement — saves one round-trip vs inv->getdata->block.
     if (hashBestChain == hash)
     {
         LOCK(cs_vNodes);
         for (CNode* pnode : vNodes)
-            if (pnode->nStartingHeight >= nBestHeight - 10)
+        {
+            if (!pnode->fSuccessfullyConnected)
+                continue;
+
+            bool fNearTip = (pnode->nBestKnownHeight >= nBestHeight - 10) ||
+                            (pnode->nBlocksDelivered > 0);
+            if (fNearTip && pnode->fSendCmpct)
             {
+                // Compact block push: header + prefilled coinbase/coinstake +
+                // short IDs for remaining txs.  For typical PoS blocks (0-2 txs)
+                // this is the complete block — no follow-up needed.
+                CCompactBlock cmpctblk(*this);
+                pnode->PushMessage("cmpctblock", cmpctblk);
+                pnode->AddInventoryKnown(CInv(MSG_BLOCK, hash));
+            }
+            else if (fNearTip)
+            {
+                // Direct full block push to near-tip peers
                 pnode->PushMessage("block", *this);
                 pnode->AddInventoryKnown(CInv(MSG_BLOCK, hash));
             }
+            else if (pnode->fPreferHeaders)
+            {
+                // Header announcement for peers that requested sendheaders.
+                // Construct a header-only CBlock (no transactions/signature).
+                CBlock hdr;
+                hdr.nVersion = nVersion;
+                hdr.hashPrevBlock = hashPrevBlock;
+                hdr.hashMerkleRoot = hashMerkleRoot;
+                hdr.nTime = nTime;
+                hdr.nBits = nBits;
+                hdr.nNonce = nNonce;
+                std::vector<CBlock> vHeaders(1, hdr);
+                pnode->PushMessage("headers", vHeaders);
+                pnode->AddInventoryKnown(CInv(MSG_BLOCK, hash));
+            }
+        }
     }
 
     return true;
@@ -4426,6 +4518,10 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
         pfrom->fSuccessfullyConnected = true;
 
+        // Request header-based block announcements and compact block relay
+        pfrom->PushMessage("sendheaders");
+        pfrom->PushMessage("sendcmpct");
+
         // If this is an onion peer and we have a pending resolve, request their wallet address
         {
             std::string peerAddr = pfrom->addr.ToStringIP();
@@ -4455,6 +4551,22 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
     else if (strCommand == "verack")
     {
         pfrom->SetRecvVersion(min(pfrom->nVersion, PROTOCOL_VERSION));
+    }
+
+
+    else if (strCommand == "sendheaders")
+    {
+        // Peer prefers block announcements via headers instead of inv.
+        // When we have a new block, we'll send a "headers" message rather
+        // than waiting for the inv->getdata round-trip, saving ~2-4s on Tor.
+        pfrom->fPreferHeaders = true;
+    }
+
+
+    else if (strCommand == "sendcmpct")
+    {
+        // Peer supports compact block relay
+        pfrom->fSendCmpct = true;
     }
 
 
@@ -4568,6 +4680,8 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
                         int h = mi->second->nHeight;
                         if (nFirstInvHeight == -1) nFirstInvHeight = h;
                         nLastInvHeight = h;
+                        if (h > pfrom->nBestKnownHeight)
+                            pfrom->nBestKnownHeight = h;
                         if (h > nBestHeight) nAboveBest++;
                     }
                 } else {
@@ -4951,8 +5065,24 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         CInv inv(MSG_BLOCK, hashBlock);
         pfrom->AddInventoryKnown(inv);
 
-        // Track block delivery for peer latency scoring
+        // Track block delivery and measure latency for adaptive timeouts
         pfrom->nBlocksDelivered++;
+        if (nBestHeight > pfrom->nBestKnownHeight)
+            pfrom->nBestKnownHeight = nBestHeight;
+
+        // Update rolling average latency (exponential moving average, 7/8 old + 1/8 new)
+        {
+            int64_t nRequestTime = GetHeaderSyncRequestTime(hashBlock);
+            if (nRequestTime > 0) {
+                int64_t nLatency = GetTime() * 1000000 - nRequestTime;
+                if (nLatency > 0) {
+                    if (pfrom->nAvgBlockLatencyUs == 0)
+                        pfrom->nAvgBlockLatencyUs = nLatency;
+                    else
+                        pfrom->nAvgBlockLatencyUs = (pfrom->nAvgBlockLatencyUs * 7 + nLatency) / 8;
+                }
+            }
+        }
 
         if (ProcessBlock(pfrom, &block))
         {
@@ -4960,8 +5090,11 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
             if (IsInitialBlockDownload())
             {
+                // Keep download window full after every accepted block
+                QueueHeaderSyncBlocksParallel(HEADER_DOWNLOAD_WINDOW);
+
                 static int nBlocksSinceRequest = 0;
-                if (++nBlocksSinceRequest >= 5000)
+                if (++nBlocksSinceRequest >= 500)
                 {
                     nBlocksSinceRequest = 0;
                     // Pipeline refill: request from ALL connected full-node peers,
@@ -4999,6 +5132,198 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
         if (fSecMsgEnabled && !IsInitialBlockDownload())
             SecureMsgScanBlock(block);
+    }
+
+
+    else if (strCommand == "cmpctblock")
+    {
+        CCompactBlock cmpctblock;
+        vRecv >> cmpctblock;
+
+        uint256 hashBlock = cmpctblock.GetBlockHash();
+        CInv inv(MSG_BLOCK, hashBlock);
+        pfrom->AddInventoryKnown(inv);
+
+        // Skip if we already have this block
+        if (mapBlockIndex.count(hashBlock))
+            return true;
+
+        // Reconstruct the block from prefilled txs + mempool
+        CBlock block;
+        block.nVersion = cmpctblock.nVersion;
+        block.hashPrevBlock = cmpctblock.hashPrevBlock;
+        block.hashMerkleRoot = cmpctblock.hashMerkleRoot;
+        block.nTime = cmpctblock.nTime;
+        block.nBits = cmpctblock.nBits;
+        block.nNonce = cmpctblock.nNonce;
+        block.vchBlockSig = cmpctblock.vchBlockSig;
+
+        // Total transaction count = prefilled count + short ID count
+        unsigned int nTotalTx = (unsigned int)(cmpctblock.vPrefilledTxn.size() + cmpctblock.vShortTxIds.size());
+        block.vtx.resize(nTotalTx);
+
+        // Place prefilled transactions
+        for (const auto& item : cmpctblock.vPrefilledTxn)
+        {
+            if (item.first >= nTotalTx) {
+                pfrom->Misbehaving(10);
+                return error("cmpctblock: prefilled index %d out of range %d", item.first, nTotalTx);
+            }
+            block.vtx[item.first] = item.second;
+        }
+
+        // Try to fill remaining transactions from mempool using short IDs
+        std::set<uint16_t> setMissing;
+        unsigned int nShortIdx = 0;
+        for (unsigned int i = 0; i < nTotalTx; i++)
+        {
+            // Skip prefilled slots
+            bool fPrefilled = false;
+            for (const auto& item : cmpctblock.vPrefilledTxn) {
+                if (item.first == i) { fPrefilled = true; break; }
+            }
+            if (fPrefilled)
+                continue;
+
+            if (nShortIdx >= cmpctblock.vShortTxIds.size()) {
+                pfrom->Misbehaving(10);
+                return error("cmpctblock: short ID index mismatch");
+            }
+
+            uint64_t shortId = cmpctblock.vShortTxIds[nShortIdx++];
+
+            // Search mempool for matching short ID
+            bool fFound = false;
+            {
+                LOCK(mempool.cs);
+                for (const auto& entry : mempool.mapTx)
+                {
+                    if (GetShortTxId(entry.first, cmpctblock.nShortIdNonce) == shortId)
+                    {
+                        block.vtx[i] = entry.second;
+                        fFound = true;
+                        break;
+                    }
+                }
+            }
+            if (!fFound)
+                setMissing.insert(i);
+        }
+
+        if (setMissing.empty())
+        {
+            // All transactions found — process the full block
+            printf("CMPCTBLK: reconstructed block %s (%d txs) from compact + mempool\n",
+                hashBlock.ToString().substr(0,20).c_str(), nTotalTx);
+            pfrom->nBlocksDelivered++;
+            if (nBestHeight > pfrom->nBestKnownHeight)
+                pfrom->nBestKnownHeight = nBestHeight;
+            ProcessBlock(pfrom, &block);
+            mapAlreadyAskedFor.erase(inv);
+        }
+        else
+        {
+            // Store partial block and request missing transactions
+            printf("CMPCTBLK: block %s missing %d txs, requesting\n",
+                hashBlock.ToString().substr(0,20).c_str(), (int)setMissing.size());
+
+            // Evict oldest partial blocks if at limit
+            while (mapPartialBlocks.size() >= MAX_PARTIAL_BLOCKS)
+            {
+                auto oldest = mapPartialBlocks.begin();
+                for (auto it = mapPartialBlocks.begin(); it != mapPartialBlocks.end(); ++it)
+                    if (it->second.nReceiveTime < oldest->second.nReceiveTime)
+                        oldest = it;
+                mapPartialBlocks.erase(oldest);
+            }
+
+            CPartialBlock partial;
+            partial.cmpctblock = cmpctblock;
+            partial.vTxFilled = block.vtx;
+            partial.setMissing = setMissing;
+            partial.nReceiveTime = GetTime();
+            partial.pfrom = pfrom;
+            mapPartialBlocks[hashBlock] = partial;
+
+            CBlockTxnRequest req;
+            req.blockhash = hashBlock;
+            req.vIndex.assign(setMissing.begin(), setMissing.end());
+            pfrom->PushMessage("getblocktxn", req);
+        }
+    }
+
+
+    else if (strCommand == "getblocktxn")
+    {
+        CBlockTxnRequest req;
+        vRecv >> req;
+
+        // Look up the block and send requested transactions
+        map<uint256, CBlockIndex*>::iterator mi = mapBlockIndex.find(req.blockhash);
+        if (mi != mapBlockIndex.end())
+        {
+            CBlock block;
+            if (block.ReadFromDisk(mi->second))
+            {
+                CBlockTxnResponse resp;
+                resp.blockhash = req.blockhash;
+                for (uint16_t idx : req.vIndex)
+                {
+                    if (idx < block.vtx.size())
+                        resp.vTxn.push_back(block.vtx[idx]);
+                }
+                pfrom->PushMessage("blocktxn", resp);
+            }
+        }
+    }
+
+
+    else if (strCommand == "blocktxn")
+    {
+        CBlockTxnResponse resp;
+        vRecv >> resp;
+
+        // Find the partial block awaiting these transactions
+        auto mi = mapPartialBlocks.find(resp.blockhash);
+        if (mi == mapPartialBlocks.end())
+            return true;  // no longer need it
+
+        CPartialBlock& partial = mi->second;
+        unsigned int nFilled = 0;
+        auto itTxn = resp.vTxn.begin();
+        for (uint16_t idx : partial.setMissing)
+        {
+            if (itTxn == resp.vTxn.end())
+                break;
+            if (idx < partial.vTxFilled.size())
+            {
+                partial.vTxFilled[idx] = *itTxn;
+                nFilled++;
+            }
+            ++itTxn;
+        }
+        partial.setMissing.clear();  // all filled now
+
+        // Reconstruct and process the complete block
+        CBlock block;
+        block.nVersion = partial.cmpctblock.nVersion;
+        block.hashPrevBlock = partial.cmpctblock.hashPrevBlock;
+        block.hashMerkleRoot = partial.cmpctblock.hashMerkleRoot;
+        block.nTime = partial.cmpctblock.nTime;
+        block.nBits = partial.cmpctblock.nBits;
+        block.nNonce = partial.cmpctblock.nNonce;
+        block.vchBlockSig = partial.cmpctblock.vchBlockSig;
+        block.vtx = partial.vTxFilled;
+
+        printf("CMPCTBLK: completed block %s with %d missing txs from blocktxn\n",
+            resp.blockhash.ToString().substr(0,20).c_str(), nFilled);
+
+        pfrom->nBlocksDelivered++;
+        if (nBestHeight > pfrom->nBestKnownHeight)
+            pfrom->nBestKnownHeight = nBestHeight;
+        ProcessBlock(pfrom, &block);
+        mapAlreadyAskedFor.erase(CInv(MSG_BLOCK, resp.blockhash));
+        mapPartialBlocks.erase(mi);
     }
 
 
@@ -5557,7 +5882,14 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
             static int64_t nLastBlockReceived = 0;
             static int nLastHeight = 0;
             static int64_t nLastStallLog = 0;
-            int nStallTimeout = IsInitialBlockDownload() ? 10 : 30;  // Higher for Tor latency
+            // Adaptive stall timeout: use peer's latency if known
+            int nStallTimeout;
+            if (pto->nAvgBlockLatencyUs > 0) {
+                // 5x average latency, clamped to 5-60 seconds
+                nStallTimeout = std::max(5, std::min(60, (int)(pto->nAvgBlockLatencyUs * 5 / 1000000)));
+            } else {
+                nStallTimeout = IsInitialBlockDownload() ? 10 : 30;
+            }
             if (nBestHeight > nLastHeight) {
                 nLastHeight = nBestHeight;
                 nLastBlockReceived = GetTime();

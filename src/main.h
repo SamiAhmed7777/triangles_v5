@@ -1691,6 +1691,120 @@ extern CTxMemPool mempool;
 extern CScriptVerifyCache scriptVerifyCache;
 
 /**
+ * Compact block relay for Tor-only networks.
+ *
+ * Instead of sending a full block, send the header + short transaction IDs.
+ * The receiver reconstructs the block from its mempool.  For PoS blocks with
+ * 0-2 transactions (the common case), the coinstake is always prefilled, so
+ * the compact block IS the complete block — no extra round-trip needed.
+ */
+
+/** Short transaction ID: first 6 bytes of SipHash(txid) */
+static inline uint64_t GetShortTxId(const uint256& txhash, uint64_t nonce)
+{
+    // Simple short ID: XOR txhash prefix with nonce
+    uint64_t id = 0;
+    memcpy(&id, txhash.begin(), 6);  // first 6 bytes
+    id ^= nonce;
+    return id & 0xFFFFFFFFFFFFULL;  // mask to 48 bits
+}
+
+class CCompactBlock
+{
+public:
+    // Block header fields
+    int nVersion;
+    uint256 hashPrevBlock;
+    uint256 hashMerkleRoot;
+    unsigned int nTime;
+    unsigned int nBits;
+    unsigned int nNonce;
+    std::vector<unsigned char> vchBlockSig;
+
+    // Compact block data
+    uint64_t nShortIdNonce;                     // nonce for short ID calculation
+    std::vector<uint64_t> vShortTxIds;          // short IDs for non-prefilled txs
+    std::vector<std::pair<uint16_t, CTransaction>> vPrefilledTxn;  // index + full tx
+
+    CCompactBlock() : nVersion(0), nTime(0), nBits(0), nNonce(0), nShortIdNonce(0) {}
+
+    // Construct from a full block: prefill coinbase + coinstake, short-ID the rest
+    CCompactBlock(const CBlock& block)
+    {
+        nVersion = block.nVersion;
+        hashPrevBlock = block.hashPrevBlock;
+        hashMerkleRoot = block.hashMerkleRoot;
+        nTime = block.nTime;
+        nBits = block.nBits;
+        nNonce = block.nNonce;
+        vchBlockSig = block.vchBlockSig;
+        nShortIdNonce = GetRand(std::numeric_limits<uint64_t>::max());
+
+        for (uint16_t i = 0; i < block.vtx.size(); i++)
+        {
+            if (i <= 1) {
+                // Always prefill coinbase (idx 0) and coinstake (idx 1)
+                vPrefilledTxn.push_back(std::make_pair(i, block.vtx[i]));
+            } else {
+                vShortTxIds.push_back(GetShortTxId(block.vtx[i].GetHash(), nShortIdNonce));
+            }
+        }
+    }
+
+    IMPLEMENT_SERIALIZE
+    (
+        READWRITE(nVersion);
+        READWRITE(hashPrevBlock);
+        READWRITE(hashMerkleRoot);
+        READWRITE(nTime);
+        READWRITE(nBits);
+        READWRITE(nNonce);
+        READWRITE(vchBlockSig);
+        READWRITE(nShortIdNonce);
+        READWRITE(vShortTxIds);
+        READWRITE(vPrefilledTxn);
+    )
+
+    uint256 GetBlockHash() const
+    {
+        CBlock hdr;
+        hdr.nVersion = nVersion;
+        hdr.hashPrevBlock = hashPrevBlock;
+        hdr.hashMerkleRoot = hashMerkleRoot;
+        hdr.nTime = nTime;
+        hdr.nBits = nBits;
+        hdr.nNonce = nNonce;
+        return hdr.GetHash();
+    }
+};
+
+class CBlockTxnRequest
+{
+public:
+    uint256 blockhash;
+    std::vector<uint16_t> vIndex;  // indices of missing transactions
+
+    IMPLEMENT_SERIALIZE
+    (
+        READWRITE(blockhash);
+        READWRITE(vIndex);
+    )
+};
+
+class CBlockTxnResponse
+{
+public:
+    uint256 blockhash;
+    std::vector<CTransaction> vTxn;
+
+    IMPLEMENT_SERIALIZE
+    (
+        READWRITE(blockhash);
+        READWRITE(vTxn);
+    )
+};
+
+/**
  * Closure representing one script check for parallel verification.
  * Captures everything needed to call VerifyScript independently.
  */

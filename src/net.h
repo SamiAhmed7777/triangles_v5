@@ -253,6 +253,7 @@ public:
     bool fSuccessfullyConnected;
     bool fDisconnect;
     bool fPreferHeaders; // peer requested block announcements via headers (sendheaders)
+    bool fSendCmpct;     // peer supports compact block relay (sendcmpct)
     CSemaphoreGrant grantOutbound;
     int nRefCount;
 protected:
@@ -275,6 +276,7 @@ public:
     int64_t nLastTipCheck;   // last time we asked this peer for chain tip
     int64_t nAvgBlockLatencyUs;  // rolling average block delivery latency (microseconds)
     int nBlocksDelivered;        // count of blocks delivered by this peer
+    int nBestKnownHeight;        // highest block height known to this peer (updated from inv/block msgs)
     int nIncompatibleGetblocks;  // count of getblocks with no common blocks (fork detection)
 
     // flood relay
@@ -314,6 +316,7 @@ public:
         fSuccessfullyConnected = false;
         fDisconnect = false;
         fPreferHeaders = false;
+        fSendCmpct = false;
         nRefCount = 0;
         nSendSize = 0;
         nSendOffset = 0;
@@ -326,6 +329,7 @@ public:
         nLastTipCheck = 0;
         nAvgBlockLatencyUs = 0;
         nBlocksDelivered = 0;
+        nBestKnownHeight = -1;
         nIncompatibleGetblocks = 0;
         fGetAddr = false;
         nMisbehavior = 0;
