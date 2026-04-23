@@ -23,6 +23,8 @@ add_library(hash9_crypto STATIC
 )
 target_include_directories(hash9_crypto PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 set_target_properties(hash9_crypto PROPERTIES LINKER_LANGUAGE C)
+# Hash9 C files have colliding static symbols (IV512, DECL_STATE, etc.) — skip unity
+set_target_properties(hash9_crypto PROPERTIES UNITY_BUILD OFF)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2. JSON library (header-only nlohmann/json via json_compat.h shim)
@@ -185,6 +187,31 @@ endif()
 
 add_dependencies(triangles_common generate_build_info build_leveldb)
 
+# ── Precompiled header (heavy STL + Boost + OpenSSL includes, C++ only) ──
+target_precompile_headers(triangles_common PRIVATE
+    "$<$<COMPILE_LANGUAGE:CXX>:<string$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<vector$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<map$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<deque$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<algorithm$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<sstream$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<stdexcept$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<cstdint$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<cstring$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<memory$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<functional$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<boost/filesystem.hpp$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<boost/filesystem/fstream.hpp$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<boost/thread.hpp$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<boost/thread/mutex.hpp$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<boost/thread/condition_variable.hpp$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<boost/algorithm/string.hpp$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<openssl/sha.h$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<openssl/crypto.h$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<openssl/rand.h$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<openssl/evp.h$<ANGLE-R>>"
+)
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4. Headless daemon (trianglesd)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -196,6 +223,7 @@ if(BUILD_DAEMON)
     )
     # No QT_GUI define — daemon gets the #if !defined(QT_GUI) code paths
     target_link_libraries(trianglesd PRIVATE triangles_common)
+    target_precompile_headers(trianglesd REUSE_FROM triangles_common)
 
     if(WIN32)
         set_target_properties(trianglesd PROPERTIES SUFFIX ".exe")

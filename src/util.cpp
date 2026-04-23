@@ -111,8 +111,9 @@ public:
         CRYPTO_set_locking_callback(locking_callback);
 #endif
 
-#ifdef WIN32
+#if defined(WIN32) && OPENSSL_VERSION_NUMBER < 0x30000000L
         // Seed random number generator with screen scrape and other hardware sources
+        // (removed in OpenSSL 3.x — auto-seeded via BCryptGenRandom)
         RAND_screen();
 #endif
 

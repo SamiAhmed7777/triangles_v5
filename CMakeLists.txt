@@ -17,6 +17,24 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_C_STANDARD 11)
 
+# ── Build acceleration ──
+# ccache: auto-detect and use if available
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    message(STATUS "ccache found: ${CCACHE_PROGRAM}")
+else()
+    message(STATUS "ccache not found — install it for faster rebuilds")
+endif()
+
+# Unity (jumbo) build: batch source files to reduce header parsing overhead
+option(ENABLE_UNITY_BUILD "Enable CMake unity (jumbo) builds" OFF)
+if(ENABLE_UNITY_BUILD)
+    set(CMAKE_UNITY_BUILD ON)
+    set(CMAKE_UNITY_BUILD_BATCH_SIZE 8)
+endif()
+
 # ── Output directories ──
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -113,4 +131,7 @@ message(STATUS "  D-Bus:              ${USE_DBUS}")
 message(STATUS "  ZMQ:                ${USE_ZMQ}")
 message(STATUS "  Embedded Tor:       ${USE_TOR_EMBEDDED}")
 message(STATUS "  Static linking:     ${ENABLE_STATIC}")
+message(STATUS "  ccache:             ${CCACHE_PROGRAM}")
+message(STATUS "  Unity build:        ${ENABLE_UNITY_BUILD}")
+message(STATUS "  Precompiled header: ON")
 message(STATUS "")
