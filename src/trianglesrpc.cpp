@@ -314,6 +314,7 @@ static const CRPCCommand vRPCCommands[] =
     { "signrawtransaction",     &signrawtransaction,     false,  false },
     { "sendrawtransaction",     &sendrawtransaction,     false,  false },
     { "getcheckpoint",          &getcheckpoint,          true,   false },
+    { "gencheckpoints",         &gencheckpoints,          true,   false },
     { "getchaintips",           &getchaintips,           true,   false },
     { "invalidateblock",        &invalidateblock,        false,  false },
     { "reconsiderblock",        &reconsiderblock,        false,  false },

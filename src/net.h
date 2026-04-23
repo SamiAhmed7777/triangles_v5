@@ -275,6 +275,7 @@ public:
     int64_t nLastTipCheck;   // last time we asked this peer for chain tip
     int64_t nAvgBlockLatencyUs;  // rolling average block delivery latency (microseconds)
     int nBlocksDelivered;        // count of blocks delivered by this peer
+    int nIncompatibleGetblocks;  // count of getblocks with no common blocks (fork detection)
 
     // flood relay
     std::vector<CAddress> vAddrToSend;
@@ -325,6 +326,7 @@ public:
         nLastTipCheck = 0;
         nAvgBlockLatencyUs = 0;
         nBlocksDelivered = 0;
+        nIncompatibleGetblocks = 0;
         fGetAddr = false;
         nMisbehavior = 0;
         hashCheckpointKnown = 0;

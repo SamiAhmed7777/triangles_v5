@@ -222,6 +222,7 @@ extern json_spirit::Value getblockhash(const json_spirit::Array& params, bool fH
 extern json_spirit::Value getblock(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getblockbynumber(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getcheckpoint(const json_spirit::Array& params, bool fHelp);
+extern json_spirit::Value gencheckpoints(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getchaintips(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value invalidateblock(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value reconsiderblock(const json_spirit::Array& params, bool fHelp);

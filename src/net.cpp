@@ -47,7 +47,7 @@ void ThreadOpenAddedConnections2(void* parg);
 void ThreadMapPort2(void* parg);
 #endif
 void ThreadHTTPSeedFetch(void* parg);
-void ThreadHTTPSeedFetch2(void* parg);
+bool ThreadHTTPSeedFetch2(void* parg);
 bool OpenNetworkConnection(const CAddress& addrConnect, CSemaphoreGrant *grantOutbound = NULL, const char *strDest = NULL, bool fOneShot = false);
 
 
@@ -1381,7 +1381,7 @@ void ThreadOnionSeed(void* parg)
 
 
 
-    // Load hardcoded .onion seeds (if any)
+    // Load hardcoded .onion seeds and queue them for immediate direct connection
     static const char *(*strOnionSeed)[1] = fTestNet ? strTestNetOnionSeed : strMainNetOnionSeed;
     int found = 0;
 
@@ -1394,23 +1394,50 @@ void ThreadOnionSeed(void* parg)
         CAddress addr = CAddress(CService(parsed, GetDefaultPort()));
         addr.nTime = GetTime() - 3*nOneDay - GetRand(4*nOneDay);
         addrman.Add(addr, parsed);
+
+        // Queue for immediate direct connection (OneShot) — don't wait for
+        // addrman selection which deprioritizes stale timestamps
+        std::string oneShotAddr = std::string(strOnionSeed[seed_idx][0])
+                                + ":" + std::to_string(GetDefaultPort());
+        AddOneShot(oneShotAddr);
         found++;
     }
 
-    printf("%d addresses from hardcoded .onion seeds\n", found);
+    printf("%d addresses from hardcoded .onion seeds (queued as OneShot)\n", found);
 
-    // Also fetch dynamic seeds from HTTP seed list
+    // Wait for Tor to establish circuits before attempting HTTPS seed fetch.
+    // The hardcoded OneShot connections can race ahead meanwhile.
+    printf("ThreadOnionSeed: waiting 20s for Tor circuits before HTTPS seed fetch...\n");
+    for (int i = 0; i < 20 && !fShutdown; i++)
+        MilliSleep(1000);
+
+    // Fetch dynamic seeds with retry — up to 4 attempts with increasing backoff.
     // This is the primary discovery mechanism — seeds.cryptographic-triangles.org
-    ThreadHTTPSeedFetch2(NULL);
+    {
+        bool ok = false;
+        int delays[] = {0, 30, 60, 120};
+        for (int attempt = 0; attempt < 4 && !ok && !fShutdown; attempt++) {
+            if (attempt > 0) {
+                printf("ThreadOnionSeed: HTTPS seed fetch retry %d in %ds...\n", attempt, delays[attempt]);
+                for (int i = 0; i < delays[attempt] && !fShutdown; i++)
+                    MilliSleep(1000);
+            }
+            if (!fShutdown)
+                ok = ThreadHTTPSeedFetch2(NULL);
+        }
+        if (!ok && !fShutdown)
+            printf("ThreadOnionSeed: all HTTPS seed fetch attempts failed\n");
+    }
 
     printf("ThreadOnionSeed: initial seeding complete\n");
 
-    // Periodic re-seeding: if the node becomes isolated (0 outbound peers),
-    // re-fetch the seed list. Check every 10 minutes, re-seed at most once
-    // per 30 minutes to avoid hammering the seed server.
+    // Periodic re-seeding for isolated or under-connected nodes.
+    // Check every 2 minutes, re-seed when < 2 outbound peers.
+    // First re-seed after 5 min cooldown, then 15 min for subsequent.
     int64_t nLastReseed = GetTime();
+    bool bFirstReseed = true;
     while (!fShutdown) {
-        for (int i = 0; i < 600 && !fShutdown; i++) // sleep 10 minutes
+        for (int i = 0; i < 120 && !fShutdown; i++) // sleep 2 minutes
             MilliSleep(1000);
 
         if (fShutdown) break;
@@ -1423,10 +1450,20 @@ void ThreadOnionSeed(void* parg)
                     nOutbound++;
         }
 
-        if (nOutbound == 0 && GetTime() - nLastReseed > 30 * 60) {
-            printf("ThreadOnionSeed: no outbound peers, re-seeding...\n");
+        int64_t nCooldown = bFirstReseed ? 5 * 60 : 15 * 60;
+        if (nOutbound < 2 && GetTime() - nLastReseed > nCooldown) {
+            printf("ThreadOnionSeed: low outbound peers (%d), re-seeding...\n", nOutbound);
             ThreadHTTPSeedFetch2(NULL);
+
+            // Also re-queue hardcoded seeds for direct connection
+            for (unsigned int seed_idx = 0; strOnionSeed[seed_idx][0] != NULL; seed_idx++) {
+                std::string oneShotAddr = std::string(strOnionSeed[seed_idx][0])
+                                        + ":" + std::to_string(GetDefaultPort());
+                AddOneShot(oneShotAddr);
+            }
+
             nLastReseed = GetTime();
+            bFirstReseed = false;
         }
     }
 }
@@ -1486,7 +1523,7 @@ void ThreadDumpAddress(void* parg)
     printf("ThreadDumpAddress exited\n");
 }
 
-void ThreadHTTPSeedFetch2(void* parg)
+bool ThreadHTTPSeedFetch2(void* parg)
 {
     static const char* DEFAULT_SEED_URL_HOST = "seeds.cryptographic-triangles.org";
     static const char* DEFAULT_SEED_URL_PATH = "/seeds.txt";
@@ -1515,7 +1552,7 @@ void ThreadHTTPSeedFetch2(void* parg)
 
         if (!ConnectSocketByName(addrResolved, hSocket, connectDest.c_str(), HTTPS_PORT, nConnectTimeout)) {
             printf("HTTPS seed fetch: cannot connect to %s through Tor proxy\n", seedHost.c_str());
-            return;
+            return false;
         }
 
         // Set up TLS over the connected socket
@@ -1523,7 +1560,7 @@ void ThreadHTTPSeedFetch2(void* parg)
         if (!ctx) {
             printf("HTTPS seed fetch: SSL_CTX_new failed\n");
             closesocket(hSocket);
-            return;
+            return false;
         }
 
         // Use system default CA certificates for verification
@@ -1535,7 +1572,7 @@ void ThreadHTTPSeedFetch2(void* parg)
             printf("HTTPS seed fetch: SSL_new failed\n");
             SSL_CTX_free(ctx);
             closesocket(hSocket);
-            return;
+            return false;
         }
 
         // Set SNI hostname (required for Caddy/Let's Encrypt)
@@ -1552,7 +1589,7 @@ void ThreadHTTPSeedFetch2(void* parg)
             SSL_free(ssl);
             SSL_CTX_free(ctx);
             closesocket(hSocket);
-            return;
+            return false;
         }
 
         printf("HTTPS seed fetch: TLS connection established to %s\n", seedHost.c_str());
@@ -1575,7 +1612,7 @@ void ThreadHTTPSeedFetch2(void* parg)
                 SSL_free(ssl);
                 SSL_CTX_free(ctx);
                 closesocket(hSocket);
-                return;
+                return false;
             }
             nSent += nBytes;
         }
@@ -1600,21 +1637,21 @@ void ThreadHTTPSeedFetch2(void* parg)
 
         if (response.empty()) {
             printf("HTTPS seed fetch: empty response from %s\n", seedHost.c_str());
-            return;
+            return false;
         }
 
         // Parse HTTP response - find end of headers
         size_t headerEnd = response.find("\r\n\r\n");
         if (headerEnd == std::string::npos) {
             printf("HTTPS seed fetch: malformed response (no header terminator)\n");
-            return;
+            return false;
         }
 
         // Check status code
         std::string statusLine = response.substr(0, response.find("\r\n"));
         if (statusLine.find("200") == std::string::npos) {
             printf("HTTPS seed fetch: %s from %s\n", statusLine.c_str(), seedHost.c_str());
-            return;
+            return false;
         }
 
         std::string body = response.substr(headerEnd + 4);
@@ -1626,7 +1663,7 @@ void ThreadHTTPSeedFetch2(void* parg)
         while (std::getline(lines, line))
         {
             if (fShutdown)
-                return;
+                return false;
 
             // Trim whitespace and carriage returns
             while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
@@ -1667,17 +1704,24 @@ void ThreadHTTPSeedFetch2(void* parg)
                 CAddress addr(CService(parsed, port));
                 addr.nTime = GetTime() - 3*24*60*60; // 3 days ago
                 addrman.Add(addr, CNetAddr("https-seed", true));
+                // Queue the first 8 seeds for immediate direct connection
+                if (found < 8) {
+                    std::string oneShotAddr = addrStr + ":" + std::to_string(port);
+                    AddOneShot(oneShotAddr);
+                }
                 found++;
             }
         }
 
         printf("%d addresses found from HTTPS seed list (%s)\n", found, seedHost.c_str());
+        return found > 0;
 
     } catch (std::exception& e) {
         printf("HTTPS seed fetch failed: %s\n", e.what());
         if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
         if (ctx) SSL_CTX_free(ctx);
         if (hSocket != INVALID_SOCKET) closesocket(hSocket);
+        return false;
     }
 }
 

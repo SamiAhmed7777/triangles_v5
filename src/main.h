@@ -39,7 +39,7 @@ static const unsigned int MAX_BLOCK_SIGOPS = MAX_BLOCK_SIZE/50;
 static const unsigned int MAX_ORPHAN_TRANSACTIONS = MAX_BLOCK_SIZE/100;
 static const unsigned int MAX_ORPHAN_BLOCKS = 2000;
 static const unsigned int MAX_ORPHAN_BLOCKS_IBD = 4000;
-static const unsigned int MAX_REORG_DEPTH = 500;  // reject reorgs deeper than this (finality)
+static const unsigned int MAX_REORG_DEPTH = 100;  // reject reorgs deeper than this (finality)
 static const unsigned int MAX_INV_SZ = 50000;
 static const int64_t MIN_TX_FEE = (1 * CENT) / 100;
 static const int64_t MIN_RELAY_TX_FEE = (1 * CENT) / 100;
@@ -84,6 +84,7 @@ extern uint256 nBestChainTrust;
 extern uint256 nBestInvalidTrust;
 extern uint256 hashBestChain;
 extern CBlockIndex* pindexBest;
+extern CBlockIndex* pindexFinalized;  // auto-checkpoint: deepest finalized block
 extern unsigned int nTransactionsUpdated;
 extern uint64_t nLastBlockTx;
 extern uint64_t nLastBlockSize;
@@ -1559,6 +1560,12 @@ public:
     bool IsNull()
     {
         return vHave.empty();
+    }
+
+    // Return the first hash in the locator (peer's tip), or 0 if empty
+    uint256 GetTipHash() const
+    {
+        return vHave.empty() ? uint256(0) : vHave[0];
     }
 
     void Set(const CBlockIndex* pindex)

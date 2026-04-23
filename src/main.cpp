@@ -71,6 +71,7 @@ uint256 nBestInvalidTrust = 0;
 
 uint256 hashBestChain = 0;
 CBlockIndex* pindexBest = NULL;
+CBlockIndex* pindexFinalized = NULL;  // auto-checkpoint: deepest finalized block
 bool fAddressIndex = false;
 int64_t nTimeBestReceived = 0;
 
@@ -2506,15 +2507,25 @@ bool static Reorganize(CTxDB& txdb, CBlockIndex* pindexNew)
             return error("Reorganize() : pfork->pprev is null");
     }
 
-    // Finality: reject reorgs deeper than MAX_REORG_DEPTH blocks.
-    // This prevents long-range attacks on the PoS chain. During IBD
-    // we allow deep reorgs since we haven't settled on a tip yet.
-    unsigned int nDisconnectDepth = pindexBest->nHeight - pfork->nHeight;
-    if (!IsInitialBlockDownload() && nDisconnectDepth > MAX_REORG_DEPTH)
+    // Finality: reject reorgs that go below the auto-checkpoint or
+    // exceed MAX_REORG_DEPTH blocks.  During IBD we allow deep reorgs
+    // since we haven't settled on a tip yet.
+    if (!IsInitialBlockDownload())
     {
-        printf("REORGANIZE: REJECTED — depth %u exceeds finality limit %u (fork at %d)\n",
-            nDisconnectDepth, MAX_REORG_DEPTH, pfork->nHeight);
-        return error("Reorganize() : reorg depth %u exceeds maximum %u", nDisconnectDepth, MAX_REORG_DEPTH);
+        if (pindexFinalized && pfork->nHeight < pindexFinalized->nHeight)
+        {
+            printf("REORGANIZE: REJECTED — fork at %d is below finalized block %d\n",
+                pfork->nHeight, pindexFinalized->nHeight);
+            return error("Reorganize() : fork point %d below auto-checkpoint %d",
+                pfork->nHeight, pindexFinalized->nHeight);
+        }
+        unsigned int nDisconnectDepth = pindexBest->nHeight - pfork->nHeight;
+        if (nDisconnectDepth > MAX_REORG_DEPTH)
+        {
+            printf("REORGANIZE: REJECTED — depth %u exceeds finality limit %u (fork at %d)\n",
+                nDisconnectDepth, MAX_REORG_DEPTH, pfork->nHeight);
+            return error("Reorganize() : reorg depth %u exceeds maximum %u", nDisconnectDepth, MAX_REORG_DEPTH);
+        }
     }
 
     // List of what to disconnect
@@ -2738,6 +2749,23 @@ bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
     nBestChainTrust = pindexNew->nChainTrust;
     nTimeBestReceived = GetTime();
     nTransactionsUpdated++;
+
+    // Auto-checkpoint: finalize the block at depth MAX_REORG_DEPTH.
+    // Only set when fully synced (not IBD) so we don't lock in a
+    // potentially wrong chain during initial sync.
+    if (!IsInitialBlockDownload() && nBestHeight > (int)MAX_REORG_DEPTH)
+    {
+        CBlockIndex* pcandidate = pindexBest;
+        for (int i = 0; i < (int)MAX_REORG_DEPTH && pcandidate; i++)
+            pcandidate = pcandidate->pprev;
+        if (pcandidate && pcandidate != pindexFinalized)
+        {
+            pindexFinalized = pcandidate;
+            printf("AUTO-CHECKPOINT: block %d (%s) is now finalized\n",
+                pindexFinalized->nHeight,
+                pindexFinalized->GetBlockHash().ToString().substr(0,20).c_str());
+        }
+    }
 
     uint256 nBestBlockTrust = (pindexBest->nHeight != 0 && pindexBest->pprev) ? (pindexBest->nChainTrust - pindexBest->pprev->nChainTrust) : pindexBest->nChainTrust;
 
@@ -3004,8 +3032,12 @@ bool CBlock::AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const u
     // writes to the same transaction, cutting the per-block commit count in half.
     //
     // Chain selection rules:
-    //   1. Strictly greater trust always wins (normal case).
-    //   2. Equal trust: deterministic tiebreaker with timestamp preference.
+    //   1. Linear extension: always accept (no reorg needed).
+    //   2. Side-chain reorg: require 10% more cumulative trust than current
+    //      best chain.  This gives a strong "first-seen" advantage and
+    //      prevents endless fork-thrashing on a small network.
+    //      During IBD the delta is waived so the heaviest chain wins.
+    //   3. Equal trust: deterministic tiebreaker with timestamp preference.
     //      First prefer the block with the earlier timestamp (lower nTime),
     //      then break remaining ties by lower hash. This converges faster
     //      because the earlier block is more likely to have propagated first.
@@ -3013,7 +3045,33 @@ bool CBlock::AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const u
     bool fNewBest = false;
     static int64_t nLastEqualTrustReorg = 0;
     if (pindexNew->nChainTrust > nBestChainTrust)
-        fNewBest = true;
+    {
+        bool fLinearExtension = (pindexNew->pprev == pindexBest);
+        if (fLinearExtension || IsInitialBlockDownload())
+        {
+            fNewBest = true;
+        }
+        else
+        {
+            // Side-chain reorg: require 10% more trust.
+            // new * 10 > best * 11  ⟺  new > best * 1.1
+            CBigNum bnNewTrust(pindexNew->nChainTrust);
+            CBigNum bnBestTrust(nBestChainTrust);
+            if (bnNewTrust * 10 > bnBestTrust * 11)
+            {
+                fNewBest = true;
+                printf("CHAIN: Side-chain reorg accepted (trust delta sufficient)\n");
+            }
+            else
+            {
+                printf("CHAIN: Side-chain at height %d REJECTED — insufficient trust delta "
+                       "(need >10%% more, have %s vs %s)\n",
+                       pindexNew->nHeight,
+                       bnNewTrust.ToString().c_str(),
+                       bnBestTrust.ToString().c_str());
+            }
+        }
+    }
     else if (pindexNew->nChainTrust == nBestChainTrust && pindexBest &&
              GetTime() - nLastEqualTrustReorg > 2 * 60)
     {
@@ -4590,6 +4648,30 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
         // Find the last block the caller has in the main chain
         CBlockIndex* pindex = locator.GetBlockIndex();
+
+        // Detect incompatible fork: peer sent a locator with entries but
+        // GetBlockIndex() fell through to genesis (no locator hash matched
+        // our main chain). If the peer's tip isn't our genesis,
+        // they're on a completely different fork.
+        if (!locator.IsNull() && pindex == pindexGenesisBlock &&
+            pindexGenesisBlock && locator.GetTipHash() != pindexGenesisBlock->GetBlockHash())
+        {
+            pfrom->nIncompatibleGetblocks++;
+            if (pfrom->nIncompatibleGetblocks >= 3)
+            {
+                printf("WARNING: peer %s sent %d getblocks with no common blocks — disconnecting (incompatible fork)\n",
+                    pfrom->addr.ToString().c_str(), pfrom->nIncompatibleGetblocks);
+                pfrom->Misbehaving(100);
+                return true;
+            }
+            printf("WARNING: peer %s getblocks locator has no common blocks (%d/3 before ban)\n",
+                pfrom->addr.ToString().c_str(), pfrom->nIncompatibleGetblocks);
+        }
+        else if (pindex && pindex != pindexGenesisBlock)
+        {
+            // Peer matched a non-genesis block — they share our chain
+            pfrom->nIncompatibleGetblocks = 0;
+        }
 
         // Send the rest of the chain
         if (pindex)

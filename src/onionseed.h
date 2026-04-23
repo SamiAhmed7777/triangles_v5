@@ -5,6 +5,7 @@
 // Hardcoded onion seed nodes for initial peer discovery.
 // Also fetched dynamically via https://seeds.cryptographic-triangles.org/seeds.txt
 static const char *strMainNetOnionSeed[][1] = {
+    {"6ygpphp2qsucwvhwefv6h6ehvk6zjf7b7zdp4ggkzjjwe76cg6jwm7id.onion"},
     {"jbpfhe7zw3qm67wy3j2ayysp3mnrjobopthnko3b3sgahqtecblwqmid.onion"},
     {"uddaxjbo3lh2zskg7w6gwln4ty5cel7q4c5jbx7fdtv6zf2j47gdlyad.onion"},
     {"el5sirhhleecuctpeeprelzubpqmoqivvra3rzlwbjttinxa4fq3wnid.onion"},
