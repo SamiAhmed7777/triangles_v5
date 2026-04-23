@@ -25,6 +25,9 @@
 
 namespace fs = boost::filesystem;
 
+// Global LevelDB pointer (defined in txdb-leveldb.cpp)
+extern leveldb::DB *txdb;
+
 namespace UtxoSnapshot {
 
 // ---------------------------------------------------------------------------
@@ -124,9 +127,6 @@ bool DumpSnapshot(const fs::path& destPath,
 
     // Write UTXO section using LevelDB iterator (same pattern as SumUtxoValues)
     {
-        // Access the global LevelDB directly via a CTxDB instance
-        // We need a raw iterator, so we re-implement the iteration pattern
-        extern leveldb::DB *txdb;
 
         CDataStream ssKeyPrefix(SER_DISK, CLIENT_VERSION);
         ssKeyPrefix << std::make_pair(std::string("u"), std::make_pair(uint256(0), (unsigned int)0));
