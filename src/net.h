@@ -26,7 +26,7 @@ extern int nBestHeight;
 
 
 
-inline unsigned int ReceiveFloodSize() { return 100 * 1024 * 1024; } // 100 MB
+inline unsigned int ReceiveFloodSize() { return 50 * 1024 * 1024; }  // 50 MB (reduced for Tor-only network)
 inline unsigned int SendBufferSize() { return 32 * 1024 * 1024; }   // 32 MB
 
 void AddOneShot(std::string strDest);

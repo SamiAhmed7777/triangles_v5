@@ -62,6 +62,14 @@ namespace Bootstrap {
     bool VerifyManifest(const SnapshotManifest& manifest,
                         std::string& strError);
 
+    // Download a UTXO snapshot and load it into a fresh txleveldb.
+    // This is much faster than downloading the full bootstrap archive.
+    // Returns true if snapshot was downloaded and loaded successfully.
+    bool DownloadUtxoSnapshot(const std::string& host,
+                              const boost::filesystem::path& dataDir,
+                              ProgressCallback progressFn,
+                              std::string& strError);
+
 } // namespace Bootstrap
 
 #endif // TRIANGLES_BOOTSTRAP_H

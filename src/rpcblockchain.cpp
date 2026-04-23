@@ -9,6 +9,7 @@
 #include "addressindex.h"
 #include "txdb.h"
 #include "base58.h"
+#include "utxosnapshot.h"
 
 using namespace json_spirit;
 using namespace std;
@@ -848,4 +849,50 @@ Value reconsiderblock(const Array& params, bool fHelp)
     }
 
     return Value::null;
+}
+
+Value dumputxoset(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 1 || params.size() > 2)
+        throw runtime_error(
+            "dumputxoset <filename> [nheaders]\n"
+            "Dumps the current UTXO set and recent block headers to a binary snapshot file.\n"
+            "The snapshot can be used by new nodes to skip initial block download.\n"
+            "\nArguments:\n"
+            "1. filename   (string, required) Destination file path\n"
+            "2. nheaders   (int, optional, default=2000) Number of block headers to include\n"
+            "\nResult:\n"
+            "{\n"
+            "  \"filename\": \"...\",\n"
+            "  \"height\": n,\n"
+            "  \"blockhash\": \"...\",\n"
+            "  \"file_size\": n\n"
+            "}");
+
+    string filename = params[0].get_str();
+    unsigned int nHeaders = UTXO_SNAPSHOT_DEFAULT_HEADERS;
+    if (params.size() > 1)
+        nHeaders = params[1].get_int();
+
+    if (nHeaders < 100)
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "nheaders must be at least 100");
+
+    boost::filesystem::path destPath(filename);
+    std::string strError;
+
+    if (!UtxoSnapshot::DumpSnapshot(destPath, nHeaders, strError))
+        throw runtime_error("dumputxoset failed: " + strError);
+
+    // Get file size
+    int64_t nFileSize = 0;
+    if (boost::filesystem::exists(destPath))
+        nFileSize = (int64_t)boost::filesystem::file_size(destPath);
+
+    Object result;
+    result.push_back(Pair("filename", filename));
+    result.push_back(Pair("height", nBestHeight));
+    result.push_back(Pair("blockhash", hashBestChain.GetHex()));
+    result.push_back(Pair("file_size", nFileSize));
+
+    return result;
 }

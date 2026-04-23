@@ -14,6 +14,7 @@
 #include "smessage.h"
 #include "openssl_compat.h"
 #include "bootstrap.h"
+#include "utxosnapshot.h"
 #include "tor/tor_embedded.h"
 #include "tor/onion_v3.h"
 #include "tor/tor_process.h"
@@ -669,7 +670,7 @@ bool AppInit2()
         nScriptCheckThreads = 16;
     if (nScriptCheckThreads > 1)
     {
-        pScriptCheckQueue = new CCheckQueue<CScriptCheck>(128);
+        pScriptCheckQueue = new CCheckQueue<CScriptCheck>(32);
         pScriptCheckThreads = new boost::thread_group();
         for (int i = 0; i < nScriptCheckThreads - 1; ++i)
             pScriptCheckThreads->create_thread(&ThreadScriptCheck);
@@ -907,9 +908,6 @@ bool AppInit2()
         std::string host = Bootstrap::DEFAULT_HOST;
         std::string strError;
 
-        uiInterface.InitMessage(_("Downloading blockchain snapshot..."));
-        printf("Bootstrap: contacting %s...\n", host.c_str());
-
         auto progressFn = [](int64_t bytesDownloaded, int64_t totalBytes) {
             if (totalBytes > 0) {
                 printf("\rBootstrap: %lld / %lld MB (%lld%%)",
@@ -920,19 +918,65 @@ bool AppInit2()
             }
         };
 
-        bool success = Bootstrap::DownloadBootstrap(host, dataPath, progressFn, strError);
+        // Try UTXO snapshot first (fast: ~2-10 MB download)
+        bool success = false;
+        bool triedUtxoSnapshot = false;
+        if (needsBootstrap && !fs::exists(dataPath / "txleveldb")) {
+            uiInterface.InitMessage(_("Downloading UTXO snapshot..."));
+            printf("Bootstrap: trying UTXO snapshot from %s (fast path)...\n", host.c_str());
 
-        if (!success) {
-            printf("\nBootstrap: failed: %s\n", strError.c_str());
-            printf("Bootstrap: skipping, will sync from network.\n");
-        } else {
-            printf("\nBootstrap: done.\n");
+            std::string utxoError;
+            if (Bootstrap::DownloadUtxoSnapshot(host, dataPath, progressFn, utxoError)) {
+                printf("\nBootstrap: UTXO snapshot loaded — will sync remaining blocks from network.\n");
+                success = true;
+            } else {
+                printf("\nBootstrap: UTXO snapshot unavailable: %s\n", utxoError.c_str());
+                printf("Bootstrap: falling back to full bootstrap download...\n");
+            }
+            triedUtxoSnapshot = true;
         }
+
+        // Fall back to full bootstrap.tar.gz if UTXO snapshot failed
+        if (!success) {
+            uiInterface.InitMessage(_("Downloading blockchain snapshot..."));
+            printf("Bootstrap: contacting %s...\n", host.c_str());
+
+            success = Bootstrap::DownloadBootstrap(host, dataPath, progressFn, strError);
+
+            if (!success) {
+                printf("\nBootstrap: failed: %s\n", strError.c_str());
+                printf("Bootstrap: skipping, will sync from network.\n");
+            } else {
+                printf("\nBootstrap: done.\n");
+            }
+        }
+
         StartupPerfLog("bootstrap_download", GetTimeMillis() - nBootstrapStart,
-            strprintf("host=%s success=%d", host.c_str(), success));
+            strprintf("host=%s success=%d utxo_snapshot=%d", host.c_str(), success, triedUtxoSnapshot));
     }
     } // end bootstrap scope
 #endif
+
+    // ********************************************************* Step 6c: manual UTXO snapshot loading
+    // If utxo-snapshot.bin exists in data dir and no txleveldb, load it.
+    {
+        fs::path dataPath = GetDataDir();
+        fs::path snapshotFile = dataPath / "utxo-snapshot.bin";
+        fs::path txleveldbDir = dataPath / "txleveldb";
+
+        if (fs::exists(snapshotFile) && !fs::exists(txleveldbDir)) {
+            printf("Found utxo-snapshot.bin — loading UTXO snapshot...\n");
+            uiInterface.InitMessage(_("Loading UTXO snapshot..."));
+
+            std::string strError;
+            if (UtxoSnapshot::LoadSnapshot(snapshotFile, dataPath, strError)) {
+                printf("UTXO snapshot loaded successfully.\n");
+            } else {
+                printf("UTXO snapshot load failed: %s\n", strError.c_str());
+                printf("Will proceed with normal sync.\n");
+            }
+        }
+    }
 
     // ********************************************************* Step 7: load blockchain
 

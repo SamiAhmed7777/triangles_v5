@@ -72,6 +72,7 @@ set(CORE_SOURCES
     rpcsmessage.cpp
     zmqpublishnotifier.cpp
     txdb-leveldb.cpp
+    utxosnapshot.cpp
     lz4/lz4.c
     tor/onion_v3.cpp
     tor/tor_process.cpp

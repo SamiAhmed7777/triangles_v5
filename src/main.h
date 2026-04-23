@@ -12,6 +12,7 @@
 #include "scrypt.h"
 #include "hashblock.h"
 #include "checkqueue.h"
+#include "sigcache.h"
 
 #include <list>
 
@@ -37,8 +38,8 @@ static const unsigned int MAX_BLOCK_SIZE = 1000000;
 static const unsigned int MAX_BLOCK_SIZE_GEN = MAX_BLOCK_SIZE/2;
 static const unsigned int MAX_BLOCK_SIGOPS = MAX_BLOCK_SIZE/50;
 static const unsigned int MAX_ORPHAN_TRANSACTIONS = MAX_BLOCK_SIZE/100;
-static const unsigned int MAX_ORPHAN_BLOCKS = 2000;
-static const unsigned int MAX_ORPHAN_BLOCKS_IBD = 4000;
+static const unsigned int MAX_ORPHAN_BLOCKS = 750;
+static const unsigned int MAX_ORPHAN_BLOCKS_IBD = 1500;
 static const unsigned int MAX_REORG_DEPTH = 100;  // reject reorgs deeper than this (finality)
 static const unsigned int MAX_INV_SZ = 50000;
 static const int64_t MIN_TX_FEE = (1 * CENT) / 100;
@@ -1687,6 +1688,7 @@ public:
 };
 
 extern CTxMemPool mempool;
+extern CScriptVerifyCache scriptVerifyCache;
 
 /**
  * Closure representing one script check for parallel verification.
@@ -1711,7 +1713,12 @@ public:
 
     bool operator()()
     {
-        return ptxTo && VerifyScript(scriptSig, scriptPubKey, *ptxTo, nIn, nHashType);
+        if (!ptxTo)
+            return false;
+        if (!VerifyScript(scriptSig, scriptPubKey, *ptxTo, nIn, nHashType))
+            return false;
+        scriptVerifyCache.Set(ptxTo->GetHash(), nIn);
+        return true;
     }
 
     void swap(CScriptCheck& other)

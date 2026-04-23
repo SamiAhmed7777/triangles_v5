@@ -77,6 +77,8 @@ int64_t nTimeBestReceived = 0;
 
 CMedianFilter<int> cPeerBlockCounts(5, 0); // Amount of blocks that other nodes claim to have
 
+CScriptVerifyCache scriptVerifyCache;
+
 map<uint256, CBlock*> mapOrphanBlocks;
 multimap<uint256, CBlock*> mapOrphanBlocksByPrev;
 set<pair<COutPoint, unsigned int> > setStakeSeenOrphan;
@@ -110,6 +112,7 @@ struct CHeaderSyncNode
     uint256 nChainTrust;
     bool fRequested;
     int64_t nLastRequestTime;
+    int64_t nInsertTime;
 };
 
 static std::map<uint256, CHeaderSyncNode> mapHeaderSync;
@@ -117,11 +120,12 @@ static uint256 hashBestHeaderSync = 0;
 static CCriticalSection cs_PostIbdWork;
 static bool fPostIbdWorkStarted = false;
 
-static const unsigned int MAX_HEADER_SYNC_CACHE = 50000;
+static const unsigned int MAX_HEADER_SYNC_CACHE = 15000;
 static const unsigned int HEADER_DOWNLOAD_WINDOW = 512;  // Increased from 128 for parallel downloads
-static const unsigned int HEADER_DOWNLOAD_PER_PEER = 64;   // Max blocks to request from each peer
-static const int64_t HEADER_REQUEST_TIMEOUT_MICROS = 30 * 1000000;
-static const int64_t HEADER_REDUNDANT_REQUEST_MICROS = 10 * 1000000;  // Request from another peer after 10s
+static const unsigned int HEADER_DOWNLOAD_PER_PEER = 32;   // Reduced from 64 for Tor circuit stability
+static const int64_t HEADER_REQUEST_TIMEOUT_MICROS = 60 * 1000000;    // 60s for Tor latency (was 30s)
+static const int64_t HEADER_REDUNDANT_REQUEST_MICROS = 20 * 1000000;  // 20s redundant request (was 10s)
+static const int64_t HEADER_SYNC_TTL_MICROS = 5 * 60 * 1000000;      // 5-minute TTL for cache entries
 
 static void ThreadPostIbdWork(void* parg)
 {
@@ -232,12 +236,47 @@ static void RecomputeBestHeaderSync()
 
 static void PruneHeaderSync()
 {
-    if (mapHeaderSync.size() <= MAX_HEADER_SYNC_CACHE)
-        return;
+    const int64_t nNow = GetTime() * 1000000;
 
-    printf("IBD-DIAG: header sync cache exceeded %u entries, clearing planner state\n", MAX_HEADER_SYNC_CACHE);
-    mapHeaderSync.clear();
-    hashBestHeaderSync = 0;
+    // TTL eviction: remove entries older than 5 minutes
+    if (mapHeaderSync.size() > MAX_HEADER_SYNC_CACHE / 2)
+    {
+        unsigned int nEvicted = 0;
+        for (auto it = mapHeaderSync.begin(); it != mapHeaderSync.end(); )
+        {
+            if (nNow - it->second.nInsertTime >= HEADER_SYNC_TTL_MICROS)
+            {
+                it = mapHeaderSync.erase(it);
+                ++nEvicted;
+            }
+            else
+                ++it;
+        }
+        if (nEvicted > 0)
+        {
+            printf("IBD-DIAG: TTL-evicted %u stale header sync entries, %u remain\n",
+                nEvicted, (unsigned int)mapHeaderSync.size());
+            RecomputeBestHeaderSync();
+        }
+    }
+
+    // Hard limit: if still over max, evict oldest entries
+    if (mapHeaderSync.size() > MAX_HEADER_SYNC_CACHE)
+    {
+        printf("IBD-DIAG: header sync cache exceeded %u entries, evicting oldest\n", MAX_HEADER_SYNC_CACHE);
+        while (mapHeaderSync.size() > MAX_HEADER_SYNC_CACHE * 3 / 4)
+        {
+            // Find oldest entry by insert time
+            auto oldest = mapHeaderSync.begin();
+            for (auto it = mapHeaderSync.begin(); it != mapHeaderSync.end(); ++it)
+            {
+                if (it->second.nInsertTime < oldest->second.nInsertTime)
+                    oldest = it;
+            }
+            mapHeaderSync.erase(oldest);
+        }
+        RecomputeBestHeaderSync();
+    }
 }
 
 static bool AddHeaderSyncNode(const CBlock& header, const uint256& hashHeader)
@@ -283,6 +322,7 @@ static bool AddHeaderSyncNode(const CBlock& header, const uint256& hashHeader)
     node.nChainTrust = nPrevChainTrust + GetHeaderSyncTrust(header.nBits);
     node.fRequested = false;
     node.nLastRequestTime = 0;
+    node.nInsertTime = GetTime() * 1000000;
 
     mapHeaderSync.insert(std::make_pair(hashHeader, node));
 
@@ -1900,6 +1940,7 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, const MapPrevTx& inputs,
         // The first loop above does all the inexpensive checks.
         // Only if ALL inputs pass do we perform expensive ECDSA signature checks.
         // Helps prevent CPU exhaustion attacks.
+        const uint256 hashTx = GetHash();
         for (unsigned int i = 0; i < vin.size(); i++)
         {
             COutPoint prevout = vin[i].prevout;
@@ -1910,6 +1951,11 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, const MapPrevTx& inputs,
             // still computed and checked, and any change will be caught at the next checkpoint.
             if (!(fBlock && (nBestHeight < Checkpoints::GetTotalBlocksEstimate())))
             {
+                // Check signature cache: skip re-verification for scripts already
+                // validated during mempool acceptance or prior block connections.
+                if (scriptVerifyCache.Get(hashTx, i))
+                    continue;
+
                 if (pvChecks)
                 {
                     pvChecks->push_back(CScriptCheck(entry.scriptPubKey, vin[i].scriptSig, *this, i, 0));
@@ -1919,6 +1965,7 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, const MapPrevTx& inputs,
                     // Verify signature using scriptPubKey from UTXO entry
                     if (!VerifyScript(vin[i].scriptSig, entry.scriptPubKey, *this, i, 0))
                         return DoS(100, error("ConnectInputs() : %s VerifySignature failed", GetHash().ToString().substr(0,10).c_str()));
+                    scriptVerifyCache.Set(hashTx, i);
                 }
             }
         }
@@ -2286,7 +2333,7 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
             if (!tx.ConnectInputs(txdb, mapInputs, pindex, true, false,
                                   pScriptCheckQueue ? &vChecks : NULL))
                 return false;
-            if (pScriptCheckQueue && vChecks.size() >= 128)
+            if (pScriptCheckQueue && vChecks.size() >= 32)
             {
                 scriptcheckcontrol.Add(vChecks);
                 vChecks.clear();
@@ -5510,7 +5557,7 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
             static int64_t nLastBlockReceived = 0;
             static int nLastHeight = 0;
             static int64_t nLastStallLog = 0;
-            int nStallTimeout = IsInitialBlockDownload() ? 5 : 15;
+            int nStallTimeout = IsInitialBlockDownload() ? 10 : 30;  // Higher for Tor latency
             if (nBestHeight > nLastHeight) {
                 nLastHeight = nBestHeight;
                 nLastBlockReceived = GetTime();

@@ -2,6 +2,7 @@
 // Distributed under the MIT/X11 software license
 
 #include "bootstrap.h"
+#include "utxosnapshot.h"
 
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -763,6 +764,40 @@ bool DownloadBootstrap(const std::string& host,
     if (fs::exists(manifestPath))
         fs::remove(manifestPath);
 
+    return true;
+}
+
+bool DownloadUtxoSnapshot(const std::string& host,
+                          const fs::path& dataDir,
+                          ProgressCallback progressFn,
+                          std::string& strError)
+{
+    const bool noProxy = true;
+    const char* snapshotFilename = "utxo-snapshot.bin";
+
+    // Download utxo-snapshot.bin to a temp file
+    fs::path tmpPath = dataDir / "utxo-snapshot.bin.tmp";
+    std::string urlPath = std::string(BASE_PATH) + snapshotFilename;
+
+    printf("Bootstrap: downloading UTXO snapshot from %s%s...\n", host.c_str(), urlPath.c_str());
+
+    if (!DownloadFile(host, urlPath, tmpPath, progressFn, strError, noProxy)) {
+        fs::remove(tmpPath);
+        return false;
+    }
+
+    printf("Bootstrap: UTXO snapshot downloaded, loading into database...\n");
+
+    // Load the snapshot into a fresh txleveldb
+    if (!UtxoSnapshot::LoadSnapshot(tmpPath, dataDir, strError)) {
+        fs::remove(tmpPath);
+        return false;
+    }
+
+    // Clean up the temp file
+    fs::remove(tmpPath);
+
+    printf("Bootstrap: UTXO snapshot loaded successfully.\n");
     return true;
 }
 
