@@ -385,18 +385,7 @@ static std::vector<uint256> GetHeaderSyncDownloadPath(uint256 hashTip)
     {
         std::map<uint256, CHeaderSyncNode>::const_iterator mi = mapHeaderSync.find(hashTip);
         if (mi == mapHeaderSync.end())
-        {
-            // Gap: TTL eviction or missing header. The tail we accumulated
-            // has a parent we don't know (neither in mapBlockIndex nor
-            // mapHeaderSync), so the lowest entry's parent is unreachable
-            // and requesting it would produce orphans. Discard the partial
-            // path; the caller's retry path (Fix A/D getheaders) will
-            // re-request the missing range.
-            printf("IBD-DIAG: header sync path has gap at %s (evicted?), discarding %zu-entry partial path\n",
-                hashTip.ToString().substr(0,20).c_str(), vPath.size());
-            vPath.clear();
-            return vPath;
-        }
+            break;
 
         vPath.push_back(hashTip);
         hashTip = mi->second.header.hashPrevBlock;
@@ -3618,12 +3607,13 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
             printf("IBD-DIAG: queued %u more blocks from header planner after accepting %s\n",
                 nQueued, hash.ToString().substr(0,20).c_str());
     }
-    else if (IsInitialBlockDownload())
+    else if (IsInitialBlockDownload() && nBestHeight < GetNumBlocksOfPeers())
     {
-        // Header cache exhausted during IBD: the block-accepted refill above
-        // is guarded on hashBestHeaderSync != 0, so without an explicit
-        // getheaders kick the pipeline can never restart. Request more
-        // headers from all full-node peers to refill the planner.
+        // Header cache exhausted during IBD — request more headers from all peers.
+        // This fixes the stall where mapHeaderSync drains to empty, hashBestHeaderSync
+        // becomes 0, and the refill path is never taken again.
+        printf("IBD-DIAG: header cache empty at height %d, requesting more headers from all peers\n",
+            nBestHeight);
         LOCK(cs_vNodes);
         for (CNode* pnode : vNodes)
         {
@@ -3633,8 +3623,6 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
                 pnode->PushGetHeaders(pindexBest, uint256(0));
             }
         }
-        printf("IBD-DIAG: header cache empty after block %s, re-requested headers from all peers\n",
-            hash.ToString().substr(0,20).c_str());
     }
 
     return true;
@@ -5999,31 +5987,12 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
                 } else {
                     pto->PushGetBlocks(pindexBest, uint256(0));
                 }
-                // Also kick the header planner: getblocks alone can't restart
-                // the header-sync pipeline once the cache has drained.
+                // Also send getheaders during stall to restart the header planner.
+                // Without this, a drained header cache stays empty because only
+                // getblocks is sent on stall, which can't refill mapHeaderSync.
                 pto->pindexLastGetHeadersBegin = NULL;
                 pto->PushGetHeaders(pindexBest, uint256(0));
                 nLastBlockReceived = GetTime();
-            }
-        }
-
-        // Belt-and-suspenders: during IBD, if the header-sync cache has
-        // drained, ensure getheaders keeps being requested regardless of
-        // whether we're currently "stalled" by the above timer. The
-        // header planner can empty silently when all 2000 headers from a
-        // batch get consumed before the full-batch getheaders continuation
-        // (>=2000 guard) fires, leaving the pipeline with no recovery.
-        if (!pto->fClient && pto->nVersion != 0 &&
-            IsInitialBlockDownload() && hashBestHeaderSync == 0)
-        {
-            static int64_t nLastEmptyCacheHeaderRequest = 0;
-            if (GetTime() - nLastEmptyCacheHeaderRequest >= 30)
-            {
-                pto->pindexLastGetHeadersBegin = NULL;
-                pto->PushGetHeaders(pindexBest, uint256(0));
-                nLastEmptyCacheHeaderRequest = GetTime();
-                printf("IBD-DIAG: header cache empty, periodic getheaders to peer=%s\n",
-                    pto->addr.ToString().c_str());
             }
         }
 
