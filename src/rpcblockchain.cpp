@@ -364,48 +364,152 @@ Value gettxoutsetinfo(const Array& params, bool fHelp)
     return obj;
 }
 
-Value recalculatesupply(const Array& params, bool fHelp)
+static int64_t ComputeActiveChainSupplyFromBlocks(int& nBlocksScanned, int& nTransactionsScanned)
 {
-    if (fHelp || params.size() != 0)
-        throw runtime_error(
-            "recalculatesupply\n"
-            "Recalculates the money supply by summing all unspent transaction outputs.\n"
-            "Updates the stored money supply value at the chain tip and persists it to disk.\n"
-            "Returns the old and new supply values for comparison.\n"
-            "\nWARNING: This modifies blockchain index state. Only use if money supply is incorrect.");
+    nBlocksScanned = 0;
+    nTransactionsScanned = 0;
 
     if (!pindexBest)
         throw runtime_error("recalculatesupply: no best block");
 
+    CTxDB txdb("r");
+    int64_t nSupply = 0;
+
+    for (CBlockIndex* pindex = pindexGenesisBlock; pindex; pindex = pindex->pnext)
+    {
+        CBlock block;
+        if (!block.ReadFromDisk(pindex, true))
+            throw runtime_error(strprintf("recalculatesupply: failed reading block at height %d", pindex->nHeight));
+
+        int64_t nBlockValueIn = 0;
+        int64_t nBlockValueOut = 0;
+
+        for (std::vector<CTransaction>::const_iterator txIt = block.vtx.begin(); txIt != block.vtx.end(); ++txIt)
+        {
+            const CTransaction& tx = *txIt;
+            nTransactionsScanned++;
+            nBlockValueOut += tx.GetValueOut();
+
+            if (!tx.IsCoinBase())
+            {
+                for (std::vector<CTxIn>::const_iterator txinIt = tx.vin.begin(); txinIt != tx.vin.end(); ++txinIt)
+                {
+                    const CTxIn& txin = *txinIt;
+                    CTxIndex txindex;
+                    CTransaction txPrev;
+                    if (!txPrev.ReadFromDisk(txdb, txin.prevout, txindex))
+                        throw runtime_error(strprintf(
+                            "recalculatesupply: failed reading prevout %s:%u while processing height %d",
+                            txin.prevout.hash.ToString().c_str(), txin.prevout.n, pindex->nHeight));
+
+                    if (txin.prevout.n >= txPrev.vout.size())
+                        throw runtime_error(strprintf(
+                            "recalculatesupply: prevout index %u out of range for tx %s at height %d",
+                            txin.prevout.n, txin.prevout.hash.ToString().c_str(), pindex->nHeight));
+
+                    nBlockValueIn += txPrev.vout[txin.prevout.n].nValue;
+                }
+            }
+        }
+
+        nSupply += (nBlockValueOut - nBlockValueIn);
+        nBlocksScanned++;
+    }
+
+    return nSupply;
+}
+
+Value recalculatesupply(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() > 1)
+        throw runtime_error(
+            "recalculatesupply [apply=false]\n"
+            "Rebuilds money supply by walking the active chain from genesis and summing (valueOut - valueIn) per block.\n"
+            "Also returns the current UTXO-set total for comparison.\n"
+            "If apply=true, rewrites nMoneySupply for every block on the active chain and persists the repaired values.\n"
+            "\nThis is intended for repairing corrupted money-supply tracking after chain/index incidents.");
+
+    bool fApply = false;
+    if (params.size() == 1)
+        fApply = params[0].get_bool();
+
+    LOCK(cs_main);
+
+    if (!pindexBest)
+        throw runtime_error("recalculatesupply: no best block");
+
+    CTxDB txdbRead("r");
     int nUtxoCount = 0;
-    CTxDB txdb;
-    int64_t nCalculatedSupply = txdb.SumUtxoValues(nUtxoCount);
-    int64_t nOldSupply = pindexBest->nMoneySupply;
-    int64_t nDifference = nCalculatedSupply - nOldSupply;
+    int64_t nUtxoSupply = txdbRead.SumUtxoValues(nUtxoCount);
 
-    // Sanity check: difference should be reasonable (not millions of TRI)
-    // Max supply is 2,222,222 TRI, so any difference > 1M TRI is suspicious
-    if (abs64(nDifference) > 1000000 * COIN)
-        throw runtime_error(strprintf(
-            "recalculatesupply: calculated supply differs by %s TRI - this is abnormal, refusing to update",
-            FormatMoney(abs64(nDifference)).c_str()));
+    int nBlocksScanned = 0;
+    int nTransactionsScanned = 0;
+    int64_t nHistoricalSupply = ComputeActiveChainSupplyFromBlocks(nBlocksScanned, nTransactionsScanned);
 
-    // Update the chain tip's money supply
-    pindexBest->nMoneySupply = nCalculatedSupply;
+    int64_t nOldTipSupply = pindexBest->nMoneySupply;
 
-    // Persist to LevelDB
-    CTxDB txdbWrite;
-    if (!txdbWrite.WriteBlockIndex(CDiskBlockIndex(pindexBest)))
-        throw runtime_error("recalculatesupply: failed to write updated block index");
+    if (fApply)
+    {
+        CTxDB txdbWrite;
+        int64_t nRunningSupply = 0;
+
+        for (CBlockIndex* pindex = pindexGenesisBlock; pindex; pindex = pindex->pnext)
+        {
+            CBlock block;
+            if (!block.ReadFromDisk(pindex, true))
+                throw runtime_error(strprintf("recalculatesupply: failed reading block at height %d during apply", pindex->nHeight));
+
+            int64_t nBlockValueIn = 0;
+            int64_t nBlockValueOut = 0;
+
+            for (std::vector<CTransaction>::const_iterator txIt = block.vtx.begin(); txIt != block.vtx.end(); ++txIt)
+            {
+                const CTransaction& tx = *txIt;
+                nBlockValueOut += tx.GetValueOut();
+
+                if (!tx.IsCoinBase())
+                {
+                    for (std::vector<CTxIn>::const_iterator txinIt = tx.vin.begin(); txinIt != tx.vin.end(); ++txinIt)
+                    {
+                        const CTxIn& txin = *txinIt;
+                        CTxIndex txindex;
+                        CTransaction txPrev;
+                        if (!txPrev.ReadFromDisk(txdbWrite, txin.prevout, txindex))
+                            throw runtime_error(strprintf(
+                                "recalculatesupply: failed reading prevout %s:%u during apply at height %d",
+                                txin.prevout.hash.ToString().c_str(), txin.prevout.n, pindex->nHeight));
+                        if (txin.prevout.n >= txPrev.vout.size())
+                            throw runtime_error(strprintf(
+                                "recalculatesupply: prevout index %u out of range during apply for tx %s at height %d",
+                                txin.prevout.n, txin.prevout.hash.ToString().c_str(), pindex->nHeight));
+                        nBlockValueIn += txPrev.vout[txin.prevout.n].nValue;
+                    }
+                }
+            }
+
+            nRunningSupply += (nBlockValueOut - nBlockValueIn);
+            pindex->nMoneySupply = nRunningSupply;
+
+            if (!txdbWrite.WriteBlockIndex(CDiskBlockIndex(pindex)))
+                throw runtime_error(strprintf("recalculatesupply: failed to persist block index at height %d", pindex->nHeight));
+        }
+    }
 
     Object result;
     result.push_back(Pair("height", (int)nBestHeight));
-    result.push_back(Pair("old_supply", ValueFromAmount(nOldSupply)));
-    result.push_back(Pair("new_supply", ValueFromAmount(nCalculatedSupply)));
-    result.push_back(Pair("difference", ValueFromAmount(nDifference)));
+    result.push_back(Pair("tip_bestblock", hashBestChain.GetHex()));
+    result.push_back(Pair("old_tip_supply", ValueFromAmount(nOldTipSupply)));
+    result.push_back(Pair("recalculated_chain_supply", ValueFromAmount(nHistoricalSupply)));
+    result.push_back(Pair("utxo_supply", ValueFromAmount(nUtxoSupply)));
+    result.push_back(Pair("tip_vs_recalculated", ValueFromAmount(nHistoricalSupply - nOldTipSupply)));
+    result.push_back(Pair("utxo_vs_recalculated", ValueFromAmount(nHistoricalSupply - nUtxoSupply)));
+    result.push_back(Pair("blocks_scanned", nBlocksScanned));
+    result.push_back(Pair("transactions_scanned", nTransactionsScanned));
     result.push_back(Pair("utxo_count", nUtxoCount));
+    result.push_back(Pair("applied", fApply));
     return result;
 }
+
 
 // triangles: get information of sync-checkpoint
 Value getcheckpoint(const Array& params, bool fHelp)
