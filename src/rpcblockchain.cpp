@@ -364,15 +364,25 @@ Value gettxoutsetinfo(const Array& params, bool fHelp)
     return obj;
 }
 
-static int64_t ComputeActiveChainSupplyFromBlocks(int& nBlocksScanned, int& nTransactionsScanned)
+struct BlockSupplyDelta
 {
+    CBlockIndex* pindex;
+    int64_t nDelta; // valueOut - valueIn for this block
+};
+
+static int64_t ComputeActiveChainSupplyFromBlocks(
+    CTxDB& txdb,
+    std::vector<BlockSupplyDelta>& vDeltas,
+    int& nBlocksScanned,
+    int& nTransactionsScanned)
+{
+    vDeltas.clear();
     nBlocksScanned = 0;
     nTransactionsScanned = 0;
 
     if (!pindexBest)
         throw runtime_error("recalculatesupply: no best block");
 
-    CTxDB txdb("r");
     int64_t nSupply = 0;
 
     for (CBlockIndex* pindex = pindexGenesisBlock; pindex; pindex = pindex->pnext)
@@ -412,7 +422,9 @@ static int64_t ComputeActiveChainSupplyFromBlocks(int& nBlocksScanned, int& nTra
             }
         }
 
-        nSupply += (nBlockValueOut - nBlockValueIn);
+        int64_t nDelta = nBlockValueOut - nBlockValueIn;
+        vDeltas.push_back({ pindex, nDelta });
+        nSupply += nDelta;
         nBlocksScanned++;
     }
 
@@ -426,8 +438,11 @@ Value recalculatesupply(const Array& params, bool fHelp)
             "recalculatesupply [apply=false]\n"
             "Rebuilds money supply by walking the active chain from genesis and summing (valueOut - valueIn) per block.\n"
             "Also returns the current UTXO-set total for comparison.\n"
-            "If apply=true, rewrites nMoneySupply for every block on the active chain and persists the repaired values.\n"
-            "\nThis is intended for repairing corrupted money-supply tracking after chain/index incidents.");
+            "If apply=true, rewrites nMoneySupply for every block on the active chain and persists the repaired values\n"
+            "atomically in a single LevelDB batch.\n"
+            "\nWARNING: This holds cs_main for the full chain walk and blocks new blocks, wallet operations, and other\n"
+            "RPC calls for the duration (potentially several minutes on a long chain). Intended for repairing corrupted\n"
+            "money-supply tracking after chain/index incidents.");
 
     bool fApply = false;
     if (params.size() == 1)
@@ -438,61 +453,48 @@ Value recalculatesupply(const Array& params, bool fHelp)
     if (!pindexBest)
         throw runtime_error("recalculatesupply: no best block");
 
-    CTxDB txdbRead("r");
+    CTxDB txdb;
     int nUtxoCount = 0;
-    int64_t nUtxoSupply = txdbRead.SumUtxoValues(nUtxoCount);
+    int64_t nUtxoSupply = txdb.SumUtxoValues(nUtxoCount);
 
+    std::vector<BlockSupplyDelta> vDeltas;
     int nBlocksScanned = 0;
     int nTransactionsScanned = 0;
-    int64_t nHistoricalSupply = ComputeActiveChainSupplyFromBlocks(nBlocksScanned, nTransactionsScanned);
+    int64_t nHistoricalSupply = ComputeActiveChainSupplyFromBlocks(txdb, vDeltas, nBlocksScanned, nTransactionsScanned);
 
     int64_t nOldTipSupply = pindexBest->nMoneySupply;
 
+    // Sanity gate: refuse to persist a chain-walk result that is out of monetary range.
+    // Max supply is 2,222,222 TRI; a negative or above-max figure indicates a bug in the
+    // walk (e.g. orphaned-block contamination or a missing prevout), not real chain state.
+    if (fApply && !MoneyRange(nHistoricalSupply))
+        throw runtime_error(strprintf(
+            "recalculatesupply: recalculated supply %s TRI is out of MoneyRange [0, %s] - refusing to apply",
+            FormatMoney(nHistoricalSupply).c_str(),
+            FormatMoney(MAX_MONEY).c_str()));
+
     if (fApply)
     {
-        CTxDB txdbWrite;
+        if (!txdb.TxnBegin())
+            throw runtime_error("recalculatesupply: TxnBegin failed");
+
         int64_t nRunningSupply = 0;
-
-        for (CBlockIndex* pindex = pindexGenesisBlock; pindex; pindex = pindex->pnext)
+        for (std::vector<BlockSupplyDelta>::iterator it = vDeltas.begin(); it != vDeltas.end(); ++it)
         {
-            CBlock block;
-            if (!block.ReadFromDisk(pindex, true))
-                throw runtime_error(strprintf("recalculatesupply: failed reading block at height %d during apply", pindex->nHeight));
+            nRunningSupply += it->nDelta;
+            it->pindex->nMoneySupply = nRunningSupply;
 
-            int64_t nBlockValueIn = 0;
-            int64_t nBlockValueOut = 0;
-
-            for (std::vector<CTransaction>::const_iterator txIt = block.vtx.begin(); txIt != block.vtx.end(); ++txIt)
+            if (!txdb.WriteBlockIndex(CDiskBlockIndex(it->pindex)))
             {
-                const CTransaction& tx = *txIt;
-                nBlockValueOut += tx.GetValueOut();
-
-                if (!tx.IsCoinBase())
-                {
-                    for (std::vector<CTxIn>::const_iterator txinIt = tx.vin.begin(); txinIt != tx.vin.end(); ++txinIt)
-                    {
-                        const CTxIn& txin = *txinIt;
-                        CTxIndex txindex;
-                        CTransaction txPrev;
-                        if (!txPrev.ReadFromDisk(txdbWrite, txin.prevout, txindex))
-                            throw runtime_error(strprintf(
-                                "recalculatesupply: failed reading prevout %s:%u during apply at height %d",
-                                txin.prevout.hash.ToString().c_str(), txin.prevout.n, pindex->nHeight));
-                        if (txin.prevout.n >= txPrev.vout.size())
-                            throw runtime_error(strprintf(
-                                "recalculatesupply: prevout index %u out of range during apply for tx %s at height %d",
-                                txin.prevout.n, txin.prevout.hash.ToString().c_str(), pindex->nHeight));
-                        nBlockValueIn += txPrev.vout[txin.prevout.n].nValue;
-                    }
-                }
+                txdb.TxnAbort();
+                throw runtime_error(strprintf(
+                    "recalculatesupply: failed to stage block index at height %d",
+                    it->pindex->nHeight));
             }
-
-            nRunningSupply += (nBlockValueOut - nBlockValueIn);
-            pindex->nMoneySupply = nRunningSupply;
-
-            if (!txdbWrite.WriteBlockIndex(CDiskBlockIndex(pindex)))
-                throw runtime_error(strprintf("recalculatesupply: failed to persist block index at height %d", pindex->nHeight));
         }
+
+        if (!txdb.TxnCommit())
+            throw runtime_error("recalculatesupply: TxnCommit failed - no changes persisted");
     }
 
     Object result;
