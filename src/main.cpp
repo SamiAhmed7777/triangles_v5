@@ -3607,6 +3607,23 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
             printf("IBD-DIAG: queued %u more blocks from header planner after accepting %s\n",
                 nQueued, hash.ToString().substr(0,20).c_str());
     }
+    else if (IsInitialBlockDownload() && nBestHeight < GetNumBlocksOfPeers())
+    {
+        // Header cache exhausted during IBD — request more headers from all peers.
+        // This fixes the stall where mapHeaderSync drains to empty, hashBestHeaderSync
+        // becomes 0, and the refill path is never taken again.
+        printf("IBD-DIAG: header cache empty at height %d, requesting more headers from all peers\n",
+            nBestHeight);
+        LOCK(cs_vNodes);
+        for (CNode* pnode : vNodes)
+        {
+            if (!pnode->fClient && pnode->nVersion != 0)
+            {
+                pnode->pindexLastGetHeadersBegin = NULL;
+                pnode->PushGetHeaders(pindexBest, uint256(0));
+            }
+        }
+    }
 
     return true;
 }
@@ -5970,6 +5987,11 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
                 } else {
                     pto->PushGetBlocks(pindexBest, uint256(0));
                 }
+                // Also send getheaders during stall to restart the header planner.
+                // Without this, a drained header cache stays empty because only
+                // getblocks is sent on stall, which can't refill mapHeaderSync.
+                pto->pindexLastGetHeadersBegin = NULL;
+                pto->PushGetHeaders(pindexBest, uint256(0));
                 nLastBlockReceived = GetTime();
             }
         }

@@ -364,25 +364,45 @@ Value gettxoutsetinfo(const Array& params, bool fHelp)
     return obj;
 }
 
-static int64_t ComputeActiveChainSupplyFromBlocks(int& nBlocksScanned, int& nTransactionsScanned)
+static void GetActiveChainVector(std::vector<CBlockIndex*>& chain)
 {
-    nBlocksScanned = 0;
-    nTransactionsScanned = 0;
+    chain.clear();
 
     if (!pindexBest)
         throw runtime_error("recalculatesupply: no best block");
 
+    for (CBlockIndex* pindex = pindexBest; pindex; pindex = pindex->pprev)
+        chain.push_back(pindex);
+
+    std::reverse(chain.begin(), chain.end());
+}
+
+static int64_t ComputeActiveChainSupplyFromBlocks(const std::vector<CBlockIndex*>& chain, int& nBlocksScanned, int& nTransactionsScanned)
+{
+    nBlocksScanned = 0;
+    nTransactionsScanned = 0;
+
     CTxDB txdb("r");
     int64_t nSupply = 0;
 
-    for (CBlockIndex* pindex = pindexGenesisBlock; pindex; pindex = pindex->pnext)
+    for (std::vector<CBlockIndex*>::const_iterator pindexIt = chain.begin(); pindexIt != chain.end(); ++pindexIt)
     {
-        CBlock block;
-        if (!block.ReadFromDisk(pindex, true))
-            throw runtime_error(strprintf("recalculatesupply: failed reading block at height %d", pindex->nHeight));
+        CBlockIndex* pindex = *pindexIt;
+        if (!pindex)
+            throw runtime_error("recalculatesupply: null active-chain block index");
 
+        if (pindex->nHeight == 0)
+        {
+            nBlocksScanned++;
+            continue;
+        }
+
+        CBlock block;
         int64_t nBlockValueIn = 0;
         int64_t nBlockValueOut = 0;
+
+        if (!block.ReadFromDisk(pindex))
+            throw runtime_error(strprintf("recalculatesupply: failed reading block at height %d", pindex->nHeight));
 
         for (std::vector<CTransaction>::const_iterator txIt = block.vtx.begin(); txIt != block.vtx.end(); ++txIt)
         {
@@ -442,9 +462,12 @@ Value recalculatesupply(const Array& params, bool fHelp)
     int nUtxoCount = 0;
     int64_t nUtxoSupply = txdbRead.SumUtxoValues(nUtxoCount);
 
+    std::vector<CBlockIndex*> activeChain;
+    GetActiveChainVector(activeChain);
+
     int nBlocksScanned = 0;
     int nTransactionsScanned = 0;
-    int64_t nHistoricalSupply = ComputeActiveChainSupplyFromBlocks(nBlocksScanned, nTransactionsScanned);
+    int64_t nHistoricalSupply = ComputeActiveChainSupplyFromBlocks(activeChain, nBlocksScanned, nTransactionsScanned);
 
     int64_t nOldTipSupply = pindexBest->nMoneySupply;
 
@@ -453,14 +476,26 @@ Value recalculatesupply(const Array& params, bool fHelp)
         CTxDB txdbWrite;
         int64_t nRunningSupply = 0;
 
-        for (CBlockIndex* pindex = pindexGenesisBlock; pindex; pindex = pindex->pnext)
+        for (std::vector<CBlockIndex*>::const_iterator pindexIt = activeChain.begin(); pindexIt != activeChain.end(); ++pindexIt)
         {
-            CBlock block;
-            if (!block.ReadFromDisk(pindex, true))
-                throw runtime_error(strprintf("recalculatesupply: failed reading block at height %d during apply", pindex->nHeight));
+            CBlockIndex* pindex = *pindexIt;
+            if (!pindex)
+                throw runtime_error("recalculatesupply: null active-chain block index during apply");
 
+            if (pindex->nHeight == 0)
+            {
+                pindex->nMoneySupply = 0;
+                if (!txdbWrite.WriteBlockIndex(CDiskBlockIndex(pindex)))
+                    throw runtime_error("recalculatesupply: failed to persist genesis block index during apply");
+                continue;
+            }
+
+            CBlock block;
             int64_t nBlockValueIn = 0;
             int64_t nBlockValueOut = 0;
+
+            if (!block.ReadFromDisk(pindex))
+                throw runtime_error(strprintf("recalculatesupply: failed reading block at height %d during apply", pindex->nHeight));
 
             for (std::vector<CTransaction>::const_iterator txIt = block.vtx.begin(); txIt != block.vtx.end(); ++txIt)
             {
