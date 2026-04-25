@@ -73,6 +73,7 @@ set(CORE_SOURCES
     rpcrawtransaction.cpp
     rpcsmessage.cpp
     zmqpublishnotifier.cpp
+    txdb-base.cpp
     txdb-leveldb.cpp
     utxosnapshot.cpp
     lz4/lz4.c

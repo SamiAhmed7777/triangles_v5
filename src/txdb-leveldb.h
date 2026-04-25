@@ -6,241 +6,61 @@
 #ifndef TRIANGLES_LEVELDB_H
 #define TRIANGLES_LEVELDB_H
 
-#include "main.h"
-
-#include <map>
-#include <string>
-#include <vector>
+#include "txdb-base.h"
 
 #include <leveldb/db.h>
 #include <leveldb/write_batch.h>
 
-// Class that provides access to a LevelDB. Note that this class is frequently
-// instantiated on the stack and then destroyed again, so instantiation has to
-// be very cheap. Unfortunately that means, a CTxDB instance is actually just a
-// wrapper around some global state.
+// LevelDB backend for the chain database.
 //
-// A LevelDB is a key/value store that is optimized for fast usage on hard
-// disks. It prefers long read/writes to seeks and is based on a series of
-// sorted key/value mapping files that are stacked on top of each other, with
-// newer files overriding older files. A background thread compacts them
-// together when too many files stack up.
+// Cheap to construct/destruct: every instance shares a single global
+// leveldb::DB pointer, opened lazily on first use. Most of the codebase
+// instantiates a CTxDB on the stack for short-lived operations.
 //
-// Learn more: http://code.google.com/p/leveldb/
-class CTxDB
+// The protected templated Read/Write/Erase/Exists live in CTxDBBase and
+// dispatch to ReadRaw/WriteRaw/EraseRaw/ExistsRaw below, which handle the
+// active-batch logic so reads-after-writes within an open batch see their
+// own pending changes.
+class CTxDB final : public CTxDBBase
 {
 public:
-    CTxDB(const char* pszMode="r+");
-    ~CTxDB() {
-        // Note that this is not the same as Close() because it deletes only
-        // data scoped to this TxDB object.
+    CTxDB(const char* pszMode = "r+");
+    ~CTxDB() override {
         delete activeBatch;
     }
 
-    // Destroys the underlying shared global state accessed by this TxDB.
-    void Close();
+    void Close() override;
 
-private:
-    leveldb::DB *pdb;  // Points to the global instance.
-
-    // A batch stores up writes and deletes for atomic application. When this
-    // field is non-NULL, writes/deletes go there instead of directly to disk.
-    leveldb::WriteBatch *activeBatch;
-    leveldb::Options options;
-    bool fReadOnly;
-    int nVersion;
-
-protected:
-    // Returns true and sets (value,false) if activeBatch contains the given key
-    // or leaves value alone and sets deleted = true if activeBatch contains a
-    // delete for it.
-    bool ScanBatch(const CDataStream &key, std::string *value, bool *deleted) const;
-
-    template<typename K, typename T>
-    bool Read(const K& key, T& value)
-    {
-        CDataStream ssKey(SER_DISK, CLIENT_VERSION);
-        ssKey.reserve(1000);
-        ssKey << key;
-        std::string strValue;
-
-        bool readFromDb = true;
-        if (activeBatch) {
-            // First we must search for it in the currently pending set of
-            // changes to the db. If not found in the batch, go on to read disk.
-            bool deleted = false;
-            readFromDb = ScanBatch(ssKey, &strValue, &deleted) == false;
-            if (deleted) {
-                return false;
-            }
-        }
-        if (readFromDb) {
-            leveldb::Status status = pdb->Get(leveldb::ReadOptions(),
-                                              ssKey.str(), &strValue);
-            if (!status.ok()) {
-                if (status.IsNotFound())
-                    return false;
-                // Some unexpected error.
-                printf("LevelDB read failure: %s\n", status.ToString().c_str());
-                return false;
-            }
-        }
-        // Unserialize value
-        try {
-            CDataStream ssValue(strValue.data(), strValue.data() + strValue.size(),
-                                SER_DISK, CLIENT_VERSION);
-            ssValue >> value;
-        }
-        catch (std::exception &e) {
-            return false;
-        }
-        return true;
-    }
-
-    template<typename K, typename T>
-    bool Write(const K& key, const T& value)
-    {
-        if (fReadOnly)
-            assert(!"Write called on database in read-only mode");
-
-        CDataStream ssKey(SER_DISK, CLIENT_VERSION);
-        ssKey.reserve(1000);
-        ssKey << key;
-        CDataStream ssValue(SER_DISK, CLIENT_VERSION);
-        ssValue.reserve(10000);
-        ssValue << value;
-
-        if (activeBatch) {
-            activeBatch->Put(ssKey.str(), ssValue.str());
-            return true;
-        }
-        leveldb::Status status = pdb->Put(leveldb::WriteOptions(), ssKey.str(), ssValue.str());
-        if (!status.ok()) {
-            printf("LevelDB write failure: %s\n", status.ToString().c_str());
-            return false;
-        }
-        return true;
-    }
-
-    template<typename K>
-    bool Erase(const K& key)
-    {
-        if (!pdb)
-            return false;
-        if (fReadOnly)
-            assert(!"Erase called on database in read-only mode");
-
-        CDataStream ssKey(SER_DISK, CLIENT_VERSION);
-        ssKey.reserve(1000);
-        ssKey << key;
-        if (activeBatch) {
-            activeBatch->Delete(ssKey.str());
-            return true;
-        }
-        leveldb::Status status = pdb->Delete(leveldb::WriteOptions(), ssKey.str());
-        return (status.ok() || status.IsNotFound());
-    }
-
-    template<typename K>
-    bool Exists(const K& key)
-    {
-        CDataStream ssKey(SER_DISK, CLIENT_VERSION);
-        ssKey.reserve(1000);
-        ssKey << key;
-        std::string unused;
-
-        if (activeBatch) {
-            bool deleted;
-            if (ScanBatch(ssKey, &unused, &deleted) && !deleted) {
-                return true;
-            }
-        }
-
-
-        leveldb::Status status = pdb->Get(leveldb::ReadOptions(), ssKey.str(), &unused);
-        return status.IsNotFound() == false;
-    }
-
-
-public:
-    bool TxnBegin();
-    bool TxnCommit();
-    bool TxnAbort()
+    bool TxnBegin() override;
+    bool TxnCommit() override;
+    bool TxnAbort() override
     {
         delete activeBatch;
         activeBatch = NULL;
         return true;
     }
 
-    bool ReadVersion(int& nVersion)
-    {
-        nVersion = 0;
-        return Read(std::string("version"), nVersion);
-    }
+    bool LoadBlockIndex() override;
 
-    bool WriteVersion(int nVersion)
-    {
-        return Write(std::string("version"), nVersion);
-    }
-
-    bool ReadDbFormat(int& nDbFormat)
-    {
-        nDbFormat = 1;
-        return Read(std::string("dbformat"), nDbFormat);
-    }
-
-    bool WriteDbFormat(int nDbFormat)
-    {
-        return Write(std::string("dbformat"), nDbFormat);
-    }
-
-    bool ReadTxIndex(uint256 hash, CTxIndex& txindex);
-    bool UpdateTxIndex(uint256 hash, const CTxIndex& txindex);
-    bool AddTxIndex(const CTransaction& tx, const CDiskTxPos& pos, int nHeight);
-    bool EraseTxIndex(const CTransaction& tx);
-    bool ContainsTx(uint256 hash);
-    bool ReadDiskTx(uint256 hash, CTransaction& tx, CTxIndex& txindex);
-    bool ReadDiskTx(uint256 hash, CTransaction& tx);
-    bool ReadDiskTx(COutPoint outpoint, CTransaction& tx, CTxIndex& txindex);
-    bool ReadDiskTx(COutPoint outpoint, CTransaction& tx);
-    bool WriteBlockIndex(const CDiskBlockIndex& blockindex);
-    bool ReadHashBestChain(uint256& hashBestChain);
-    bool WriteHashBestChain(uint256 hashBestChain);
-    bool ReadAddressIndexBestChain(uint256& hashBestChain);
-    bool WriteAddressIndexBestChain(uint256 hashBestChain);
-    bool ReadAddressIndexStartHeight(int& nHeight);
-    bool WriteAddressIndexStartHeight(int nHeight);
-    bool ReadBestInvalidTrust(CBigNum& bnBestInvalidTrust);
-    bool WriteBestInvalidTrust(CBigNum bnBestInvalidTrust);
-    bool ReadSyncCheckpoint(uint256& hashCheckpoint);
-    bool WriteSyncCheckpoint(uint256 hashCheckpoint);
-    bool ReadCheckpointPubKey(std::string& strPubKey);
-    bool WriteCheckpointPubKey(const std::string& strPubKey);
-    bool LoadBlockIndex();
-
-    // Address index methods
-    bool ReadAddressBalance(int nType, const uint160& hashBytes, int64_t& nBalance);
-    bool WriteAddressBalance(int nType, const uint160& hashBytes, int64_t nBalance);
-    bool ReadAddressUtxo(int nType, const uint160& hashBytes, const uint256& txhash, int nIndex, int64_t& nValue, int& nHeight);
-    bool WriteAddressUtxo(int nType, const uint160& hashBytes, const uint256& txhash, int nIndex, int64_t nValue, int nHeight, const CScript& script);
-    bool EraseAddressUtxo(int nType, const uint160& hashBytes, const uint256& txhash, int nIndex);
-    bool WriteAddressTxId(int nType, const uint160& hashBytes, int nHeight, int nTxIndex, const uint256& txhash);
-    bool EraseAddressTxId(int nType, const uint160& hashBytes, int nHeight, int nTxIndex, const uint256& txhash);
-
-    // Address index iteration (for RPC queries)
-    bool GetAddressUtxos(int nType, const uint160& hashBytes, std::vector<std::pair<COutPoint, std::pair<int64_t, int> > >& vUtxos);
-    bool GetAddressTxIds(int nType, const uint160& hashBytes, int nStartHeight, int nEndHeight, std::vector<uint256>& vTxIds);
-
-    // UTXO database methods
-    bool ReadUtxo(const uint256& hash, unsigned int n, CUtxoEntry& entry);
-    bool WriteUtxo(const uint256& hash, unsigned int n, const CUtxoEntry& entry);
-    bool EraseUtxo(const uint256& hash, unsigned int n);
-    bool HaveUtxo(const uint256& hash, unsigned int n);
-    int64_t SumUtxoValues(int& nCount);
+protected:
+    bool ReadRaw(const std::string& key, std::string& value) const override;
+    bool WriteRaw(const std::string& key, const std::string& value) override;
+    bool EraseRaw(const std::string& key) override;
+    bool ExistsRaw(const std::string& key) const override;
+    std::unique_ptr<CTxDBIteratorBase> NewIterator() const override;
 
 private:
+    leveldb::DB* pdb;                  // Points to the global instance.
+    leveldb::WriteBatch* activeBatch;  // When non-NULL, writes/deletes go here.
+    leveldb::Options options;
+    int nVersion;
+
+    // Returns true and sets (value,false) if activeBatch contains the given
+    // key, or leaves value alone and sets deleted=true if activeBatch contains
+    // a delete for it.
+    bool ScanBatch(const std::string& key, std::string* value, bool* deleted) const;
+
     bool LoadBlockIndexGuts();
 };
-
 
 #endif // TRIANGLES_LEVELDB_H
