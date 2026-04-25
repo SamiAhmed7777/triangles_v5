@@ -110,7 +110,7 @@ extern bool fEnforceCanonical;
 static const uint64_t nMinDiskSpace = 52428800;
 
 class CReserveKey;
-class CTxDB;
+class CTxDBBase;
 class CTxIndex;
 
 void RegisterWallet(CWallet* pwalletIn);
@@ -721,10 +721,10 @@ public:
     }
 
 
-    bool ReadFromDisk(CTxDB& txdb, COutPoint prevout, CTxIndex& txindexRet);
-    bool ReadFromDisk(CTxDB& txdb, COutPoint prevout);
+    bool ReadFromDisk(CTxDBBase& txdb, COutPoint prevout, CTxIndex& txindexRet);
+    bool ReadFromDisk(CTxDBBase& txdb, COutPoint prevout);
     bool ReadFromDisk(COutPoint prevout);
-    bool DisconnectInputs(CTxDB& txdb);
+    bool DisconnectInputs(CTxDBBase& txdb);
 
     /** Fetch UTXO entries for all inputs from the UTXO database or mempool.
 
@@ -736,7 +736,7 @@ public:
      @param[out] fInvalid       returns true if transaction is invalid
      @return Returns true if all inputs are found
      */
-    bool FetchInputs(CTxDB& txdb, const MapPrevTx& mapPendingUtxos,
+    bool FetchInputs(CTxDBBase& txdb, const MapPrevTx& mapPendingUtxos,
                      bool fBlock, bool fMiner, MapPrevTx& inputsRet, bool& fInvalid);
 
     /** Validate inputs against UTXO entries and verify signatures.
@@ -747,13 +747,13 @@ public:
         @param[in] fMiner       true if called from CreateNewBlock
         @return Returns true if all checks succeed
      */
-    bool ConnectInputs(CTxDB& txdb, const MapPrevTx& inputs,
+    bool ConnectInputs(CTxDBBase& txdb, const MapPrevTx& inputs,
                        const CBlockIndex* pindexBlock, bool fBlock, bool fMiner,
                        std::vector<CScriptCheck>* pvChecks = NULL);
     bool ClientConnectInputs();
     bool CheckTransaction() const;
-    bool AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs=true, bool* pfMissingInputs=NULL);
-    bool GetCoinAge(CTxDB& txdb, uint64_t& nCoinAge) const;  // triangles: get transaction coin age
+    bool AcceptToMemoryPool(CTxDBBase& txdb, bool fCheckInputs=true, bool* pfMissingInputs=NULL);
+    bool GetCoinAge(CTxDBBase& txdb, uint64_t& nCoinAge) const;  // triangles: get transaction coin age
 
 protected:
     const CTxOut& GetOutputFor(const CTxIn& input, const MapPrevTx& inputs) const;
@@ -815,7 +815,7 @@ public:
     int GetDepthInMainChain() const { CBlockIndex *pindexRet; return GetDepthInMainChain(pindexRet); }
     bool IsInMainChain() const { CBlockIndex *pindexRet; return GetDepthInMainChainINTERNAL(pindexRet) > 0; }
     int GetBlocksToMaturity() const;
-    bool AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs=true);
+    bool AcceptToMemoryPool(CTxDBBase& txdb, bool fCheckInputs=true);
     bool AcceptToMemoryPool();
 };
 
@@ -1146,10 +1146,10 @@ public:
     }
 
 
-    bool DisconnectBlock(CTxDB& txdb, CBlockIndex* pindex);
-    bool ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck=false);
+    bool DisconnectBlock(CTxDBBase& txdb, CBlockIndex* pindex);
+    bool ConnectBlock(CTxDBBase& txdb, CBlockIndex* pindex, bool fJustCheck=false);
     bool ReadFromDisk(const CBlockIndex* pindex, bool fReadTransactions=true);
-    bool SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew);
+    bool SetBestChain(CTxDBBase& txdb, CBlockIndex* pindexNew);
     bool AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const uint256& hashProofOfStake);
     bool CheckBlock(bool fCheckPOW=true, bool fCheckMerkleRoot=true, bool fCheckSig=true) const;
     bool AcceptBlock();
@@ -1158,7 +1158,7 @@ public:
     bool CheckBlockSignature() const;
 
 private:
-    bool SetBestChainInner(CTxDB& txdb, CBlockIndex *pindexNew);
+    bool SetBestChainInner(CTxDBBase& txdb, CBlockIndex *pindexNew);
 };
 
 
@@ -1662,7 +1662,7 @@ public:
     std::map<uint256, CTransaction> mapTx;
     std::map<COutPoint, CInPoint> mapNextTx;
 
-    bool accept(CTxDB& txdb, CTransaction &tx,
+    bool accept(CTxDBBase& txdb, CTransaction &tx,
                 bool fCheckInputs, bool* pfMissingInputs);
     bool addUnchecked(const uint256& hash, CTransaction &tx);
     bool remove(const CTransaction &tx, bool fRecursive = false);

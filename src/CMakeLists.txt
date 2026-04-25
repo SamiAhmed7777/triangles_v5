@@ -76,6 +76,7 @@ set(CORE_SOURCES
     txdb-base.cpp
     txdb-leveldb.cpp
     utxosnapshot.cpp
+    snapshotnet.cpp
     lz4/lz4.c
     tor/onion_v3.cpp
     tor/tor_process.cpp

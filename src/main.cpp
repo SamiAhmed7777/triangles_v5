@@ -19,6 +19,7 @@
 #endif
 #include "notificationqueue.h"
 #include "addressindex.h"
+#include "snapshotnet.h"
 #include <algorithm>
 #include <deque>
 #include <boost/algorithm/string/replace.hpp>
@@ -136,8 +137,9 @@ static CCriticalSection cs_PostIbdWork;
 static bool fPostIbdWorkStarted = false;
 
 static const unsigned int MAX_HEADER_SYNC_CACHE = 15000;
-static const unsigned int HEADER_DOWNLOAD_WINDOW = 512;  // Increased from 128 for parallel downloads
+static const unsigned int HEADER_DOWNLOAD_WINDOW = 1024; // Wider pipeline for multi-peer parallel IBD
 static const unsigned int HEADER_DOWNLOAD_PER_PEER = 32;   // Reduced from 64 for Tor circuit stability
+static const size_t HEADER_REDUNDANT_PEER_THRESHOLD = 4;   // Only do dual-peer redundancy when peer count is below this
 static const unsigned int HEADER_SYNC_LOW_WATER = HEADER_DOWNLOAD_WINDOW / 4;
 static const unsigned int HEADER_SYNC_TARGET_INFLIGHT = HEADER_DOWNLOAD_WINDOW / 2;
 static const int64_t HEADER_REQUEST_TIMEOUT_MICROS = 60 * 1000000;    // 60s for Tor latency (was 30s)
@@ -177,6 +179,12 @@ static void ThreadPostIbdWork(void* parg)
             SecureMsgScanBlockChain();
             printf("Post-IBD secure message chain scan complete\n");
         }
+
+        // If a canonical UTXO snapshot file is present in the data dir and its
+        // hash matches the compiled-in snapshot hash for this height, advertise
+        // NODE_SNAPSHOT so other peers can fetch it from us.
+        if (!fShutdown)
+            SnapshotNet::EnsureLocalSnapshot();
     }
     catch (std::exception& e)
     {
@@ -662,11 +670,15 @@ static unsigned int QueueHeaderSyncBlocksParallel(unsigned int nWindow)
         CNode* pnode = vWeightedPeers[nPeerIndex % vWeightedPeers.size()];
         pnode->AskFor(CInv(MSG_BLOCK, *it));
 
-        // During IBD with 2+ peers: also request from a second peer immediately.
+        // During IBD with few peers: also request from a second peer immediately.
         // Doubles bandwidth but halves worst-case latency when one peer is slow.
-        // The AlreadyHave() check in getdata construction automatically skips
-        // the duplicate once the first response arrives.
-        if (IsInitialBlockDownload() && vWeightedPeers.size() >= 2 && !mi->second.fRequested)
+        // When peer count is large, skip the redundancy and rely on adaptive-timeout
+        // retry instead — pure parallel distribution gives higher aggregate throughput
+        // and avoids burning Tor bandwidth on duplicate fetches.
+        if (IsInitialBlockDownload() &&
+            vWeightedPeers.size() >= 2 &&
+            vWeightedPeers.size() < HEADER_REDUNDANT_PEER_THRESHOLD &&
+            !mi->second.fRequested)
         {
             CNode* pnode2 = vWeightedPeers[(nPeerIndex + 1) % vWeightedPeers.size()];
             if (pnode2 != pnode)
@@ -770,7 +782,7 @@ void static SetBestChain(const CBlockLocator& loc)
         pwallet->SetBestChain(loc);
 }
 
-static bool UpdateAddressIndexSyncState(CTxDB& txdb, const CBlockIndex* pindexNew)
+static bool UpdateAddressIndexSyncState(CTxDBBase& txdb, const CBlockIndex* pindexNew)
 {
     if (!fAddressIndex || pindexNew == NULL)
         return true;
@@ -896,7 +908,7 @@ unsigned int LimitOrphanTxSize(unsigned int nMaxOrphans)
 // CTransaction and CTxIndex
 //
 
-bool CTransaction::ReadFromDisk(CTxDB& txdb, COutPoint prevout, CTxIndex& txindexRet)
+bool CTransaction::ReadFromDisk(CTxDBBase& txdb, COutPoint prevout, CTxIndex& txindexRet)
 {
     SetNull();
     if (!txdb.ReadTxIndex(prevout.hash, txindexRet))
@@ -911,7 +923,7 @@ bool CTransaction::ReadFromDisk(CTxDB& txdb, COutPoint prevout, CTxIndex& txinde
     return true;
 }
 
-bool CTransaction::ReadFromDisk(CTxDB& txdb, COutPoint prevout)
+bool CTransaction::ReadFromDisk(CTxDBBase& txdb, COutPoint prevout)
 {
     CTxIndex txindex;
     return ReadFromDisk(txdb, prevout, txindex);
@@ -1176,7 +1188,7 @@ int64_t CTransaction::GetMinFee(unsigned int nBlockSize, enum GetMinFee_mode mod
 }
 
 
-bool CTxMemPool::accept(CTxDB& txdb, CTransaction &tx, bool fCheckInputs,
+bool CTxMemPool::accept(CTxDBBase& txdb, CTransaction &tx, bool fCheckInputs,
                         bool* pfMissingInputs)
 {
     if (pfMissingInputs)
@@ -1338,7 +1350,7 @@ bool CTxMemPool::accept(CTxDB& txdb, CTransaction &tx, bool fCheckInputs,
     return true;
 }
 
-bool CTransaction::AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs, bool* pfMissingInputs)
+bool CTransaction::AcceptToMemoryPool(CTxDBBase& txdb, bool fCheckInputs, bool* pfMissingInputs)
 {
     return mempool.accept(txdb, *this, fCheckInputs, pfMissingInputs);
 }
@@ -1459,7 +1471,7 @@ int CMerkleTx::GetBlocksToMaturity() const
 }
 
 
-bool CMerkleTx::AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs)
+bool CMerkleTx::AcceptToMemoryPool(CTxDBBase& txdb, bool fCheckInputs)
 {
     if (fClient)
     {
@@ -1481,7 +1493,7 @@ bool CMerkleTx::AcceptToMemoryPool()
 
 
 
-bool CWalletTx::AcceptWalletTransaction(CTxDB& txdb, bool fCheckInputs)
+bool CWalletTx::AcceptWalletTransaction(CTxDBBase& txdb, bool fCheckInputs)
 {
 
     {
@@ -1881,7 +1893,7 @@ void CBlock::UpdateTime(const CBlockIndex* pindexPrev)
 
 
 
-bool CTransaction::DisconnectInputs(CTxDB& txdb)
+bool CTransaction::DisconnectInputs(CTxDBBase& txdb)
 {
     // Remove transaction position index entry.
     // UTXO undo (restoring spent outputs, removing created outputs) is
@@ -1892,7 +1904,7 @@ bool CTransaction::DisconnectInputs(CTxDB& txdb)
 }
 
 
-bool CTransaction::FetchInputs(CTxDB& txdb, const MapPrevTx& mapPendingUtxos,
+bool CTransaction::FetchInputs(CTxDBBase& txdb, const MapPrevTx& mapPendingUtxos,
                                bool fBlock, bool fMiner, MapPrevTx& inputsRet, bool& fInvalid)
 {
     // FetchInputs can return false either because we just haven't seen some inputs
@@ -2045,7 +2057,7 @@ unsigned int CTransaction::GetP2SHSigOpCount(const MapPrevTx& inputs) const
     return nSigOps;
 }
 
-bool CTransaction::ConnectInputs(CTxDB& txdb, const MapPrevTx& inputs,
+bool CTransaction::ConnectInputs(CTxDBBase& txdb, const MapPrevTx& inputs,
     const CBlockIndex* pindexBlock, bool fBlock, bool fMiner,
     std::vector<CScriptCheck>* pvChecks)
 {
@@ -2214,7 +2226,7 @@ static bool GetAddressFromScript(const CScript& script, int& nType, uint160& has
     return false;
 }
 
-bool CBlock::DisconnectBlock(CTxDB& txdb, CBlockIndex* pindex)
+bool CBlock::DisconnectBlock(CTxDBBase& txdb, CBlockIndex* pindex)
 {
     // Disconnect in reverse order
     for (int i = vtx.size()-1; i >= 0; i--)
@@ -2343,7 +2355,7 @@ bool CBlock::DisconnectBlock(CTxDB& txdb, CBlockIndex* pindex)
     return true;
 }
 
-bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
+bool CBlock::ConnectBlock(CTxDBBase& txdb, CBlockIndex* pindex, bool fJustCheck)
 {
     // Check it again in case a previous version let a bad block in, but skip BlockSig checking
     if (!CheckBlock(!fJustCheck, !fJustCheck, false))
@@ -2672,7 +2684,7 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
     return true;
 }
 
-bool static Reorganize(CTxDB& txdb, CBlockIndex* pindexNew)
+bool static Reorganize(CTxDBBase& txdb, CBlockIndex* pindexNew)
 {
     printf("REORGANIZE: Switching chains\n");
     printf("  Old tip: %s height %d trust %s\n",
@@ -2852,7 +2864,7 @@ bool static Reorganize(CTxDB& txdb, CBlockIndex* pindexNew)
 
 
 // Called from inside SetBestChain: attaches a block to the new best chain being built
-bool CBlock::SetBestChainInner(CTxDB& txdb, CBlockIndex *pindexNew)
+bool CBlock::SetBestChainInner(CTxDBBase& txdb, CBlockIndex *pindexNew)
 {
     uint256 hash = GetHash();
 
@@ -2876,7 +2888,7 @@ bool CBlock::SetBestChainInner(CTxDB& txdb, CBlockIndex *pindexNew)
     return true;
 }
 
-bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
+bool CBlock::SetBestChain(CTxDBBase& txdb, CBlockIndex* pindexNew)
 {
     uint256 hash = GetHash();
 
@@ -3091,7 +3103,7 @@ bool CBlock::SetBestChain(CTxDB& txdb, CBlockIndex* pindexNew)
 // guaranteed to be in main chain by sync-checkpoint. This rule is
 // introduced to help nodes establish a consistent view of the coin
 // age (trust score) of competing branches.
-bool CTransaction::GetCoinAge(CTxDB& txdb, uint64_t& nCoinAge) const
+bool CTransaction::GetCoinAge(CTxDBBase& txdb, uint64_t& nCoinAge) const
 {
     CBigNum bnCentSecond = 0;  // coin age in the unit of cent-seconds
     nCoinAge = 0;
@@ -4439,7 +4451,7 @@ string GetWarnings(string strFor)
 //
 
 
-bool static AlreadyHave(CTxDB& txdb, const CInv& inv)
+bool static AlreadyHave(CTxDBBase& txdb, const CInv& inv)
 {
     switch (inv.type)
     {
@@ -5563,6 +5575,13 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
                     printf("pong from %s: %.1fms\n", pfrom->addr.ToString().c_str(), (double)nRtt / 1000.0);
             }
         }
+    }
+
+
+    else if (strCommand == "getsnap" || strCommand == "snap" ||
+             strCommand == "getsnapchunk" || strCommand == "snapchunk")
+    {
+        SnapshotNet::ProcessSnapshotMessage(pfrom, strCommand, vRecv);
     }
 
 

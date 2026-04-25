@@ -68,7 +68,8 @@ class CMessageHeader
 /** nServices flags */
 enum
 {
-    NODE_NETWORK = (1 << 0),
+    NODE_NETWORK  = (1 << 0),
+    NODE_SNAPSHOT = (1 << 1), // peer can serve UTXO snapshot chunks
 };
 
 /** A CService with information about it as peer */

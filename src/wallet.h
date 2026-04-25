@@ -716,12 +716,12 @@ public:
     int64_t GetTxTime() const;
     int GetRequestCount() const;
 
-    void AddSupportingTransactions(CTxDB& txdb);
+    void AddSupportingTransactions(CTxDBBase& txdb);
 
-    bool AcceptWalletTransaction(CTxDB& txdb, bool fCheckInputs=true);
+    bool AcceptWalletTransaction(CTxDBBase& txdb, bool fCheckInputs=true);
     bool AcceptWalletTransaction();
 
-    void RelayWalletTransaction(CTxDB& txdb);
+    void RelayWalletTransaction(CTxDBBase& txdb);
     void RelayWalletTransaction();
 };
 

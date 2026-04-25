@@ -30,10 +30,14 @@ static const int DATABASE_VERSION = 70509;
 // network protocol versioning
 //
 
-static const int PROTOCOL_VERSION = 70205;
+static const int PROTOCOL_VERSION = 70206;
 
 // v5 hard fork: require new protocol version (disconnects old nodes)
 static const int MIN_PROTO_VERSION = 70205;
+
+// Peers >= this version support the P2P UTXO snapshot protocol
+// (getsnap/snap/getsnapchunk/snapchunk and the NODE_SNAPSHOT service flag).
+static const int SNAPSHOT_PROTO_VERSION = 70206;
 
 static const int INIT_PROTO_VERSION = 209;
 

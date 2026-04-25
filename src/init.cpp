@@ -15,6 +15,7 @@
 #include "openssl_compat.h"
 #include "bootstrap.h"
 #include "utxosnapshot.h"
+#include "snapshotnet.h"
 #include "tor/tor_embedded.h"
 #include "tor/onion_v3.h"
 #include "tor/tor_process.h"
@@ -106,6 +107,31 @@ bool ShutdownRequested()
 
 {
     return fRequestShutdown;
+}
+
+// P2P UTXO snapshot fetcher. Started from AppInit2 step 11.6 when the chain
+// is empty and snapshot mode is enabled. Saves utxo-snapshot.bin on success
+// and requests shutdown so a fresh boot can load it via Step 6c.
+static void ThreadSnapshotFetch(void* parg)
+{
+    RenameThread("Triangles-snapfetch");
+    // Give peers ~30s to connect and complete version handshake.
+    for (int i = 0; i < 30 && !fRequestShutdown; ++i)
+        MilliSleep(1000);
+    if (fRequestShutdown) return;
+
+    int snapTimeoutSec = (int)GetArg("-snapshottimeout", 600);
+    printf("SnapshotNet: starting P2P snapshot fetch (timeout=%ds)...\n", snapTimeoutSec);
+
+    std::string err;
+    if (SnapshotNet::TryFetchSnapshot(GetDataDir(), snapTimeoutSec, err)) {
+        printf("SnapshotNet: snapshot saved. Shutting down — restart the daemon to load it.\n");
+        uiInterface.InitMessage(_("UTXO snapshot saved. Restart the node to load it."));
+        StartShutdown();
+    } else {
+        printf("SnapshotNet: P2P snapshot fetch failed: %s\n", err.c_str());
+        printf("SnapshotNet: falling back to genesis sync. Use -bootstrap for legacy HTTP fallback.\n");
+    }
 }
 
 void ThreadDeferredStartup(void* parg)
@@ -888,17 +914,25 @@ bool AppInit2()
     // ********************************************************* Step 6b: bootstrap download (daemon)
     // Automatic: if data dir has no blockchain, bootstrap without asking.
     // Can also be forced with -bootstrap flag, or disabled with -nobootstrap.
+    //
+    // v5.9.5: P2P UTXO snapshot fetch is the default for fresh installs (Step 11.6).
+    // The legacy clearnet HTTP bootstrap only runs when the user explicitly requests
+    // it via -bootstrap, or when -snapshot=0 disables the P2P fetcher.
 #ifndef QT_GUI
     {
         bool wantsBootstrap = GetBoolArg("-bootstrap", false);
         bool noBootstrap = GetBoolArg("-nobootstrap", false);
+        bool snapshotMode = GetBoolArg("-snapshot", true);
         fs::path dataPath = GetDataDir();
         bool needsBootstrap = Bootstrap::NeedsBootstrap(dataPath);
 
-        if (needsBootstrap && !noBootstrap) {
+        if (needsBootstrap && !noBootstrap && !snapshotMode) {
             printf("Bootstrap: no blockchain data found — downloading automatically.\n");
             printf("Bootstrap: (use -nobootstrap to skip)\n");
             wantsBootstrap = true;
+        } else if (needsBootstrap && snapshotMode && !wantsBootstrap) {
+            printf("Bootstrap: no blockchain data found — will fetch UTXO snapshot via P2P after network start.\n");
+            printf("Bootstrap: (use -bootstrap for legacy clearnet HTTP bootstrap, or -snapshot=0 to disable P2P fetcher)\n");
         }
 
     if (wantsBootstrap)
@@ -1431,6 +1465,24 @@ bool AppInit2()
 
     if (fServer)
         NewThread(ThreadRPCServer, NULL);
+
+    // ********************************************************* Step 11.6: P2P UTXO snapshot fetch
+    // If the chain is empty and snapshot mode is enabled (default), spawn a
+    // background thread that waits for snapshot-capable peers, downloads the
+    // canonical snapshot via P2P, and saves it to utxo-snapshot.bin. On
+    // success, requests a clean shutdown so the user can restart and have
+    // Step 6c load the snapshot in a fresh boot.
+    {
+        bool snapshotMode = GetBoolArg("-snapshot", true);
+        bool needsSnapshot = (nBestHeight <= 0);
+        bool haveSnapshotFile = fs::exists(GetDataDir() / "utxo-snapshot.bin");
+
+        if (snapshotMode && needsSnapshot && !haveSnapshotFile &&
+            Checkpoints::GetBestSnapshotHeight() > 0)
+        {
+            NewThread(ThreadSnapshotFetch, NULL);
+        }
+    }
 
     {
         LOCK(cs_DeferredStartup);

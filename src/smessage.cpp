@@ -2110,7 +2110,7 @@ int SecureMsgInsertAddress(CKeyID& hashKey, CPubKey& pubKey)
 };
 
 
-static bool ScanBlock(CBlock& block, CTxDB& txdb, SecMsgDB& addrpkdb,
+static bool ScanBlock(CBlock& block, CTxDBBase& txdb, SecMsgDB& addrpkdb,
     uint32_t& nTransactions, uint32_t& nInputs, uint32_t& nPubkeys, uint32_t& nDuplicates)
 {
     // -- should have LOCK(cs_smsg) where db is opened

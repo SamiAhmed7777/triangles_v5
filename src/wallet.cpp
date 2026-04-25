@@ -102,14 +102,14 @@ static bool GetIndexedWalletTxHeight(const CTxIndex& txindex, int& nHeight)
     return true;
 }
 
-static bool ReadIndexedWalletTransaction(CTxDB& txdb, const uint256& hashTx, CTransaction& tx, CTxIndex& txindex, int& nHeight)
+static bool ReadIndexedWalletTransaction(CTxDBBase& txdb, const uint256& hashTx, CTransaction& tx, CTxIndex& txindex, int& nHeight)
 {
     if (!txdb.ReadDiskTx(hashTx, tx, txindex))
         return false;
     return GetIndexedWalletTxHeight(txindex, nHeight);
 }
 
-static bool ReadIndexedWalletTransaction(CTxDB& txdb, const CDiskTxPos& txPos, CTransaction& tx, CTxIndex& txindex, int& nHeight)
+static bool ReadIndexedWalletTransaction(CTxDBBase& txdb, const CDiskTxPos& txPos, CTransaction& tx, CTxIndex& txindex, int& nHeight)
 {
     tx.SetNull();
     if (!tx.ReadFromDisk(txPos))
@@ -903,7 +903,7 @@ void CWalletTx::GetAccountAmounts(const string& strAccount, int64_t& nReceived,
     }
 }
 
-void CWalletTx::AddSupportingTransactions(CTxDB& txdb)
+void CWalletTx::AddSupportingTransactions(CTxDBBase& txdb)
 {
     vtxPrev.clear();
 
@@ -1227,7 +1227,7 @@ void CWallet::ReacceptWalletTransactions()
     }
 }
 
-void CWalletTx::RelayWalletTransaction(CTxDB& txdb)
+void CWalletTx::RelayWalletTransaction(CTxDBBase& txdb)
 {
     for (const CMerkleTx& tx : vtxPrev)
     {

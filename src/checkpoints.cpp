@@ -42,6 +42,21 @@ namespace Checkpoints
         {2209000, uint256("0x04c78a6fc863bed918a9364c58c64489943b2e85d84ddb1ac2fba584f390d5dc")},
     };
 
+    // Published UTXO snapshot file SHA256, keyed by snapshot height.
+    // Each entry binds height -> SHA256 of the canonical snapshot file produced by
+    // UtxoSnapshot::DumpSnapshot at that height. Used by SnapshotNet to verify
+    // P2P-delivered snapshots without trusting any peer.
+    //
+    // Maintainers: after producing a snapshot, sha256 the file and add an entry
+    // here. The corresponding (height, blockhash) must already exist in
+    // mapCheckpoints / mapCheckpointsTestnet.
+    static std::map<int, uint256> mapSnapshotHashes = {
+        // {2186940, uint256("0x...sha256-of-utxo-snapshot.bin...")},
+    };
+
+    static std::map<int, uint256> mapSnapshotHashesTestnet = {
+    };
+
     static MapCheckpoints mapCheckpointsTestnet = {
         {     0, hashGenesisBlockTestNet },
         {  2000, uint256("0x0000000000b5f20078bf46ebdf1500813bb6b2cb482065aa93b89e073b2c6467")},
@@ -87,6 +102,22 @@ namespace Checkpoints
         MapCheckpoints& checkpoints = (fTestNet ? mapCheckpointsTestnet : mapCheckpoints);
 
         return checkpoints.rbegin()->first;
+    }
+
+    int GetBestSnapshotHeight()
+    {
+        std::map<int, uint256>& snaps = (fTestNet ? mapSnapshotHashesTestnet : mapSnapshotHashes);
+        if (snaps.empty()) return 0;
+        return snaps.rbegin()->first;
+    }
+
+    bool GetSnapshotHash(int nHeight, uint256& fileHashOut)
+    {
+        std::map<int, uint256>& snaps = (fTestNet ? mapSnapshotHashesTestnet : mapSnapshotHashes);
+        auto it = snaps.find(nHeight);
+        if (it == snaps.end()) return false;
+        fileHashOut = it->second;
+        return true;
     }
 
     CBlockIndex* GetLastCheckpoint(const std::map<uint256, CBlockIndex*>& mapBlockIndex)

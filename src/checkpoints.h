@@ -45,6 +45,11 @@ namespace Checkpoints
     // Return conservative estimate of total number of blocks, 0 if unknown
     int GetTotalBlocksEstimate();
 
+    // Return the highest checkpoint height that has a published UTXO snapshot
+    // hash, along with the snapshot's file SHA256. Returns 0 height if none.
+    int GetBestSnapshotHeight();
+    bool GetSnapshotHash(int nHeight, uint256& fileHashOut);
+
     // Returns last CBlockIndex* in mapBlockIndex that is a checkpoint
     CBlockIndex* GetLastCheckpoint(const std::map<uint256, CBlockIndex*>& mapBlockIndex);
 
