@@ -25,11 +25,13 @@ namespace Bootstrap {
     // Download a single file via HTTP GET, write to destPath.
     // If noProxy is true, bypass Tor SOCKS proxy and connect directly
     // (used for clearnet bootstrap downloads).
+    // If portOverride is set (>0), uses that port instead of the default PORT.
     bool DownloadFile(const std::string& host, const std::string& urlPath,
                       const boost::filesystem::path& destPath,
                       ProgressCallback progressFn,
                       std::string& strError,
-                      bool noProxy = false);
+                      bool noProxy = false,
+                      int portOverride = -1);
 
     // Fetch the file manifest (list of relative paths to download)
     bool FetchFileList(const std::string& host,

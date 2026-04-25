@@ -208,12 +208,13 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
                   const fs::path& destPath,
                   ProgressCallback progressFn,
                   std::string& strError,
-                  bool noProxy)
+                  bool noProxy,
+                  int portOverride)
 {
     try {
         std::string currentHost = host;
         std::string currentPath = urlPath;
-        int currentPort = PORT;
+        int currentPort = (portOverride > 0) ? portOverride : PORT;
         bool useSSL = false;
         std::string headerData;
         int redirectCount = 0;
@@ -675,7 +676,9 @@ bool DownloadBootstrap(const std::string& host,
     fs::path tmpTarGz = dataDir / "bootstrap.tar.gz.tmp";
     std::string tarUrl = std::string(BASE_PATH) + "triangles-bootstrap.tar.gz";
 
+    printf("DownloadBootstrap(): attempting tar.gz download from %s%s\n", host.c_str(), tarUrl.c_str());
     bool tarDownloaded = DownloadFile(host, tarUrl, tmpTarGz, progressFn, strError, noProxy);
+    printf("DownloadBootstrap(): tarDownloaded=%d result=%s\n", tarDownloaded, strError.c_str());
 
     if (tarDownloaded) {
         bool extractOk = ExtractTarGz(tmpTarGz, dataDir, strError);
