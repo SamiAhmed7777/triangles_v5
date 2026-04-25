@@ -131,15 +131,21 @@ struct CHeaderSyncNode
 
 static std::map<uint256, CHeaderSyncNode> mapHeaderSync;
 static uint256 hashBestHeaderSync = 0;
+static int64_t nLastNewHeaderTime = 0;
 static CCriticalSection cs_PostIbdWork;
 static bool fPostIbdWorkStarted = false;
 
 static const unsigned int MAX_HEADER_SYNC_CACHE = 15000;
 static const unsigned int HEADER_DOWNLOAD_WINDOW = 512;  // Increased from 128 for parallel downloads
 static const unsigned int HEADER_DOWNLOAD_PER_PEER = 32;   // Reduced from 64 for Tor circuit stability
+static const unsigned int HEADER_SYNC_LOW_WATER = HEADER_DOWNLOAD_WINDOW / 4;
+static const unsigned int HEADER_SYNC_TARGET_INFLIGHT = HEADER_DOWNLOAD_WINDOW / 2;
 static const int64_t HEADER_REQUEST_TIMEOUT_MICROS = 60 * 1000000;    // 60s for Tor latency (was 30s)
 static const int64_t HEADER_REDUNDANT_REQUEST_MICROS = 5 * 1000000;   // 5s redundant request (reduced for Tor)
 static const int64_t HEADER_SYNC_TTL_MICROS = 15 * 60 * 1000000;     // 15-minute TTL for cache entries (extended for Tor latency)
+static const int64_t HEADER_SYNC_REFILL_MIN_INTERVAL_SECONDS = 5;
+static const int64_t HEADER_SYNC_CONTROL_INTERVAL_SECONDS = 5;
+static const int64_t HEADER_SYNC_WATCHDOG_SECONDS = 25;
 
 static void ThreadPostIbdWork(void* parg)
 {
@@ -407,6 +413,26 @@ static unsigned int CountHeaderSyncInFlight()
     return nInFlight;
 }
 
+static unsigned int GetHeaderSyncPlannerDepth()
+{
+    if (hashBestHeaderSync == 0)
+        return 0;
+
+    return (unsigned int)GetHeaderSyncDownloadPath(hashBestHeaderSync).size();
+}
+
+static int GetHeaderSyncPlannerHeight()
+{
+    if (hashBestHeaderSync == 0)
+        return pindexBest ? pindexBest->nHeight : -1;
+
+    std::map<uint256, CHeaderSyncNode>::const_iterator mi = mapHeaderSync.find(hashBestHeaderSync);
+    if (mi == mapHeaderSync.end())
+        return pindexBest ? pindexBest->nHeight : -1;
+
+    return mi->second.nHeight;
+}
+
 static unsigned int QueueHeaderSyncBlocks(CNode* pfrom, unsigned int nWindow)
 {
     if (!pfrom || hashBestHeaderSync == 0)
@@ -471,6 +497,67 @@ static void ContinueHeaderSync(CNode* pfrom, const uint256& hashTip)
         return;
 
     pfrom->PushMessage("getheaders", locator, uint256(0));
+}
+
+static bool RequestHeaderSyncRefill(CNode* pfrom, uint256 hashTip, int64_t nMinIntervalSeconds, const char* pszReason)
+{
+    if (!pfrom || pfrom->fClient || pfrom->nVersion == 0 || !IsInitialBlockDownload())
+        return false;
+
+    const int64_t nNowSec = GetTime();
+    if (nMinIntervalSeconds > 0 &&
+        nNowSec - pfrom->nLastIbdHeaderRequest < nMinIntervalSeconds)
+        return false;
+
+    uint256 hashLocatorTip = hashTip;
+    if (hashLocatorTip == 0 ||
+        (!mapBlockIndex.count(hashLocatorTip) && !mapHeaderSync.count(hashLocatorTip)))
+    {
+        hashLocatorTip = hashBestHeaderSync;
+    }
+
+    if (hashLocatorTip != 0 && (!pindexBest || hashLocatorTip != pindexBest->GetBlockHash()))
+    {
+        ContinueHeaderSync(pfrom, hashLocatorTip);
+    }
+    else
+    {
+        if (!pindexBest)
+            return false;
+
+        pfrom->pindexLastGetHeadersBegin = NULL;
+        pfrom->PushGetHeaders(pindexBest, uint256(0));
+        hashLocatorTip = pindexBest->GetBlockHash();
+    }
+
+    pfrom->nLastIbdHeaderRequest = nNowSec;
+    printf("IBD-DIAG: %s getheaders to peer=%s locator=%s plannerDepth=%u inflight=%u\n",
+        pszReason, pfrom->addr.ToString().c_str(),
+        hashLocatorTip.ToString().substr(0,20).c_str(),
+        GetHeaderSyncPlannerDepth(), CountHeaderSyncInFlight());
+    return true;
+}
+
+static unsigned int RequestHeaderSyncRefillAllPeers(uint256 hashTip, int64_t nMinIntervalSeconds, const char* pszReason)
+{
+    std::vector<CNode*> vEligiblePeers;
+    {
+        LOCK(cs_vNodes);
+        for (CNode* pnode : vNodes)
+        {
+            if (!pnode->fClient && pnode->nVersion != 0 && !pnode->fDisconnect)
+                vEligiblePeers.push_back(pnode);
+        }
+    }
+
+    unsigned int nRequested = 0;
+    for (CNode* pnode : vEligiblePeers)
+    {
+        if (RequestHeaderSyncRefill(pnode, hashTip, nMinIntervalSeconds, pszReason))
+            ++nRequested;
+    }
+
+    return nRequested;
 }
 
 // Parallel block downloading: distribute blocks across all available peers
@@ -3599,29 +3686,23 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     if (nBestHeight % 5000 == 0 || !IsInitialBlockDownload())
         printf("ProcessBlock: ACCEPTED block %d\n", nBestHeight);
 
-    if (hashBestHeaderSync != 0)
+    if (IsInitialBlockDownload())
     {
-        // Use parallel queue to distribute across all peers
-        const unsigned int nQueued = QueueHeaderSyncBlocksParallel(HEADER_DOWNLOAD_WINDOW);
+        const unsigned int nQueued =
+            (hashBestHeaderSync != 0) ? QueueHeaderSyncBlocksParallel(HEADER_DOWNLOAD_WINDOW) : 0;
         if (nQueued > 0)
             printf("IBD-DIAG: queued %u more blocks from header planner after accepting %s\n",
                 nQueued, hash.ToString().substr(0,20).c_str());
-    }
-    else if (IsInitialBlockDownload() && nBestHeight < GetNumBlocksOfPeers())
-    {
-        // Header cache exhausted during IBD — request more headers from all peers.
-        // This fixes the stall where mapHeaderSync drains to empty, hashBestHeaderSync
-        // becomes 0, and the refill path is never taken again.
-        printf("IBD-DIAG: header cache empty at height %d, requesting more headers from all peers\n",
-            nBestHeight);
-        LOCK(cs_vNodes);
-        for (CNode* pnode : vNodes)
+
+        const unsigned int nPlannerDepth = GetHeaderSyncPlannerDepth();
+        if (nPlannerDepth <= HEADER_SYNC_LOW_WATER)
         {
-            if (!pnode->fClient && pnode->nVersion != 0)
-            {
-                pnode->pindexLastGetHeadersBegin = NULL;
-                pnode->PushGetHeaders(pindexBest, uint256(0));
-            }
+            const unsigned int nRefilled = RequestHeaderSyncRefillAllPeers(
+                hashBestHeaderSync, HEADER_SYNC_REFILL_MIN_INTERVAL_SECONDS,
+                (nPlannerDepth == 0) ? "post-accept planner empty" : "post-accept planner low-water");
+            if (nRefilled > 0)
+                printf("IBD-DIAG: post-accept requested headers from %u peers at plannerDepth=%u after block %s\n",
+                    nRefilled, nPlannerDepth, hash.ToString().substr(0,20).c_str());
         }
     }
 
@@ -4522,7 +4603,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             // so we learn about future blocks much faster. The headers handler
             // will AskFor each unknown block, pre-populating the download queue.
             if (fIBD)
-                pfrom->PushGetHeaders(pindexBest, uint256(0));
+                RequestHeaderSyncRefill(pfrom, hashBestHeaderSync, 0, "version bootstrap");
             printf("IBD-DIAG: sent getblocks%s from height %d to peer %s\n",
                 fIBD ? "+getheaders" : "", nBestHeight, pfrom->addr.ToString().c_str());
         }
@@ -4980,6 +5061,9 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         if (hashBestHeaderSync != 0)
             nRequested = QueueHeaderSyncBlocksParallel(HEADER_DOWNLOAD_WINDOW);
 
+        if (nNewHeaders > 0)
+            nLastNewHeaderTime = GetTime();
+
         if (nNewHeaders > 0 || nRequested > 0)
             printf("IBD-DIAG: accepted %d new headers, queued %d blocks from %zu headers (peer=%s bestHeader=%s)\n",
                 nNewHeaders, nRequested, vHeaders.size(), pfrom->addr.ToString().c_str(),
@@ -4994,6 +5078,27 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
                 ContinueHeaderSync(pfrom, hashChainTip);
             else
                 pfrom->PushGetBlocks(pindexBest, uint256(0));
+        }
+        else if (IsInitialBlockDownload() && nNewHeaders > 0 && hashChainTip != 0)
+        {
+            // Partial batch with new content. The peer either truncated its
+            // response (e.g. send-buffer pressure on Tor) or is briefly at the
+            // tip of what it knows. Either way the v5.9.2 fix only refilled
+            // when the cache fully drained, so a partial batch could leave the
+            // pipeline silently parked. Ask this peer to continue from the
+            // highest header we now know — covers truncated responses, and
+            // costs at most one empty headers reply when the peer is honestly
+            // at the chain tip.
+            ContinueHeaderSync(pfrom, hashChainTip);
+        }
+        else if (IsInitialBlockDownload())
+        {
+            const unsigned int nPlannerDepth = GetHeaderSyncPlannerDepth();
+            if (nPlannerDepth <= HEADER_SYNC_LOW_WATER)
+                RequestHeaderSyncRefill(
+                    pfrom, (hashChainTip != 0) ? hashChainTip : hashBestHeaderSync,
+                    HEADER_SYNC_REFILL_MIN_INTERVAL_SECONDS,
+                    (nPlannerDepth == 0) ? "headers planner empty" : "headers planner low-water");
         }
     }
 
@@ -5996,6 +6101,68 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
             }
         }
 
+        // Per-peer IBD getheaders heartbeat. The v5.9.2 belt-and-suspenders
+        // had three holes that this replaces:
+        //   1. It only fired when hashBestHeaderSync == 0 (cache fully empty);
+        //      a few stale in-flight entries blocked refill until 15-min TTL.
+        //   2. The throttle was process-wide, so an unresponsive peer could
+        //      "absorb" the one-per-30s request and leave others unkicked.
+        //   3. It had no path for "peer stopped feeding mid-batch" — only
+        //      total-cache-drain triggered it.
+        //
+        // Per-peer heartbeat with an adaptive interval covers all three:
+        //   - Low-water mode (cache below the download window): 15s, refills
+        //     before the planner runs dry without waiting for cache exhaustion.
+        //   - Steady mode (cache filled): 60s, keeps each peer's view of our
+        //     locator fresh so a peer that goes silent gets re-asked, and a
+        //     peer that catches up between calls can announce new headers.
+        // An empty headers response is ~14 bytes — cheap on Tor, no abuse risk.
+        if (!pto->fClient && pto->nVersion != 0 && IsInitialBlockDownload())
+        {
+            const int64_t nNowSec = GetTime();
+            const unsigned int nPlannerDepth = GetHeaderSyncPlannerDepth();
+            const unsigned int nInFlight = CountHeaderSyncInFlight();
+            static int64_t nLastHeaderPlannerControl = 0;
+            static int64_t nLastHeaderWatchdog = 0;
+
+            if (nLastNewHeaderTime == 0)
+                nLastNewHeaderTime = nNowSec;
+
+            if (nNowSec - nLastHeaderPlannerControl >= HEADER_SYNC_CONTROL_INTERVAL_SECONDS &&
+                nPlannerDepth < HEADER_SYNC_LOW_WATER &&
+                nInFlight < HEADER_SYNC_TARGET_INFLIGHT)
+            {
+                const unsigned int nRefilled = RequestHeaderSyncRefillAllPeers(
+                    hashBestHeaderSync, HEADER_SYNC_REFILL_MIN_INTERVAL_SECONDS,
+                    "control-loop");
+                if (nRefilled > 0)
+                    printf("IBD-DIAG: control-loop refill from %u peers (plannerDepth=%u inflight=%u target=%u)\n",
+                        nRefilled, nPlannerDepth, nInFlight, HEADER_SYNC_TARGET_INFLIGHT);
+                nLastHeaderPlannerControl = nNowSec;
+            }
+
+            if (nNowSec - nLastHeaderWatchdog >= HEADER_SYNC_CONTROL_INTERVAL_SECONDS &&
+                nNowSec - nLastNewHeaderTime >= HEADER_SYNC_WATCHDOG_SECONDS)
+            {
+                const unsigned int nRefilled = RequestHeaderSyncRefillAllPeers(
+                    hashBestHeaderSync, HEADER_SYNC_REFILL_MIN_INTERVAL_SECONDS,
+                    "headers-watchdog");
+                if (nRefilled > 0)
+                    printf("IBD-DIAG: headers watchdog refill from %u peers after %llds without new headers (plannerDepth=%u inflight=%u)\n",
+                        nRefilled,
+                        (long long)(nNowSec - nLastNewHeaderTime),
+                        nPlannerDepth,
+                        nInFlight);
+                nLastHeaderWatchdog = nNowSec;
+            }
+
+            const int64_t nMinInterval =
+                (mapHeaderSync.size() < HEADER_DOWNLOAD_WINDOW) ? 15 : 60;
+
+            if (nNowSec - pto->nLastIbdHeaderRequest >= nMinInterval)
+                RequestHeaderSyncRefill(pto, hashBestHeaderSync, nMinInterval, "heartbeat");
+        }
+
         //
         // Message: getdata
         //
@@ -6003,8 +6170,14 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
         if (IsInitialBlockDownload()) {
             static int64_t nLastStatus = 0;
             if (GetTime() - nLastStatus >= 15) {
-                printf("IBD-DIAG: STATUS height=%d peers=%d askfor_queued=%d orphans=%d\n",
-                    nBestHeight, (int)vNodes.size(), (int)pto->mapAskFor.size(), (int)mapOrphanBlocks.size());
+                printf("IBD-DIAG: STATUS height=%d plannerHeight=%d plannerDepth=%u inflight=%u peers=%d askfor_queued=%d orphans=%d\n",
+                    nBestHeight,
+                    GetHeaderSyncPlannerHeight(),
+                    GetHeaderSyncPlannerDepth(),
+                    CountHeaderSyncInFlight(),
+                    (int)vNodes.size(),
+                    (int)pto->mapAskFor.size(),
+                    (int)mapOrphanBlocks.size());
                 nLastStatus = GetTime();
             }
         }
