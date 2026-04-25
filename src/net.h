@@ -277,6 +277,7 @@ public:
     uint256 hashLastGetHeadersEnd;
     int nStartingHeight;
     int64_t nLastTipCheck;   // last time we asked this peer for chain tip
+    int64_t nLastIbdHeaderRequest; // last time we sent IBD-mode getheaders to this peer (heartbeat throttle)
     int64_t nAvgBlockLatencyUs;  // rolling average block delivery latency (microseconds)
     int nBlocksDelivered;        // count of blocks delivered by this peer
     int nBestKnownHeight;        // highest block height known to this peer (updated from inv/block msgs)
@@ -336,6 +337,7 @@ public:
         hashLastGetHeadersEnd = 0;
         nStartingHeight = -1;
         nLastTipCheck = 0;
+        nLastIbdHeaderRequest = 0;
         nAvgBlockLatencyUs = 0;
         nBlocksDelivered = 0;
         nBestKnownHeight = -1;
