@@ -52,6 +52,7 @@ option(USE_QRCODE         "Enable QR code generation via libqrencode"        OFF
 option(USE_DBUS           "Enable D-Bus notifications (Linux only)"          ON)
 option(USE_ZMQ            "Enable ZMQ publisher support"                     OFF)
 option(USE_TOR_EMBEDDED   "Enable embedded Tor library linking"              OFF)
+option(BUILD_ROCKSDB      "Build with RocksDB chain database backend"        OFF)
 option(USE_O3             "Use -O3 optimization instead of -O2"              OFF)
 option(ENABLE_PIE         "Build position-independent executables"           OFF)
 option(ENABLE_STATIC      "Prefer static linking (Linux release builds)"     OFF)
@@ -95,6 +96,18 @@ if(USE_ZMQ)
     pkg_check_modules(ZMQ REQUIRED IMPORTED_TARGET libzmq)
 endif()
 
+if(BUILD_ROCKSDB)
+    # RocksDB ships a CMake config package on most distros (rocksdbConfig.cmake).
+    # On MSYS2/Homebrew/vcpkg the imported target is RocksDB::rocksdb.
+    find_package(RocksDB CONFIG)
+    if(NOT RocksDB_FOUND)
+        # Fall back to pkg-config for systems without the CMake config (older
+        # Linux distros). Builds an IMPORTED target named PkgConfig::RocksDB.
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(RocksDB REQUIRED IMPORTED_TARGET rocksdb)
+    endif()
+endif()
+
 if(BUILD_QT)
     find_package(Qt5 5.9 REQUIRED COMPONENTS Core Gui Widgets)
     find_package(Qt5 COMPONENTS LinguistTools QUIET)
@@ -130,6 +143,7 @@ message(STATUS "  QR code:            ${USE_QRCODE}")
 message(STATUS "  D-Bus:              ${USE_DBUS}")
 message(STATUS "  ZMQ:                ${USE_ZMQ}")
 message(STATUS "  Embedded Tor:       ${USE_TOR_EMBEDDED}")
+message(STATUS "  RocksDB backend:    ${BUILD_ROCKSDB}")
 message(STATUS "  Static linking:     ${ENABLE_STATIC}")
 message(STATUS "  ccache:             ${CCACHE_PROGRAM}")
 message(STATUS "  Unity build:        ${ENABLE_UNITY_BUILD}")
