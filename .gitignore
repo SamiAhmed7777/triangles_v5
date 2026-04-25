@@ -7,8 +7,12 @@
 *.a
 /dist/
 build/
+build2/
+build_*/
 release/
 debug/
+build_err*.txt
+*build_err.txt
 /Makefile
 Makefile.Debug
 Makefile.Release
@@ -24,6 +28,7 @@ ui_*.h
 qrc_*.cpp
 *.pro.user
 *.pro.user.*
+*.qm
 
 # Blockchain data
 *.dat
