@@ -3476,11 +3476,17 @@ bool CBlock::AcceptBlock()
     // - Hardcoded checkpoints already guarantee chain integrity
     // - The persisted hashSyncCheckpoint in LevelDB blocks IBD from progressing
 
-    // Enforce rule that the coinbase starts with serialized block height
-    CScript expect = CScript() << nHeight;
-    if (vtx[0].vin[0].scriptSig.size() < expect.size() ||
-        !std::equal(expect.begin(), expect.end(), vtx[0].vin[0].scriptSig.begin()))
-        return DoS(100, error("AcceptBlock() : block height mismatch in coinbase"));
+    // Legacy Triangles blocks were created before mandatory coinbase-height enforcement.
+    // Do NOT enforce this rule against historical chain data during recovery/import.
+    static const int COINBASE_HEIGHT_ENFORCEMENT_HEIGHT = 2300000;
+
+    if (nHeight >= COINBASE_HEIGHT_ENFORCEMENT_HEIGHT)
+    {
+        CScript expect = CScript() << nHeight;
+        if (vtx[0].vin[0].scriptSig.size() < expect.size() ||
+            !std::equal(expect.begin(), expect.end(), vtx[0].vin[0].scriptSig.begin()))
+            return DoS(100, error("AcceptBlock() : block height mismatch in coinbase"));
+    }
 
     // Write block to history file
     if (!CheckDiskSpace(::GetSerializeSize(*this, SER_DISK, CLIENT_VERSION)))
