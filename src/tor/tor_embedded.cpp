@@ -3,7 +3,6 @@
 // Distributed under the MIT/X11 software license
 //
 // BUILD REQUIREMENT: Link against libtor.a built from the official Tor source.
-// See CODEX-TOR-GUIDE.md for submodule setup and build instructions.
 //
 // This file compiles in two modes:
 //   1. ENABLE_TOR_EMBEDDED defined: full embedded Tor via tor_api.h
