@@ -39,8 +39,6 @@ namespace Checkpoints
         {2205000, uint256("0xf7aa893ec012181e321783d6a5487addf6997377908faa3e760c9054a4217d29")},
         {2206000, uint256("0x780ae878f8b10b6cbd51ceb2c0799c90d3551fa916be62974375071b9e36581c")},
         {2207000, uint256("0x8836d67b0f08036c4a7c26ff0a29d4461a52b6d8f552165ad9c1abec2f3cadfd")},
-        {2208000, uint256("0xe4a19e8a29fa7aae47f7563377af3e896fee18ed069a64e325b8c2c6c820a1be")},
-        {2209000, uint256("0x04c78a6fc863bed918a9364c58c64489943b2e85d84ddb1ac2fba584f390d5dc")},
     };
 
     // Published UTXO snapshot file SHA256, keyed by snapshot height.
