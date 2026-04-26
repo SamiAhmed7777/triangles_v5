@@ -35,7 +35,7 @@
 #include <unistd.h>
 #endif
 
-namespace fs = boost::filesystem;
+namespace fs = std::filesystem;
 
 static std::string ReadTailLines(const fs::path& filePath, size_t maxLines)
 {

@@ -663,7 +663,7 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn)
         if ( !strCmd.empty())
         {
             boost::replace_all(strCmd, "%s", wtxIn.GetHash().GetHex());
-            boost::thread t(runCommand, strCmd); // thread runs free
+            std::thread(runCommand, strCmd).detach(); // thread runs free
         }
 
     }
@@ -1041,7 +1041,7 @@ bool CWallet::ScanForWalletTransactionsFromIndex(CBlockIndex* pindexStart, bool 
             setScripts.insert((*it).first);
     }
 
-    CTxDB txdb("r");
+    auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
     set<uint256> setSeedTxIds;
 
     for (const CKeyID& keyId : setKeys)
@@ -1162,7 +1162,7 @@ int CWallet::ScanForWalletTransaction(const uint256& hashTx)
 
 void CWallet::ReacceptWalletTransactions()
 {
-    CTxDB txdb("r");
+    auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
     bool fRepeat = true;
     while (fRepeat)
     {
@@ -1251,7 +1251,7 @@ void CWalletTx::RelayWalletTransaction(CTxDBBase& txdb)
 
 void CWalletTx::RelayWalletTransaction()
 {
-   CTxDB txdb("r");
+   auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
    RelayWalletTransaction(txdb);
 }
 
@@ -1278,7 +1278,7 @@ void CWallet::ResendWalletTransactions(bool fForce)
 
     // Rebroadcast any of our txes that aren't in a block yet
     printf("ResendWalletTransactions()\n");
-    CTxDB txdb("r");
+    auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
     {
         LOCK(cs_wallet);
         // Sort them in chronological order
@@ -1701,7 +1701,7 @@ bool CWallet::CreateTransaction(const vector<pair<CScript, int64_t> >& vecSend, 
     {
         LOCK2(cs_main, cs_wallet);
         // txdb must be opened before the mapWallet lock
-        CTxDB txdb("r");
+        auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
         {
             nFeeRet = nTransactionFee;
             while (true)
@@ -1895,7 +1895,7 @@ bool CWallet::GetStakeWeight(const CKeyStore& keystore, uint64_t& nMinWeight, ui
         }
     }
 
-    CTxDB txdb("r");
+    auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
     int64_t nNow = GetTime();
     for (auto& sc : vStakeCoins)
     {
@@ -1962,7 +1962,7 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
 
     int64_t nCredit = 0;
     CScript scriptPubKeyKernel;
-    CTxDB txdb("r");
+    auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
     for (auto pcoin : setCoins)
     {
         CTxIndex txindex;
@@ -2104,7 +2104,7 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
     // Calculate coin age reward
     {
         uint64_t nCoinAge;
-        CTxDB txdb("r");
+        auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
         if (!txNew.GetCoinAge(txdb, nCoinAge))
             return error("CreateCoinStake : failed to calculate coin age");
 
@@ -2689,7 +2689,7 @@ void CWallet::FixSpentCoins(int& nMismatchFound, int64_t& nBalanceInQuestion, bo
     for (map<uint256, CWalletTx>::iterator it = mapWallet.begin(); it != mapWallet.end(); ++it)
         vCoins.push_back(&(*it).second);
 
-    CTxDB txdb("r");
+    auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
     for (CWalletTx* pcoin : vCoins)
     {
         uint256 hashTx = pcoin->GetHash();

@@ -7,9 +7,8 @@
 #include "anonymize.h"
 #include "util.h"
 
-#include <boost/filesystem.hpp>
-#include <boost/thread/thread.hpp>
-#include <boost/thread/mutex.hpp>
+#include <thread>
+#include <mutex>
 #include <string>
 #include <cstring>
 #include <memory>
@@ -42,10 +41,10 @@ int check_interrupted(
     ) ? 1 : 0;
 }
 
-static boost::mutex initializing;
+static std::mutex initializing;
 
-static std::unique_ptr<boost::unique_lock<boost::mutex> > uninitialized(
-    new boost::unique_lock<boost::mutex>(
+static std::unique_ptr<std::unique_lock<std::mutex> > uninitialized(
+    new std::unique_lock<std::mutex>(
         initializing
     )
 );
@@ -57,5 +56,5 @@ void set_initialized(
 
 void wait_initialized(
 ) {
-    boost::unique_lock<boost::mutex> checking(initializing);
+    std::unique_lock<std::mutex> checking(initializing);
 }

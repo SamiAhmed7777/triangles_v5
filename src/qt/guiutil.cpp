@@ -20,8 +20,8 @@
 #include <QDesktopServices>
 #include <QThread>
 
-#include <boost/filesystem.hpp>
-#include <boost/filesystem/fstream.hpp>
+#include <filesystem>
+#include <fstream>
 
 #ifdef WIN32
 #ifdef _WIN32_WINNT
@@ -240,10 +240,10 @@ bool isObscured(QWidget *w)
 
 void openDebugLogfile()
 {
-    boost::filesystem::path pathDebug = GetDataDir() / "debug.log";
+    std::filesystem::path pathDebug = GetDataDir() / "debug.log";
 
     /* Open debug.log with the associated application */
-    if (boost::filesystem::exists(pathDebug))
+    if (std::filesystem::exists(pathDebug))
         QDesktopServices::openUrl(QUrl::fromLocalFile(QString::fromStdString(pathDebug.string())));
 }
 
@@ -272,7 +272,7 @@ bool ToolTipToRichTextFilter::eventFilter(QObject *obj, QEvent *evt)
 }
 
 #ifdef WIN32
-boost::filesystem::path static StartupShortcutPath()
+std::filesystem::path static StartupShortcutPath()
 {
     return GetSpecialFolderPath(CSIDL_STARTUP) / "triangles.lnk";
 }
@@ -280,13 +280,13 @@ boost::filesystem::path static StartupShortcutPath()
 bool GetStartOnSystemStartup()
 {
     // check for triangles.lnk
-    return boost::filesystem::exists(StartupShortcutPath());
+    return std::filesystem::exists(StartupShortcutPath());
 }
 
 bool SetStartOnSystemStartup(bool fAutoStart)
 {
     // If the shortcut exists already, remove it for updating
-    boost::filesystem::remove(StartupShortcutPath());
+    std::filesystem::remove(StartupShortcutPath());
 
     if (fAutoStart)
     {
@@ -343,9 +343,9 @@ bool SetStartOnSystemStartup(bool fAutoStart)
 // Follow the Desktop Application Autostart Spec:
 //  http://standards.freedesktop.org/autostart-spec/autostart-spec-latest.html
 
-boost::filesystem::path static GetAutostartDir()
+std::filesystem::path static GetAutostartDir()
 {
-    namespace fs = boost::filesystem;
+    namespace fs = std::filesystem;
 
     char* pszConfigHome = getenv("XDG_CONFIG_HOME");
     if (pszConfigHome) return fs::path(pszConfigHome) / "autostart";
@@ -354,14 +354,14 @@ boost::filesystem::path static GetAutostartDir()
     return fs::path();
 }
 
-boost::filesystem::path static GetAutostartFilePath()
+std::filesystem::path static GetAutostartFilePath()
 {
     return GetAutostartDir() / "triangles.desktop";
 }
 
 bool GetStartOnSystemStartup()
 {
-    boost::filesystem::ifstream optionFile(GetAutostartFilePath());
+    std::ifstream optionFile(GetAutostartFilePath());
     if (!optionFile.good())
         return false;
     // Scan through file for "Hidden=true":
@@ -381,7 +381,7 @@ bool GetStartOnSystemStartup()
 bool SetStartOnSystemStartup(bool fAutoStart)
 {
     if (!fAutoStart)
-        boost::filesystem::remove(GetAutostartFilePath());
+        std::filesystem::remove(GetAutostartFilePath());
     else
     {
         char pszExePath[MAX_PATH+1];
@@ -389,9 +389,9 @@ bool SetStartOnSystemStartup(bool fAutoStart)
         if (readlink("/proc/self/exe", pszExePath, sizeof(pszExePath)-1) == -1)
             return false;
 
-        boost::filesystem::create_directories(GetAutostartDir());
+        std::filesystem::create_directories(GetAutostartDir());
 
-        boost::filesystem::ofstream optionFile(GetAutostartFilePath(), std::ios_base::out|std::ios_base::trunc);
+        std::ofstream optionFile(GetAutostartFilePath(), std::ios_base::out|std::ios_base::trunc);
         if (!optionFile.good())
             return false;
         // Write a triangles.desktop file to the autostart directory:
@@ -407,15 +407,15 @@ bool SetStartOnSystemStartup(bool fAutoStart)
 }
 #elif defined(Q_OS_MAC) || defined(MAC_OSX) || defined(__APPLE__)
 
-boost::filesystem::path static GetLaunchAgentsDir()
+std::filesystem::path static GetLaunchAgentsDir()
 {
     const QString homeDir = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
     if (homeDir.isEmpty())
-        return boost::filesystem::path();
-    return boost::filesystem::path(homeDir.toStdString()) / "Library" / "LaunchAgents";
+        return std::filesystem::path();
+    return std::filesystem::path(homeDir.toStdString()) / "Library" / "LaunchAgents";
 }
 
-boost::filesystem::path static GetAutostartFilePath()
+std::filesystem::path static GetAutostartFilePath()
 {
     return GetLaunchAgentsDir() / "org.triangles.triangles-qt.plist";
 }
@@ -441,7 +441,7 @@ static std::string PlistEscape(const std::string& value)
 
 bool GetStartOnSystemStartup()
 {
-    boost::filesystem::ifstream optionFile(GetAutostartFilePath());
+    std::ifstream optionFile(GetAutostartFilePath());
     if (!optionFile.good())
         return false;
 
@@ -459,16 +459,16 @@ bool GetStartOnSystemStartup()
 bool SetStartOnSystemStartup(bool fAutoStart)
 {
     if (!fAutoStart)
-        return !boost::filesystem::exists(GetAutostartFilePath()) || boost::filesystem::remove(GetAutostartFilePath());
+        return !std::filesystem::exists(GetAutostartFilePath()) || std::filesystem::remove(GetAutostartFilePath());
 
     const QString exePath = QApplication::applicationFilePath();
     if (exePath.isEmpty())
         return false;
 
     const QString workingDir = QFileInfo(exePath).absolutePath();
-    boost::filesystem::create_directories(GetLaunchAgentsDir());
+    std::filesystem::create_directories(GetLaunchAgentsDir());
 
-    boost::filesystem::ofstream optionFile(GetAutostartFilePath(), std::ios_base::out|std::ios_base::trunc);
+    std::ofstream optionFile(GetAutostartFilePath(), std::ios_base::out|std::ios_base::trunc);
     if (!optionFile.good())
         return false;
 

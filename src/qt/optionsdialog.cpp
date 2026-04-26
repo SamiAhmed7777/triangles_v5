@@ -10,7 +10,7 @@
 #include "init.h"
 #include "util.h"
 
-#include <boost/filesystem.hpp>
+#include <filesystem>
 
 #include <QDir>
 #include <QFileDialog>
@@ -374,7 +374,7 @@ void OptionsDialog::on_dataDirBrowseButton_clicked()
 
 void OptionsDialog::updateDataDirFreeSpace()
 {
-    namespace fs = boost::filesystem;
+    namespace fs = std::filesystem;
     QString path = dataDirPath->text();
     fs::path fsPath(path.toStdString());
     try {
@@ -395,7 +395,7 @@ void OptionsDialog::updateDataDirFreeSpace()
 
 quint64 OptionsDialog::calculateDirSize(const QString& path)
 {
-    namespace fs = boost::filesystem;
+    namespace fs = std::filesystem;
     quint64 totalSize = 0;
     try {
         for (fs::recursive_directory_iterator it(path.toStdString()), end; it != end; ++it) {
@@ -411,7 +411,7 @@ bool OptionsDialog::handleDataDirChange()
     if (m_pendingDataDir.isEmpty() || m_pendingDataDir == m_currentDataDir)
         return false;
 
-    namespace fs = boost::filesystem;
+    namespace fs = std::filesystem;
     fs::path destPath(m_pendingDataDir.toStdString());
 
     // Check destination is writable

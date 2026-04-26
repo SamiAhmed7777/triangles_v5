@@ -38,13 +38,11 @@ target_include_directories(json_compat INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/js
 #    EXCLUDES init.cpp, wallet.cpp (QT_GUI-conditional), noui.cpp (target-specific)
 # ═══════════════════════════════════════════════════════════════════════════════
 set(CORE_SOURCES
-    alert.cpp
     addrman.cpp
     bootstrap.cpp
     checkpoints.cpp
     crypter.cpp
     db.cpp
-    irc.cpp
     key.cpp
     keystore.cpp
     main.cpp
@@ -74,6 +72,7 @@ set(CORE_SOURCES
     rpcsmessage.cpp
     zmqpublishnotifier.cpp
     txdb-base.cpp
+    txdb-factory.cpp
     txdb-leveldb.cpp
     utxosnapshot.cpp
     snapshotnet.cpp
@@ -120,7 +119,6 @@ target_link_libraries(triangles_common PUBLIC
     leveldb_bundled
     OpenSSL::SSL
     OpenSSL::Crypto
-    Boost::filesystem
     Boost::program_options
     Boost::thread
     Boost::chrono
@@ -217,11 +215,11 @@ target_precompile_headers(triangles_common PRIVATE
     "$<$<COMPILE_LANGUAGE:CXX>:<cstring$<ANGLE-R>>"
     "$<$<COMPILE_LANGUAGE:CXX>:<memory$<ANGLE-R>>"
     "$<$<COMPILE_LANGUAGE:CXX>:<functional$<ANGLE-R>>"
-    "$<$<COMPILE_LANGUAGE:CXX>:<boost/filesystem.hpp$<ANGLE-R>>"
-    "$<$<COMPILE_LANGUAGE:CXX>:<boost/filesystem/fstream.hpp$<ANGLE-R>>"
-    "$<$<COMPILE_LANGUAGE:CXX>:<boost/thread.hpp$<ANGLE-R>>"
-    "$<$<COMPILE_LANGUAGE:CXX>:<boost/thread/mutex.hpp$<ANGLE-R>>"
-    "$<$<COMPILE_LANGUAGE:CXX>:<boost/thread/condition_variable.hpp$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<filesystem$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<fstream$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<thread$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<mutex$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<condition_variable$<ANGLE-R>>"
     "$<$<COMPILE_LANGUAGE:CXX>:<boost/algorithm/string.hpp$<ANGLE-R>>"
     "$<$<COMPILE_LANGUAGE:CXX>:<openssl/sha.h$<ANGLE-R>>"
     "$<$<COMPILE_LANGUAGE:CXX>:<openssl/crypto.h$<ANGLE-R>>"

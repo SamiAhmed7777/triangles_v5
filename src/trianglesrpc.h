@@ -157,8 +157,6 @@ extern json_spirit::Value importwallet(const json_spirit::Array& params, bool fH
 extern json_spirit::Value dumpprivkey(const json_spirit::Array& params, bool fHelp); // in rpcdump.cpp
 extern json_spirit::Value importprivkey(const json_spirit::Array& params, bool fHelp);
 
-extern json_spirit::Value sendalert(const json_spirit::Array& params, bool fHelp);
-
 extern json_spirit::Value getsubsidy(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getmininginfo(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getstakinginfo(const json_spirit::Array& params, bool fHelp);
@@ -233,10 +231,6 @@ extern json_spirit::Value dumputxoset(const json_spirit::Array& params, bool fHe
 extern json_spirit::Value getaddressbalance(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getaddressutxos(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getaddresstxids(const json_spirit::Array& params, bool fHelp);
-
-extern json_spirit::Value clearwallettransactions(const json_spirit::Array& params, bool fHelp);
-
-
 
 extern json_spirit::Value smsgenable(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value smsgdisable(const json_spirit::Array& params, bool fHelp);

@@ -1,3 +1,6 @@
+# Per-user Claude Code settings (machine-specific paths/permissions)
+.claude/
+
 # Build artifacts
 *.o
 *.exe

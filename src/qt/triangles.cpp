@@ -145,7 +145,7 @@ int main(int argc, char *argv[])
         return 0;
 
     // ... then triangles.conf:
-    if (!boost::filesystem::is_directory(GetDataDir(false)))
+    if (!std::filesystem::is_directory(GetDataDir(false)))
     {
         // This message can not be translated, as translation is not initialized yet
         // (which not yet possible because lang=XX can be overridden in triangles.conf in the data directory)

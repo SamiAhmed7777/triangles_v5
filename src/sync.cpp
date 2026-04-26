@@ -48,9 +48,9 @@ private:
 
 typedef std::vector< std::pair<void*, CLockLocation> > LockStack;
 
-static boost::mutex dd_mutex;
+static std::mutex dd_mutex;
 static std::map<std::pair<void*, void*>, LockStack> lockorders;
-static boost::thread_specific_ptr<LockStack> lockstack;
+static thread_local std::unique_ptr<LockStack> lockstack;
 
 
 static void potential_deadlock_detected(const std::pair<void*, void*>& mismatch, const LockStack& s1, const LockStack& s2)
@@ -74,7 +74,7 @@ static void potential_deadlock_detected(const std::pair<void*, void*>& mismatch,
 
 static void push_lock(void* c, const CLockLocation& locklocation, bool fTry)
 {
-    if (lockstack.get() == NULL)
+    if (!lockstack)
         lockstack.reset(new LockStack);
 
     if (fDebug) printf("Locking: %s\n", locklocation.ToString().c_str());

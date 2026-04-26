@@ -5,9 +5,9 @@
 
 #include <map>
 
+#include <filesystem>
+
 #include <boost/version.hpp>
-#include <boost/filesystem.hpp>
-#include <boost/filesystem/fstream.hpp>
 
 #include <leveldb/env.h>
 #include <leveldb/cache.h>
@@ -24,8 +24,7 @@
 #include "main.h"
 
 using namespace std;
-using namespace boost;
-namespace fs = boost::filesystem;
+namespace fs = std::filesystem;
 
 leveldb::DB *txdb; // global pointer for LevelDB object instance
 

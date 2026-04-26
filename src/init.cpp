@@ -24,10 +24,10 @@
 #endif
 #include "notificationqueue.h"
 #include "addressindex.h"
-#include <boost/thread.hpp>
-#include <boost/filesystem.hpp>
-#include <boost/filesystem/fstream.hpp>
-// boost/filesystem/convenience.hpp removed in modern Boost; functionality is in filesystem.hpp
+#include <thread>
+#include <vector>
+#include <filesystem>
+#include <fstream>
 #include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 #include <openssl/crypto.h>
@@ -36,10 +36,20 @@
 #include <signal.h>
 #endif
 
+// Windows.h (transitively included) defines these as macros, clobbering Checkpoints:: enum values.
+#ifdef STRICT
+#undef STRICT
+#endif
+#ifdef ADVISORY
+#undef ADVISORY
+#endif
+#ifdef PERMISSIVE
+#undef PERMISSIVE
+#endif
 
 using namespace std;
 using namespace boost;
-namespace fs = boost::filesystem;
+namespace fs = std::filesystem;
 
 CWallet* pwalletMain;
 CClientUIInterface uiInterface;
@@ -54,7 +64,7 @@ enum Checkpoints::CPMode CheckpointsMode;
 
 static CCriticalSection cs_DeferredStartup;
 static bool fDeferredStartupRunning = false;
-static boost::thread_group* pScriptCheckThreads = NULL;
+static std::vector<std::thread>* pScriptCheckThreads = nullptr;
 
 static void ThreadScriptCheck()
 {
@@ -223,9 +233,10 @@ void Shutdown(void* parg)
             pScriptCheckQueue->Quit();
             if (pScriptCheckThreads)
             {
-                pScriptCheckThreads->join_all();
+                for (std::thread& t : *pScriptCheckThreads)
+                    if (t.joinable()) t.join();
                 delete pScriptCheckThreads;
-                pScriptCheckThreads = NULL;
+                pScriptCheckThreads = nullptr;
             }
             delete pScriptCheckQueue;
             pScriptCheckQueue = NULL;
@@ -250,7 +261,7 @@ void Shutdown(void* parg)
             pNotificationQueue = NULL;
         }
 
-//        CTxDB().Close();
+//        MakeChainDB()->Close();
         bitdb.Flush(false);
         bitdb.Flush(true);
         fs::remove(GetPidFile());
@@ -469,7 +480,6 @@ std::string HelpMessage()
         "  -walletnotify=<cmd>    " + _("Execute command when a wallet transaction changes (%s in cmd is replaced by TxID)") + "\n" +
         "  -confchange            " + _("Require a confirmations for change (default: 0)") + "\n" +
         "  -enforcecanonical      " + _("Enforce transaction scripts to use canonical PUSH operators (default: 1)") + "\n" +
-        "  -alertnotify=<cmd>     " + _("Execute command when a relevant alert is received (%s in cmd is replaced by message)") + "\n" +
         "  -upgradewallet         " + _("Upgrade wallet to latest format") + "\n" +
         "  -keypool=<n>           " + _("Set key pool size to <n> (default: 100)") + "\n" +
         "  -rescan                " + _("Rescan the block chain for missing wallet transactions") + "\n" +
@@ -691,15 +701,15 @@ bool AppInit2()
 
     int nScriptCheckThreads = GetArg("-par", 0);
     if (nScriptCheckThreads <= 0)
-        nScriptCheckThreads = boost::thread::hardware_concurrency();
+        nScriptCheckThreads = std::thread::hardware_concurrency();
     if (nScriptCheckThreads > 16)
         nScriptCheckThreads = 16;
     if (nScriptCheckThreads > 1)
     {
         pScriptCheckQueue = new CCheckQueue<CScriptCheck>(32);
-        pScriptCheckThreads = new boost::thread_group();
+        pScriptCheckThreads = new std::vector<std::thread>();
         for (int i = 0; i < nScriptCheckThreads - 1; ++i)
-            pScriptCheckThreads->create_thread(&ThreadScriptCheck);
+            pScriptCheckThreads->emplace_back(&ThreadScriptCheck);
         printf("Script verification threads: %d workers + main thread\n", nScriptCheckThreads - 1);
     }
 
@@ -1024,7 +1034,7 @@ bool AppInit2()
 
     if (GetBoolArg("-loadblockindextest"))
     {
-        CTxDB txdb("r");
+        auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
         txdb.LoadBlockIndex();
         PrintBlockTree();
         return false;
@@ -1051,7 +1061,7 @@ bool AppInit2()
     // If the block index is empty but blk0001.dat exists (bootstrap download),
     // fast-import: build the index directly from the block file without re-writing
     // data. Batches LevelDB commits every 200K blocks for speed.
-    if (nBestHeight == 0 && boost::filesystem::exists(GetDataDir() / "blk0001.dat")
+    if (nBestHeight == 0 && std::filesystem::exists(GetDataDir() / "blk0001.dat")
         && mapBlockIndex.size() <= 1)
     {
         uiInterface.InitMessage(_("Importing bootstrap blocks..."));
@@ -1224,7 +1234,7 @@ bool AppInit2()
         bool fScannedWithIndex = false;
         if (fAddressIndex && !GetBoolArg("-rescan"))
         {
-            CTxDB txdb("r");
+            auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
             int nAddressIndexStartHeight = 0;
             uint256 hashAddressIndexBestChain = 0;
             if (txdb.ReadAddressIndexStartHeight(nAddressIndexStartHeight) &&

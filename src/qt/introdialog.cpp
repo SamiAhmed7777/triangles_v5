@@ -14,7 +14,7 @@
 #include <QCheckBox>
 #include <QApplication>
 
-#include <boost/filesystem.hpp>
+#include <filesystem>
 
 #include <set>
 
@@ -152,28 +152,28 @@ void IntroDialog::on_defaultRadio_toggled(bool checked)
 void IntroDialog::updateFreeSpace()
 {
     QString path = getDataDirectory();
-    boost::filesystem::path fsPath(path.toStdString());
+    std::filesystem::path fsPath(path.toStdString());
 
     // Walk up to find an existing parent
     try {
-        while (!fsPath.empty() && !boost::filesystem::exists(fsPath))
+        while (!fsPath.empty() && !std::filesystem::exists(fsPath))
             fsPath = fsPath.parent_path();
 
         if (!fsPath.empty()) {
-            boost::filesystem::space_info si = boost::filesystem::space(fsPath);
+            std::filesystem::space_info si = std::filesystem::space(fsPath);
             double freeGB = (double)si.available / (1024.0 * 1024.0 * 1024.0);
             freeSpaceLabel->setText(tr("Free space: %1 GB").arg(QString::number(freeGB, 'f', 2)));
         } else {
             freeSpaceLabel->setText(tr("Cannot determine free space"));
         }
-    } catch (const boost::filesystem::filesystem_error &) {
+    } catch (const std::filesystem::filesystem_error &) {
         freeSpaceLabel->setText(tr("Cannot determine free space"));
     }
 }
 
 bool IntroDialog::pickDataDirectory()
 {
-    namespace fs = boost::filesystem;
+    namespace fs = std::filesystem;
 
     QSettings settings;
     // If -datadir was passed on the command line, skip the dialog entirely
@@ -305,10 +305,10 @@ bool IntroDialog::pickDataDirectory()
     return true;
 }
 
-static void copyDirectoryRecursive(const boost::filesystem::path& src,
-                                   const boost::filesystem::path& dst)
+static void copyDirectoryRecursive(const std::filesystem::path& src,
+                                   const std::filesystem::path& dst)
 {
-    namespace fs = boost::filesystem;
+    namespace fs = std::filesystem;
     fs::create_directories(dst);
     for (fs::directory_iterator it(src), end; it != end; ++it) {
         fs::path dstChild = dst / it->path().filename();
@@ -322,7 +322,7 @@ static void copyDirectoryRecursive(const boost::filesystem::path& src,
 
 bool IntroDialog::migrateDataDirectory(const QString& oldPath, const QString& newPath)
 {
-    namespace fs = boost::filesystem;
+    namespace fs = std::filesystem;
 
     fs::path srcDir(oldPath.toStdString());
     fs::path dstDir(newPath.toStdString());

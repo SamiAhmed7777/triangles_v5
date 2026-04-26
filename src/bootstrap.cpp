@@ -4,8 +4,8 @@
 #include "bootstrap.h"
 #include "utxosnapshot.h"
 
-#include <boost/filesystem.hpp>
-#include <boost/filesystem/fstream.hpp>
+#include <filesystem>
+#include <fstream>
 #include <boost/algorithm/string.hpp>
 
 #include <zlib.h>
@@ -37,7 +37,7 @@
 extern bool fTestNet;
 namespace Checkpoints { bool IsKnownCheckpoint(int nHeight, const uint256& hash); }
 
-namespace fs = boost::filesystem;
+namespace fs = std::filesystem;
 
 namespace Bootstrap {
 

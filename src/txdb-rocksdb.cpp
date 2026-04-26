@@ -8,9 +8,9 @@
 
 #include <map>
 
+#include <filesystem>
+
 #include <boost/version.hpp>
-#include <boost/filesystem.hpp>
-#include <boost/filesystem/fstream.hpp>
 
 #include <rocksdb/cache.h>
 #include <rocksdb/filter_policy.h>
@@ -28,8 +28,7 @@
 #include "main.h"
 
 using namespace std;
-using namespace boost;
-namespace fs = boost::filesystem;
+namespace fs = std::filesystem;
 
 // Global pointer for the RocksDB instance, shared across CRocksTxDB instances
 // the same way the LevelDB backend shares its txdb singleton.

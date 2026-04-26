@@ -3,32 +3,9 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "util.h"
-#include "sync.h"
-#include "strlcpy.h"
-#include "version.h"
-#include "ui_interface.h"
-#include <boost/algorithm/string/join.hpp>
-
-// Work around clang compilation problem in Boost 1.46:
-// /usr/include/boost/program_options/detail/config_file.hpp:163:17: error: call to function 'to_internal' that is neither visible in the template definition nor found by argument-dependent lookup
-// See also: http://stackoverflow.com/questions/10020179/compilation-fail-in-boost-librairies-program-options
-//           http://clang.debian.net/status.php?version=3.0&key=CANNOT_FIND_FUNCTION
-namespace boost {
-    namespace program_options {
-        std::string to_internal(const std::string&);
-    }
-}
-
-#include <boost/program_options/detail/config_file.hpp>
-#include <boost/program_options/parsers.hpp>
-#include <boost/filesystem.hpp>
-#include <boost/filesystem/fstream.hpp>
-#include <boost/thread.hpp>
-#include <openssl/crypto.h>
-#include <openssl/rand.h>
-#include <stdarg.h>
-
+// On Windows, include shell/COM headers FIRST so their `byte` typedef
+// is established before any std header pulls in `std::byte` (C++17).
+// Otherwise the names collide when COM headers reference `byte`.
 #ifdef WIN32
 #ifdef _MSC_VER
 #pragma warning(disable:4786)
@@ -57,6 +34,32 @@ namespace boost {
 #ifndef WIN32
 #include <execinfo.h>
 #endif
+
+#include "util.h"
+#include "sync.h"
+#include "strlcpy.h"
+#include "version.h"
+#include "ui_interface.h"
+#include <boost/algorithm/string/join.hpp>
+
+// Work around clang compilation problem in Boost 1.46:
+// /usr/include/boost/program_options/detail/config_file.hpp:163:17: error: call to function 'to_internal' that is neither visible in the template definition nor found by argument-dependent lookup
+// See also: http://stackoverflow.com/questions/10020179/compilation-fail-in-boost-librairies-program-options
+//           http://clang.debian.net/status.php?version=3.0&key=CANNOT_FIND_FUNCTION
+namespace boost {
+    namespace program_options {
+        std::string to_internal(const std::string&);
+    }
+}
+
+#include <boost/program_options/detail/config_file.hpp>
+#include <boost/program_options/parsers.hpp>
+#include <filesystem>
+#include <fstream>
+#include <thread>
+#include <openssl/crypto.h>
+#include <openssl/rand.h>
+#include <stdarg.h>
 
 
 using namespace std;
@@ -226,7 +229,7 @@ inline int OutputDebugStringF(const char* pszFormat, ...)
 
         if (!fileout)
         {
-            boost::filesystem::path pathDebug = GetDataDir() / "debug.log";
+            std::filesystem::path pathDebug = GetDataDir() / "debug.log";
             fileout = fopen(pathDebug.string().c_str(), "a");
             if (fileout) setbuf(fileout, NULL); // unbuffered
         }
@@ -238,14 +241,14 @@ inline int OutputDebugStringF(const char* pszFormat, ...)
             // Since the order of destruction of static/global objects is undefined,
             // allocate mutexDebugLog on the heap the first time this routine
             // is called to avoid crashes during shutdown.
-            static boost::mutex* mutexDebugLog = NULL;
-            if (mutexDebugLog == NULL) mutexDebugLog = new boost::mutex();
-            boost::mutex::scoped_lock scoped_lock(*mutexDebugLog);
+            static std::mutex* mutexDebugLog = NULL;
+            if (mutexDebugLog == NULL) mutexDebugLog = new std::mutex();
+            std::lock_guard<std::mutex> scoped_lock(*mutexDebugLog);
 
             // reopen the log file, if requested
             if (fReopenDebugLog) {
                 fReopenDebugLog = false;
-                boost::filesystem::path pathDebug = GetDataDir() / "debug.log";
+                std::filesystem::path pathDebug = GetDataDir() / "debug.log";
                 if (freopen(pathDebug.string().c_str(),"a",fileout) != NULL)
                     setbuf(fileout, NULL); // unbuffered
             }
@@ -1015,9 +1018,9 @@ void PrintExceptionContinue(std::exception* pex, const char* pszThread)
     strMiscWarning = message;
 }
 
-boost::filesystem::path GetDefaultDataDir()
+std::filesystem::path GetDefaultDataDir()
 {
-    namespace fs = boost::filesystem;
+    namespace fs = std::filesystem;
     // Windows < Vista: C:\Documents and Settings\Username\Application Data\triangles
     // Windows >= Vista: C:\Users\Username\AppData\Roaming\triangles
     // Mac: ~/Library/Application Support/triangles
@@ -1044,9 +1047,9 @@ boost::filesystem::path GetDefaultDataDir()
 #endif
 }
 
-const boost::filesystem::path &GetDataDir(bool fNetSpecific)
+const std::filesystem::path &GetDataDir(bool fNetSpecific)
 {
-    namespace fs = boost::filesystem;
+    namespace fs = std::filesystem;
 
     static fs::path pathCached[2];
     static CCriticalSection csPathCached;
@@ -1062,7 +1065,7 @@ const boost::filesystem::path &GetDataDir(bool fNetSpecific)
     LOCK(csPathCached);
 
     if (mapArgs.count("-datadir")) {
-        path = fs::system_complete(mapArgs["-datadir"]);
+        path = fs::absolute(mapArgs["-datadir"]);
         if (!fs::is_directory(path)) {
             path = "";
             return path;
@@ -1079,9 +1082,9 @@ const boost::filesystem::path &GetDataDir(bool fNetSpecific)
     return path;
 }
 
-boost::filesystem::path GetConfigFile()
+std::filesystem::path GetConfigFile()
 {
-    boost::filesystem::path pathConfigFile(GetArg("-conf", "triangles.conf"));
+    std::filesystem::path pathConfigFile(GetArg("-conf", "triangles.conf"));
     if (!pathConfigFile.is_absolute()) pathConfigFile = GetDataDir(false) / pathConfigFile;
     return pathConfigFile;
 }
@@ -1089,7 +1092,7 @@ boost::filesystem::path GetConfigFile()
 void ReadConfigFile(map<string, string>& mapSettingsRet,
                     map<string, vector<string> >& mapMultiSettingsRet)
 {
-    boost::filesystem::ifstream streamConfig(GetConfigFile());
+    std::ifstream streamConfig(GetConfigFile());
     if (!streamConfig.good())
         return; // No triangles.conf file is OK
 
@@ -1110,15 +1113,15 @@ void ReadConfigFile(map<string, string>& mapSettingsRet,
     }
 }
 
-boost::filesystem::path GetPidFile()
+std::filesystem::path GetPidFile()
 {
-    boost::filesystem::path pathPidFile(GetArg("-pid", "trianglesd.pid"));
+    std::filesystem::path pathPidFile(GetArg("-pid", "trianglesd.pid"));
     if (!pathPidFile.is_absolute()) pathPidFile = GetDataDir() / pathPidFile;
     return pathPidFile;
 }
 
 #ifndef WIN32
-void CreatePidFile(const boost::filesystem::path &path, pid_t pid)
+void CreatePidFile(const std::filesystem::path &path, pid_t pid)
 {
     FILE* file = fopen(path.string().c_str(), "w");
     if (file)
@@ -1129,7 +1132,7 @@ void CreatePidFile(const boost::filesystem::path &path, pid_t pid)
 }
 #endif
 
-bool RenameOver(boost::filesystem::path src, boost::filesystem::path dest)
+bool RenameOver(std::filesystem::path src, std::filesystem::path dest)
 {
 #ifdef WIN32
     return MoveFileExA(src.string().c_str(), dest.string().c_str(),
@@ -1153,9 +1156,9 @@ void FileCommit(FILE *fileout)
 void ShrinkDebugFile()
 {
     // Scroll debug.log if it's getting too big
-    boost::filesystem::path pathLog = GetDataDir() / "debug.log";
+    std::filesystem::path pathLog = GetDataDir() / "debug.log";
     FILE* file = fopen(pathLog.string().c_str(), "r");
-    if (file && boost::filesystem::file_size(pathLog) > 10 * 1000000)
+    if (file && std::filesystem::file_size(pathLog) > 10 * 1000000)
     {
         // Restart the file with some of the end
         char pch[200000];
@@ -1291,9 +1294,9 @@ std::string FormatSubVersion(const std::string& name, int nClientVersion, const 
 }
 
 #ifdef WIN32
-boost::filesystem::path GetSpecialFolderPath(int nFolder, bool fCreate)
+std::filesystem::path GetSpecialFolderPath(int nFolder, bool fCreate)
 {
-    namespace fs = boost::filesystem;
+    namespace fs = std::filesystem;
 
     char pszPath[MAX_PATH] = "";
 
@@ -1339,8 +1342,8 @@ bool NewThread(void(*pfn)(void*), void* parg)
 {
     try
     {
-        boost::thread(pfn, parg); // thread detaches when out of scope
-    } catch(boost::thread_resource_error &e) {
+        std::thread(pfn, parg).detach();
+    } catch(const std::system_error& e) {
         printf("Error creating thread: %s\n", e.what());
         return false;
     }

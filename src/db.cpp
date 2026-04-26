@@ -8,16 +8,15 @@
 #include "util.h"
 #include "main.h"
 #include "ui_interface.h"
-#include <boost/filesystem.hpp>
-#include <boost/filesystem/fstream.hpp>
+#include <filesystem>
+#include <fstream>
 
 #ifndef WIN32
 #include "sys/stat.h"
 #endif
 
 using namespace std;
-using namespace boost;
-namespace fs = boost::filesystem;
+namespace fs = std::filesystem;
 
 
 unsigned int nWalletDBUpdated;

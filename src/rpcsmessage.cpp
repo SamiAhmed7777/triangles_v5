@@ -10,6 +10,8 @@
 #include "smessage.h"
 #include "init.h" // pwalletMain
 
+#include <filesystem>
+
 using namespace json_spirit;
 using namespace std;
 
@@ -820,10 +822,10 @@ Value smsgbuckets(const Array& params, bool fHelp)
                 objM.push_back(Pair("hash", sHash));
                 objM.push_back(Pair("last changed", getTimeString(it->second.timeChanged, cbuf, sizeof(cbuf))));
                 
-                boost::filesystem::path fullPath = GetDataDir() / "smsgStore" / sFile;
+                std::filesystem::path fullPath = GetDataDir() / "smsgStore" / sFile;
 
 
-                if (!boost::filesystem::exists(fullPath))
+                if (!std::filesystem::exists(fullPath))
                 {
                     // -- If there is a file for an empty bucket something is wrong.
                     if (tokenSet.size() == 0)
@@ -835,10 +837,10 @@ Value smsgbuckets(const Array& params, bool fHelp)
                     try {
                         
                         uint64_t nFBytes = 0;
-                        nFBytes = boost::filesystem::file_size(fullPath);
+                        nFBytes = std::filesystem::file_size(fullPath);
                         nBytes += nFBytes;
                         objM.push_back(Pair("file size", fsReadable(nFBytes)));
-                    } catch (const boost::filesystem::filesystem_error& ex)
+                    } catch (const std::filesystem::filesystem_error& ex)
                     {
                         objM.push_back(Pair("file size, error", ex.what()));
                     };
@@ -871,9 +873,9 @@ Value smsgbuckets(const Array& params, bool fHelp)
                 std::string sFile = std::to_string(it->first) + "_01.dat";
                 
                 try {
-                    boost::filesystem::path fullPath = GetDataDir() / "smsgStore" / sFile;
-                    boost::filesystem::remove(fullPath);
-                } catch (const boost::filesystem::filesystem_error& ex)
+                    std::filesystem::path fullPath = GetDataDir() / "smsgStore" / sFile;
+                    std::filesystem::remove(fullPath);
+                } catch (const std::filesystem::filesystem_error& ex)
                 {
                     //objM.push_back(Pair("file size, error", ex.what()));
                     printf("Error removing bucket file %s.\n", ex.what());

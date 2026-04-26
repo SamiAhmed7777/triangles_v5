@@ -18,11 +18,9 @@
 #include <vector>
 #include <string>
 
-#include <boost/thread.hpp>
-#include <boost/filesystem.hpp>
-#include <boost/filesystem/path.hpp>
-#include <boost/date_time/gregorian/gregorian_types.hpp>
-#include <boost/date_time/posix_time/posix_time_types.hpp>
+#include <chrono>
+#include <thread>
+#include <filesystem>
 
 #include <openssl/sha.h>
 #include <openssl/ripemd.h>
@@ -107,11 +105,7 @@ T* alignup(T* p)
 
 inline void MilliSleep(int64_t n)
 {
-#if BOOST_VERSION >= 105000
-    boost::this_thread::sleep_for(boost::chrono::milliseconds(n));
-#else
-    boost::this_thread::sleep(boost::posix_time::milliseconds(n));
-#endif
+    std::this_thread::sleep_for(std::chrono::milliseconds(n));
 }
 
 /* This GNU C extension enables the compiler to check the format string against the parameters provided.
@@ -202,17 +196,17 @@ void ParseParameters(int argc, const char*const argv[]);
 bool WildcardMatch(const char* psz, const char* mask);
 bool WildcardMatch(const std::string& str, const std::string& mask);
 void FileCommit(FILE *fileout);
-bool RenameOver(boost::filesystem::path src, boost::filesystem::path dest);
-boost::filesystem::path GetDefaultDataDir();
-const boost::filesystem::path &GetDataDir(bool fNetSpecific = true);
-boost::filesystem::path GetConfigFile();
-boost::filesystem::path GetPidFile();
+bool RenameOver(std::filesystem::path src, std::filesystem::path dest);
+std::filesystem::path GetDefaultDataDir();
+const std::filesystem::path &GetDataDir(bool fNetSpecific = true);
+std::filesystem::path GetConfigFile();
+std::filesystem::path GetPidFile();
 #ifndef WIN32
-void CreatePidFile(const boost::filesystem::path &path, pid_t pid);
+void CreatePidFile(const std::filesystem::path &path, pid_t pid);
 #endif
 void ReadConfigFile(std::map<std::string, std::string>& mapSettingsRet, std::map<std::string, std::vector<std::string> >& mapMultiSettingsRet);
 #ifdef WIN32
-boost::filesystem::path GetSpecialFolderPath(int nFolder, bool fCreate = true);
+std::filesystem::path GetSpecialFolderPath(int nFolder, bool fCreate = true);
 #endif
 void ShrinkDebugFile();
 int GetRandInt(int nMax);
@@ -343,14 +337,14 @@ inline int64_t GetPerformanceCounter()
 
 inline int64_t GetTimeMillis()
 {
-    return (boost::posix_time::ptime(boost::posix_time::microsec_clock::universal_time()) -
-            boost::posix_time::ptime(boost::gregorian::date(1970,1,1))).total_milliseconds();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 inline int64_t GetTimeMicros()
 {
-    return (boost::posix_time::ptime(boost::posix_time::microsec_clock::universal_time()) -
-            boost::posix_time::ptime(boost::gregorian::date(1970,1,1))).total_microseconds();
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 inline std::string DateTimeStrFormat(const char* pszFormat, int64_t nTime)

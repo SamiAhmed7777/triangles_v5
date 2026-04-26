@@ -244,7 +244,7 @@ QString TransactionDesc::toHTML(CWallet *wallet, CWalletTx &wtx)
             strHTML += "<br><b>" + tr("Transaction") + ":</b><br>";
             strHTML += GUIUtil::HtmlEscape(wtx.ToString(), true);
 
-            CTxDB txdb("r"); // To fetch source txouts
+            auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder; // To fetch source txouts
 
             strHTML += "<br><b>" + tr("Inputs") + ":</b>";
             strHTML += "<ul>";

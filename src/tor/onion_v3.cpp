@@ -34,7 +34,7 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
-#include <boost/filesystem.hpp>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <set>
@@ -60,12 +60,12 @@ extern CWallet* pwalletMain;
 CTorV3Manager* CTorV3Manager::instance = nullptr;
 static TorV3Config torV3Config;
 
-static boost::filesystem::path GetBackendHiddenServiceDir(const std::string& torDataDir)
+static std::filesystem::path GetBackendHiddenServiceDir(const std::string& torDataDir)
 {
-    return boost::filesystem::path(torDataDir) / "hidden_service";
+    return std::filesystem::path(torDataDir) / "hidden_service";
 }
 
-static bool ReadTrimmedFirstLine(const boost::filesystem::path& path, std::string& valueOut)
+static bool ReadTrimmedFirstLine(const std::filesystem::path& path, std::string& valueOut)
 {
     valueOut.clear();
 
@@ -573,12 +573,12 @@ bool CTorV3Service::AttachToBackendService(const std::string& torDataDir, int se
 
     port = servicePort;
 
-    const boost::filesystem::path serviceDir = GetBackendHiddenServiceDir(torDataDir);
-    const boost::filesystem::path hostnamePath = serviceDir / "hostname";
+    const std::filesystem::path serviceDir = GetBackendHiddenServiceDir(torDataDir);
+    const std::filesystem::path hostnamePath = serviceDir / "hostname";
 
     std::string backendOnion;
     for (int waited = 0; waited <= waitSeconds; ++waited) {
-        if (boost::filesystem::exists(hostnamePath) &&
+        if (std::filesystem::exists(hostnamePath) &&
             ReadTrimmedFirstLine(hostnamePath, backendOnion)) {
             break;
         }
@@ -616,8 +616,8 @@ bool CTorV3Service::AttachToBackendService(const std::string& torDataDir, int se
 
         // Back up the Tor-generated secret key to wallet.dat so the onion
         // identity survives deletion of the tor_data directory.
-        boost::filesystem::path secretKeyPath = serviceDir / "hs_ed25519_secret_key";
-        if (boost::filesystem::exists(secretKeyPath)) {
+        std::filesystem::path secretKeyPath = serviceDir / "hs_ed25519_secret_key";
+        if (std::filesystem::exists(secretKeyPath)) {
             std::ifstream keyFile(secretKeyPath.string().c_str(), std::ios::binary);
             if (keyFile.is_open()) {
                 std::vector<unsigned char> keyData(
@@ -1218,7 +1218,7 @@ bool CTorV3Manager::InitializeTor()
     torDataDir = torV3Config.torDataDirectory;
 
     // Create tor data directory
-    boost::filesystem::create_directories(torDataDir);
+    std::filesystem::create_directories(torDataDir);
 
     torEnabled = true;
 

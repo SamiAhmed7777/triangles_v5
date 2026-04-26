@@ -12,8 +12,8 @@
 #include "../util.h"
 #include "../net.h"
 
-#include <boost/filesystem.hpp>
-#include <boost/thread/thread.hpp>
+#include <filesystem>
+#include <thread>
 #include <fstream>
 #include <cstring>
 #include <vector>
@@ -35,7 +35,7 @@ extern "C" {
 }
 #endif
 
-namespace fs = boost::filesystem;
+namespace fs = std::filesystem;
 
 // Singleton
 CTorEmbedded* CTorEmbedded::instance = nullptr;
@@ -152,7 +152,7 @@ bool CTorEmbedded::Start(int socks, int hsPort, bool enableHiddenService)
     running.store(true);
 
     // Launch Tor on a dedicated thread (tor_run_main blocks)
-    boost::thread torThread(TorThreadFunc, argv);
+    std::thread torThread(TorThreadFunc, argv);
     torThread.detach();
 
     // Wait for SOCKS port to become available (up to 60s)

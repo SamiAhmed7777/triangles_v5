@@ -7,7 +7,7 @@
 #include "uint256.h"
 #include "serialize.h"
 
-#include <boost/filesystem.hpp>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -47,7 +47,7 @@ struct AvailableSnapshot
 //
 // Blocks for up to timeoutSec waiting for peers + transfer. Returns true if a
 // verified snapshot was written, false on timeout/no peer/verification fail.
-bool TryFetchSnapshot(const boost::filesystem::path& dataDir,
+bool TryFetchSnapshot(const std::filesystem::path& dataDir,
                       int timeoutSec,
                       std::string& strError);
 

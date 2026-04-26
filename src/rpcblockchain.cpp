@@ -11,6 +11,19 @@
 #include "base58.h"
 #include "utxosnapshot.h"
 
+#include <filesystem>
+
+// Windows.h (transitively included) defines these as macros, clobbering Checkpoints:: enum values.
+#ifdef STRICT
+#undef STRICT
+#endif
+#ifdef ADVISORY
+#undef ADVISORY
+#endif
+#ifdef PERMISSIVE
+#undef PERMISSIVE
+#endif
+
 using namespace json_spirit;
 using namespace std;
 
@@ -382,7 +395,7 @@ static int64_t ComputeActiveChainSupplyFromBlocks(const std::vector<CBlockIndex*
     nBlocksScanned = 0;
     nTransactionsScanned = 0;
 
-    CTxDB txdb("r");
+    auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
     int64_t nSupply = 0;
 
     for (std::vector<CBlockIndex*>::const_iterator pindexIt = chain.begin(); pindexIt != chain.end(); ++pindexIt)
@@ -458,7 +471,7 @@ Value recalculatesupply(const Array& params, bool fHelp)
     if (!pindexBest)
         throw runtime_error("recalculatesupply: no best block");
 
-    CTxDB txdbRead("r");
+    auto txdbRead_holder = MakeChainDB("r"); CTxDBBase& txdbRead = *txdbRead_holder;
     int nUtxoCount = 0;
     int64_t nUtxoSupply = txdbRead.SumUtxoValues(nUtxoCount);
 
@@ -473,7 +486,7 @@ Value recalculatesupply(const Array& params, bool fHelp)
 
     if (fApply)
     {
-        CTxDB txdbWrite;
+        auto txdbWrite_holder = MakeChainDB(); CTxDBBase& txdbWrite = *txdbWrite_holder;
         int64_t nRunningSupply = 0;
 
         for (std::vector<CBlockIndex*>::const_iterator pindexIt = activeChain.begin(); pindexIt != activeChain.end(); ++pindexIt)
@@ -706,7 +719,7 @@ Value getaddressbalance(const Array& params, bool fHelp)
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address: " + strAddr);
 
         int64_t nBalance = 0;
-        CTxDB txdb("r");
+        auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
         txdb.ReadAddressBalance(nType, hashBytes, nBalance);
         nTotalBalance += nBalance;
     }
@@ -741,7 +754,7 @@ Value getaddressutxos(const Array& params, bool fHelp)
     Array addrArray = find_value(addrObj, "addresses").get_array();
 
     Array result;
-    CTxDB txdb("r");
+    auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
 
     for (unsigned int i = 0; i < addrArray.size(); i++)
     {
@@ -801,7 +814,7 @@ Value getaddresstxids(const Array& params, bool fHelp)
         nEndHeight = endVal.get_int();
 
     Array result;
-    CTxDB txdb("r");
+    auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
 
     // Use a set to deduplicate txids across multiple addresses
     std::set<uint256> setTxIds;
@@ -907,7 +920,7 @@ Value invalidateblock(const Array& params, bool fHelp)
 
     if (pindex->IsInMainChain())
     {
-        CTxDB txdb;
+        auto txdb_holder = MakeChainDB(); CTxDBBase& txdb = *txdb_holder;
         if (!txdb.TxnBegin())
             throw runtime_error("Failed to begin transaction.");
 
@@ -976,7 +989,7 @@ Value reconsiderblock(const Array& params, bool fHelp)
         if (!block.ReadFromDisk(pindex))
             throw runtime_error("Failed to read block from disk.");
 
-        CTxDB txdb;
+        auto txdb_holder = MakeChainDB(); CTxDBBase& txdb = *txdb_holder;
         block.SetBestChain(txdb, pindex);
         printf("reconsiderblock: reconsidered block %s at height %d, new best height=%d\n",
                hash.ToString().c_str(), pindex->nHeight, nBestHeight);
@@ -1016,7 +1029,7 @@ Value dumputxoset(const Array& params, bool fHelp)
     if (nHeaders < 100)
         throw JSONRPCError(RPC_INVALID_PARAMETER, "nheaders must be at least 100");
 
-    boost::filesystem::path destPath(filename);
+    std::filesystem::path destPath(filename);
     std::string strError;
 
     if (!UtxoSnapshot::DumpSnapshot(destPath, nHeaders, strError))
@@ -1024,8 +1037,8 @@ Value dumputxoset(const Array& params, bool fHelp)
 
     // Get file size
     int64_t nFileSize = 0;
-    if (boost::filesystem::exists(destPath))
-        nFileSize = (int64_t)boost::filesystem::file_size(destPath);
+    if (std::filesystem::exists(destPath))
+        nFileSize = (int64_t)std::filesystem::file_size(destPath);
 
     Object result;
     result.push_back(Pair("filename", filename));

@@ -7,6 +7,7 @@
 
 #include "main.h"
 
+#include <filesystem>
 #include <map>
 #include <string>
 #include <vector>
@@ -28,7 +29,7 @@ extern unsigned int nWalletDBUpdated;
 
 void ThreadFlushWalletDB(void* parg);
 bool BackupWallet(const CWallet& wallet, const std::string& strDest);
-bool AutoBackupWallet(const boost::filesystem::path& walletPath);
+bool AutoBackupWallet(const std::filesystem::path& walletPath);
 
 
 class CDBEnv
@@ -37,7 +38,7 @@ private:
     bool fDetachDB;
     bool fDbEnvInit;
     bool fMockDb;
-    boost::filesystem::path pathEnv;
+    std::filesystem::path pathEnv;
     std::string strPath;
 
     void EnvShutdown();
@@ -71,7 +72,7 @@ public:
     typedef std::pair<std::vector<unsigned char>, std::vector<unsigned char> > KeyValPair;
     bool Salvage(std::string strFile, bool fAggressive, std::vector<KeyValPair>& vResult);
 
-    bool Open(boost::filesystem::path pathEnv_);
+    bool Open(std::filesystem::path pathEnv_);
     void Close();
     void Flush(bool fShutdown);
     void CheckpointLSN(std::string strFile);
@@ -317,7 +318,7 @@ public:
 class CAddrDB
 {
 private:
-    boost::filesystem::path pathAddr;
+    std::filesystem::path pathAddr;
 public:
     CAddrDB();
     bool Write(const CAddrMan& addr);

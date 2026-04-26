@@ -8,8 +8,9 @@
 #include <string>
 #include <deque>
 #include <vector>
-#include <boost/thread/mutex.hpp>
-#include <boost/thread/condition_variable.hpp>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 
 /**
  * Thread-safe notification queue for SSE (Server-Sent Events) clients.
@@ -24,8 +25,8 @@
 class CNotificationQueue
 {
 private:
-    mutable boost::mutex cs;
-    boost::condition_variable cond;
+    mutable std::mutex cs;
+    std::condition_variable cond;
 
     struct Event {
         uint64_t id;
@@ -43,7 +44,7 @@ public:
     /** Push a new event. Wakes all waiting SSE clients. */
     void Push(const std::string& strData)
     {
-        boost::mutex::scoped_lock lock(cs);
+        std::unique_lock<std::mutex> lock(cs);
         events.push_back(Event{nNextId++, strData});
         while (events.size() > MAX_QUEUED_EVENTS)
             events.pop_front();
@@ -59,7 +60,7 @@ public:
     bool WaitForEvents(uint64_t& nLastId, std::vector<std::string>& vEvents, int nTimeoutMs, const volatile bool& fShutdown)
     {
         vEvents.clear();
-        boost::mutex::scoped_lock lock(cs);
+        std::unique_lock<std::mutex> lock(cs);
 
         // Check for events already in the queue past our read position
         bool fHasNew = false;
@@ -75,7 +76,7 @@ public:
         if (!fHasNew)
         {
             // Wait for new events or timeout
-            cond.timed_wait(lock, boost::posix_time::milliseconds(nTimeoutMs));
+            cond.wait_for(lock, std::chrono::milliseconds(nTimeoutMs));
         }
 
         // Drain all events newer than nLastId
@@ -97,7 +98,7 @@ public:
     /** Get the current latest event ID (for clients that want to skip history). */
     uint64_t GetLatestId() const
     {
-        boost::mutex::scoped_lock lock(cs);
+        std::unique_lock<std::mutex> lock(cs);
         return nNextId - 1;
     }
 };

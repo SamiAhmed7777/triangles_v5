@@ -15,8 +15,8 @@
 
 #include <openssl/sha.h>
 
-#include <boost/filesystem/fstream.hpp>
-#include <boost/thread.hpp>
+#include <filesystem>
+#include <thread>
 
 #include <algorithm>
 #include <atomic>
@@ -27,7 +27,7 @@
 #include <mutex>
 #include <vector>
 
-namespace fs = boost::filesystem;
+namespace fs = std::filesystem;
 
 extern std::vector<CNode*> vNodes;
 extern CCriticalSection cs_vNodes;
@@ -353,7 +353,7 @@ bool TryFetchSnapshot(const fs::path& dataDir, int timeoutSec, std::string& strE
                         g_fetch.success = false;
                         // Drop bad file so we don't trick later loaders.
                         CloseDest();
-                        boost::system::error_code ec;
+                        std::error_code ec;
                         fs::remove(g_fetch.destPath, ec);
                     }
                     g_fetch.finished = true;
@@ -362,7 +362,7 @@ bool TryFetchSnapshot(const fs::path& dataDir, int timeoutSec, std::string& strE
             }
         }
 
-        boost::this_thread::sleep_for(boost::chrono::milliseconds(500));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
     bool ok;
@@ -374,7 +374,7 @@ bool TryFetchSnapshot(const fs::path& dataDir, int timeoutSec, std::string& strE
                 strError = strprintf("timeout after %d seconds (totalSize=%" PRId64 ", chunks=%" PRIszu ")",
                                      timeoutSec, g_fetch.totalSize, g_fetch.received.size());
             CloseDest();
-            boost::system::error_code ec;
+            std::error_code ec;
             fs::remove(g_fetch.destPath, ec);
         }
         ok = g_fetch.success;
@@ -420,7 +420,7 @@ static bool ScanLocalSnapshot()
     uint256 expectedHash;
     if (!Checkpoints::GetSnapshotHash(snapHeight, expectedHash)) return false;
 
-    boost::system::error_code ec;
+    std::error_code ec;
     int64_t sz = (int64_t)fs::file_size(g_localPath, ec);
     if (ec) return false;
 

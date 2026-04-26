@@ -9,8 +9,7 @@
 #include "util.h"
 #include "ui_interface.h"
 
-#include <boost/filesystem.hpp>
-#include <boost/filesystem/fstream.hpp>
+#include <filesystem>
 
 #include <leveldb/db.h>
 #include <leveldb/write_batch.h>
@@ -23,7 +22,7 @@
 #include <algorithm>
 #include <cstdio>
 
-namespace fs = boost::filesystem;
+namespace fs = std::filesystem;
 
 // Global LevelDB pointer (defined in txdb-leveldb.cpp)
 extern leveldb::DB *txdb;
@@ -64,7 +63,7 @@ bool DumpSnapshot(const fs::path& destPath,
     // Count UTXOs first
     int nUtxoCount = 0;
     {
-        CTxDB txdbRead("r");
+        auto txdbRead_holder = MakeChainDB("r"); CTxDBBase& txdbRead = *txdbRead_holder;
         txdbRead.SumUtxoValues(nUtxoCount);
     }
 

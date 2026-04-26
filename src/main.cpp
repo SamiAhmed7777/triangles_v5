@@ -3,9 +3,10 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "alert.h"
 #include "checkpoints.h"
 #include "db.h"
+
+#include <cmath>
 #include "txdb.h"
 #include "net.h"
 #include "init.h"
@@ -23,13 +24,13 @@
 #include <algorithm>
 #include <deque>
 #include <boost/algorithm/string/replace.hpp>
-#include <boost/filesystem.hpp>
-#include <boost/filesystem/fstream.hpp>
+#include <filesystem>
+#include <fstream>
 
 
 using namespace std;
 using namespace boost;
-namespace fs = boost::filesystem;
+namespace fs = std::filesystem;
 
 //
 // Global state
@@ -931,7 +932,7 @@ bool CTransaction::ReadFromDisk(CTxDBBase& txdb, COutPoint prevout)
 
 bool CTransaction::ReadFromDisk(COutPoint prevout)
 {
-    CTxDB txdb("r");
+    auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
     CTxIndex txindex;
     return ReadFromDisk(txdb, prevout, txindex);
 }
@@ -1064,7 +1065,7 @@ int CMerkleTx::SetMerkleBranch(const CBlock* pblock)
         {
             // Load the block this tx is in
             CTxIndex txindex;
-            if (!CTxDB("r").ReadTxIndex(GetHash(), txindex))
+            if (!MakeChainDB("r")->ReadTxIndex(GetHash(), txindex))
                 return 0;
             if (!blockTmp.ReadFromDisk(txindex.pos.nFile, txindex.pos.nBlockPos))
                 return 0;
@@ -1487,7 +1488,7 @@ bool CMerkleTx::AcceptToMemoryPool(CTxDBBase& txdb, bool fCheckInputs)
 
 bool CMerkleTx::AcceptToMemoryPool()
 {
-    CTxDB txdb("r");
+    auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
     return AcceptToMemoryPool(txdb);
 }
 
@@ -1515,7 +1516,7 @@ bool CWalletTx::AcceptWalletTransaction(CTxDBBase& txdb, bool fCheckInputs)
 
 bool CWalletTx::AcceptWalletTransaction()
 {
-    CTxDB txdb("r");
+    auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
     return AcceptWalletTransaction(txdb);
 }
 
@@ -1548,7 +1549,7 @@ bool GetTransaction(const uint256 &hash, CTransaction &tx, uint256 &hashBlock)
                 return true;
             }
         }
-        CTxDB txdb("r");
+        auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
         CTxIndex txindex;
         if (tx.ReadFromDisk(txdb, COutPoint(hash, 0), txindex))
         {
@@ -1837,6 +1838,12 @@ int GetNumBlocksOfPeers()
 
 bool IsInitialBlockDownload()
 {
+    // Bootstrap escape hatch: when the network has stalled and every node
+    // thinks it is in IBD because the tip is older than 24h, -forcestaking
+    // lets a single operator mint the first block to unstick the chain.
+    if (GetBoolArg("-forcestaking", false) && pindexBest != NULL &&
+        nBestHeight >= Checkpoints::GetTotalBlocksEstimate())
+        return false;
     if (pindexBest == NULL || nBestHeight < Checkpoints::GetTotalBlocksEstimate())
         return true;
     static int64_t nLastUpdate;
@@ -1858,7 +1865,7 @@ void static InvalidChainFound(CBlockIndex* pindexNew)
     if (pindexNew->nChainTrust > nBestInvalidTrust)
     {
         nBestInvalidTrust = pindexNew->nChainTrust;
-        CTxDB().WriteBestInvalidTrust(CBigNum(nBestInvalidTrust));
+        MakeChainDB()->WriteBestInvalidTrust(CBigNum(nBestInvalidTrust));
         uiInterface.NotifyBlocksChanged();
     }
 
@@ -1975,8 +1982,12 @@ bool CTransaction::FetchInputs(CTxDBBase& txdb, const MapPrevTx& mapPendingUtxos
                         }
                         else
                         {
-                            // Backfill to UTXO DB for future lookups
-                            txdb.WriteUtxo(prevout.hash, prevout.n, backfill);
+                            // Backfill to UTXO DB for future lookups. Skip the
+                            // write when the handle is read-only (wallet/mempool
+                            // callers open "r"); ConnectBlock will persist it
+                            // later via the writable chain handle.
+                            if (!txdb.IsReadOnly())
+                                txdb.WriteUtxo(prevout.hash, prevout.n, backfill);
                             inputsRet[prevout] = backfill;
                             continue;
                         }
@@ -3041,7 +3052,7 @@ bool CBlock::SetBestChain(CTxDBBase& txdb, CBlockIndex* pindexNew)
     if (!fIsInitialDownload && !strCmd.empty())
     {
         boost::replace_all(strCmd, "%s", hashBestChain.GetHex());
-        boost::thread t(runCommand, strCmd); // thread runs free
+        std::thread(runCommand, strCmd).detach(); // thread runs free
     }
 
 #ifdef ENABLE_ZMQ
@@ -3171,7 +3182,7 @@ bool CBlock::GetCoinAge(uint64_t& nCoinAge) const
 {
     nCoinAge = 0;
 
-    CTxDB txdb("r");
+    auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
     for (const CTransaction& tx : vtx)
     {
         uint64_t nTxCoinAge;
@@ -3250,7 +3261,7 @@ bool CBlock::AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const u
     pindexNew->phashBlock = &((*mi).first);
 
     // Write to disk block index
-    CTxDB txdb;
+    auto txdb_holder = MakeChainDB(); CTxDBBase& txdb = *txdb_holder;
     if (!txdb.TxnBegin())
         return false;
     txdb.WriteBlockIndex(CDiskBlockIndex(pindexNew));
@@ -3897,7 +3908,7 @@ bool LoadBlockIndex(bool fAllowNew)
     //
     // Load block index
     //
-    CTxDB txdb("cr+");
+    auto txdb_holder = MakeChainDB("cr+"); CTxDBBase& txdb = *txdb_holder;
     if (!txdb.LoadBlockIndex())
         return false;
 
@@ -4181,7 +4192,7 @@ bool FastImportBlockFile()
         LOCK(cs_main);
         CAutoFile blkdat(fileIn, SER_DISK, CLIENT_VERSION);
 
-        CTxDB txdb;
+        auto txdb_holder = MakeChainDB(); CTxDBBase& txdb = *txdb_holder;
         txdb.TxnBegin();
 
         unsigned int nPos = 0;
@@ -4392,17 +4403,8 @@ bool FastImportBlockFile()
     return nLoaded > 0;
 }
 
-//////////////////////////////////////////////////////////////////////////////
-//
-// CAlert
-//
-
-extern map<uint256, CAlert> mapAlerts;
-extern CCriticalSection cs_mapAlerts;
-
 string GetWarnings(string strFor)
 {
-    int nPriority = 0;
     string strStatusBar;
     string strRPC;
 
@@ -4411,33 +4413,11 @@ string GetWarnings(string strFor)
 
     // Misc warnings like out of disk space and clock is wrong
     if (strMiscWarning != "")
-    {
-        nPriority = 1000;
         strStatusBar = strMiscWarning;
-    }
 
     // triangles: if detected invalid checkpoint enter safe mode
     if (Checkpoints::hashInvalidCheckpoint != 0)
-    {
-        nPriority = 3000;
         strStatusBar = strRPC = _("WARNING: Invalid checkpoint found! Displayed transactions may not be correct! You may need to upgrade, or notify developers.");
-    }
-
-    // Alerts
-    {
-        LOCK(cs_mapAlerts);
-        for (auto& item : mapAlerts)
-        {
-            const CAlert& alert = item.second;
-            if (alert.AppliesToMe() && alert.nPriority > nPriority)
-            {
-                nPriority = alert.nPriority;
-                strStatusBar = alert.strStatusBar;
-                if (nPriority > 1000)
-                    strRPC = strStatusBar;  // triangles: safe mode for high alert
-            }
-        }
-    }
 
     if (strFor == "statusbar")
         return strStatusBar;
@@ -4494,7 +4474,6 @@ unsigned char pchMessageStart[4] = { 0x70, 0x35, 0x22, 0x05 };
 
 bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 {
-    static map<CService, CPubKey> mapReuseKey;
     RandAddSeedPerfmon();
     if (fDebug)
         printf("received: %s (%" PRIszu " bytes)\n", strCommand.c_str(), vRecv.size());
@@ -4627,13 +4606,6 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
                 RequestHeaderSyncRefill(pfrom, hashBestHeaderSync, 0, "version bootstrap");
             printf("IBD-DIAG: sent getblocks%s from height %d to peer %s\n",
                 fIBD ? "+getheaders" : "", nBestHeight, pfrom->addr.ToString().c_str());
-        }
-
-        // Relay alerts
-        {
-            LOCK(cs_mapAlerts);
-            for (auto& item : mapAlerts)
-                item.second.RelayTo(pfrom);
         }
 
         // Sync checkpoint relay disabled (master key removed in V5 fork).
@@ -4783,7 +4755,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         printf("IBD-DIAG: inv received: %d blocks, %d tx from %s (our height=%d)\n",
             nBlockInv, nTxInv, pfrom->addr.ToString().c_str(), nBestHeight);
 
-        CTxDB txdb("r");
+        auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
         int nNew = 0, nAlready = 0, nAboveBest = 0;
         int nFirstInvHeight = -1, nLastInvHeight = -1;
         for (unsigned int nInv = 0; nInv < vInv.size(); nInv++)
@@ -4984,13 +4956,6 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             }
         }
     }
-    else if (strCommand == "checkpoint")
-    {
-        // Sync checkpoint system disabled (master key removed in V5 fork).
-        // Ignore checkpoint messages — processing them during IBD causes the
-        // node to request a single far-future block instead of syncing sequentially.
-    }
-
     else if (strCommand == "getheaders")
     {
         CBlockLocator locator;
@@ -5129,7 +5094,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         vector<uint256> vWorkQueue;
         vector<uint256> vEraseQueue;
         CDataStream vMsg(vRecv);
-        CTxDB txdb("r");
+        auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
         CTransaction tx;
         vRecv >> tx;
 
@@ -5502,53 +5467,6 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
     }
 
 
-    else if (strCommand == "checkorder")
-    {
-        uint256 hashReply;
-        vRecv >> hashReply;
-
-        if (!GetBoolArg("-allowreceivebyip"))
-        {
-            pfrom->PushMessage("reply", hashReply, (int)2, string(""));
-            return true;
-        }
-
-        CWalletTx order;
-        vRecv >> order;
-
-        /// we have a chance to check the order here
-
-        // Keep giving the same key to the same ip until they use it
-        if (!mapReuseKey.count(pfrom->addr))
-            pwalletMain->GetKeyFromPool(mapReuseKey[pfrom->addr], true);
-
-        // Send back approval of order and pubkey to use
-        CScript scriptPubKey;
-        scriptPubKey << mapReuseKey[pfrom->addr] << OP_CHECKSIG;
-        pfrom->PushMessage("reply", hashReply, (int)0, scriptPubKey);
-    }
-
-
-    else if (strCommand == "reply")
-    {
-        uint256 hashReply;
-        vRecv >> hashReply;
-
-        CRequestTracker tracker;
-        {
-            LOCK(pfrom->cs_mapRequests);
-            map<uint256, CRequestTracker>::iterator mi = pfrom->mapRequests.find(hashReply);
-            if (mi != pfrom->mapRequests.end())
-            {
-                tracker = (*mi).second;
-                pfrom->mapRequests.erase(mi);
-            }
-        }
-        if (!tracker.IsNull())
-            tracker.fn(tracker.param1, vRecv);
-    }
-
-
     else if (strCommand == "ping")
     {
         if (pfrom->nVersion > BIP0031_VERSION)
@@ -5591,37 +5509,6 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
              strCommand == "getsnapchunk" || strCommand == "snapchunk")
     {
         SnapshotNet::ProcessSnapshotMessage(pfrom, strCommand, vRecv);
-    }
-
-
-    else if (strCommand == "alert")
-    {
-        CAlert alert;
-        vRecv >> alert;
-
-        uint256 alertHash = alert.GetHash();
-        if (pfrom->setKnown.count(alertHash) == 0)
-        {
-            if (alert.ProcessAlert())
-            {
-                // Relay
-                pfrom->setKnown.insert(alertHash);
-                {
-                    LOCK(cs_vNodes);
-                    for (CNode* pnode : vNodes)
-                        alert.RelayTo(pnode);
-                }
-            }
-            else {
-                // Small DoS penalty so peers that send us lots of
-                // duplicate/expired/invalid-signature/whatever alerts
-                // eventually get banned.
-                // This isn't a Misbehaving(100) (immediate ban) because the
-                // peer might be an older or different implementation with
-                // a different signature key, etc.
-                pfrom->Misbehaving(10);
-            }
-        }
     }
 
 
@@ -6212,7 +6099,7 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
 
         vector<CInv> vGetData;
         int64_t nNow = GetTime() * 1000000;
-        CTxDB txdb("r");
+        auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
         // During IBD, send larger getdata batches since PoS blocks are small
         // and the bottleneck is round-trip latency, not bandwidth.
         unsigned int nGetDataBatchSize = IsInitialBlockDownload() ? 4000 : 1000;

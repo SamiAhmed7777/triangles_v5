@@ -371,7 +371,7 @@ Value signrawtransaction(const Array& params, bool fHelp)
         CTransaction tempTx;
         MapPrevTx mapPrevTx;
         MapPrevTx mapEmpty;
-        CTxDB txdb("r");
+        auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
         bool fInvalid;
 
         // FetchInputs aborts on failure, so we go one at a time.
@@ -548,7 +548,7 @@ Value sendrawtransaction(const Array& params, bool fHelp)
     else
     {
         // push to local node
-        CTxDB txdb("r");
+        auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
         if (!tx.AcceptToMemoryPool(txdb))
             throw JSONRPCError(RPC_DESERIALIZATION_ERROR, "TX rejected");
 

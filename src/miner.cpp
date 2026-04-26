@@ -136,7 +136,7 @@ CBlock* CreateNewBlock(CWallet* pwallet, bool fProofOfStake, int64_t* pFees)
     int64_t nFees = 0;
     {
         LOCK2(cs_main, mempool.cs);
-        CTxDB txdb("r");
+        auto txdb_holder = MakeChainDB("r"); CTxDBBase& txdb = *txdb_holder;
 
         // Priority order to process transactions
         list<COrphan> vOrphan; // list memory doesn't move
@@ -387,6 +387,7 @@ void StakeMiner(CWallet *pwallet)
     RenameThread("Triangles-miner");
 
     bool fTryToSync = true;
+    bool fForceStaking = GetBoolArg("-forcestaking", false);
 
     while (true)
     {
@@ -401,7 +402,7 @@ void StakeMiner(CWallet *pwallet)
                 return;
         }
 
-        while (vNodes.empty() || IsInitialBlockDownload())
+        while (!fForceStaking && (vNodes.empty() || IsInitialBlockDownload()))
         {
             nLastCoinStakeSearchInterval = 0;
             fTryToSync = true;
@@ -410,7 +411,7 @@ void StakeMiner(CWallet *pwallet)
                 return;
         }
 
-        if (fTryToSync)
+        if (fTryToSync && !fForceStaking)
         {
             fTryToSync = false;
             if (vNodes.size() < 2 || nBestHeight < GetNumBlocksOfPeers())

@@ -5,7 +5,7 @@
 #define TRIANGLES_UTXOSNAPSHOT_H
 
 #include <string>
-#include <boost/filesystem.hpp>
+#include <filesystem>
 
 // UTXO snapshot file magic bytes
 static const unsigned int UTXO_SNAPSHOT_MAGIC = 0x53585455; // "UTXS" little-endian
@@ -22,7 +22,7 @@ namespace UtxoSnapshot {
     // Create a UTXO snapshot from the current chain state.
     // Writes last nHeaders block index entries + all UTXOs to destPath.
     // Returns true on success, sets strError on failure.
-    bool DumpSnapshot(const boost::filesystem::path& destPath,
+    bool DumpSnapshot(const std::filesystem::path& destPath,
                       unsigned int nHeaders,
                       std::string& strError);
 
@@ -30,8 +30,8 @@ namespace UtxoSnapshot {
     // Writes block index entries, UTXOs, hashBestChain, and dbformat.
     // The LevelDB must NOT be open yet (call before LoadBlockIndex).
     // Returns true on success, sets strError on failure.
-    bool LoadSnapshot(const boost::filesystem::path& snapshotPath,
-                      const boost::filesystem::path& dataDir,
+    bool LoadSnapshot(const std::filesystem::path& snapshotPath,
+                      const std::filesystem::path& dataDir,
                       std::string& strError);
 
 } // namespace UtxoSnapshot

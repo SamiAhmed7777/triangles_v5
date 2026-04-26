@@ -9,17 +9,17 @@
 #include <deque>
 #include <vector>
 
-#include <boost/thread/condition_variable.hpp>
-#include <boost/thread/mutex.hpp>
-#include <boost/thread/thread.hpp>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 
 template<typename T>
 class CCheckQueue
 {
 private:
-    boost::mutex mutex;
-    boost::condition_variable condWorker;
-    boost::condition_variable condMaster;
+    std::mutex mutex;
+    std::condition_variable condWorker;
+    std::condition_variable condMaster;
 
     std::deque<T> queue;
     unsigned int nIdle;
@@ -32,7 +32,7 @@ private:
 
     bool Loop(bool fMaster)
     {
-        boost::unique_lock<boost::mutex> lock(mutex);
+        std::unique_lock<std::mutex> lock(mutex);
         if (!fMaster)
             nTotal++;
         nIdle++;
@@ -102,7 +102,7 @@ public:
 
     void StartBatch()
     {
-        boost::unique_lock<boost::mutex> lock(mutex);
+        std::unique_lock<std::mutex> lock(mutex);
         fAllOk = true;
         nTodo = 0;
     }
@@ -112,7 +112,7 @@ public:
         if (vChecks.empty())
             return;
 
-        boost::unique_lock<boost::mutex> lock(mutex);
+        std::unique_lock<std::mutex> lock(mutex);
         for (typename std::vector<T>::iterator it = vChecks.begin(); it != vChecks.end(); ++it)
         {
             queue.push_back(T());
@@ -132,7 +132,7 @@ public:
 
     void Quit()
     {
-        boost::unique_lock<boost::mutex> lock(mutex);
+        std::unique_lock<std::mutex> lock(mutex);
         fQuit = true;
         condWorker.notify_all();
         condMaster.notify_all();

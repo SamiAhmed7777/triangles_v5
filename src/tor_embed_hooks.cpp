@@ -5,9 +5,8 @@
 #include "tor_embed_hooks.h"
 #include "util.h"
 
-#include <boost/filesystem.hpp>
-#include <boost/thread/mutex.hpp>
-#include <boost/thread/thread.hpp>
+#include <mutex>
+#include <thread>
 #include <memory>
 #include <string>
 
@@ -25,13 +24,13 @@ const char* triangles_onion_service_directory()
 
 int triangles_tor_check_interrupted()
 {
-    return boost::this_thread::interruption_requested() ? 1 : 0;
+    return fShutdown ? 1 : 0;
 }
 
-static boost::mutex g_torInitializing;
+static std::mutex g_torInitializing;
 
-static std::unique_ptr<boost::unique_lock<boost::mutex> > g_torUninitialized(
-    new boost::unique_lock<boost::mutex>(g_torInitializing));
+static std::unique_ptr<std::unique_lock<std::mutex> > g_torUninitialized(
+    new std::unique_lock<std::mutex>(g_torInitializing));
 
 void triangles_tor_set_initialized()
 {
@@ -40,5 +39,5 @@ void triangles_tor_set_initialized()
 
 void triangles_tor_wait_initialized()
 {
-    boost::unique_lock<boost::mutex> checking(g_torInitializing);
+    std::unique_lock<std::mutex> checking(g_torInitializing);
 }

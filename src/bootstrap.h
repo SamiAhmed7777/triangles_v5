@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 #include <functional>
-#include <boost/filesystem.hpp>
+#include <filesystem>
 
 namespace Bootstrap {
 
@@ -20,14 +20,14 @@ namespace Bootstrap {
     typedef std::function<void(int64_t, int64_t)> ProgressCallback;
 
     // Check if data dir already has blockchain data
-    bool NeedsBootstrap(const boost::filesystem::path& dataDir);
+    bool NeedsBootstrap(const std::filesystem::path& dataDir);
 
     // Download a single file via HTTP GET, write to destPath.
     // If noProxy is true, bypass Tor SOCKS proxy and connect directly
     // (used for clearnet bootstrap downloads).
     // If portOverride is set (>0), uses that port instead of the default PORT.
     bool DownloadFile(const std::string& host, const std::string& urlPath,
-                      const boost::filesystem::path& destPath,
+                      const std::filesystem::path& destPath,
                       ProgressCallback progressFn,
                       std::string& strError,
                       bool noProxy = false,
@@ -42,7 +42,7 @@ namespace Bootstrap {
     // Download bootstrap.tar.gz and extract to dataDir.
     // Falls back to filelist.txt + individual file download if tar.gz unavailable.
     bool DownloadBootstrap(const std::string& host,
-                           const boost::filesystem::path& dataDir,
+                           const std::filesystem::path& dataDir,
                            ProgressCallback progressFn,
                            std::string& strError);
 
@@ -56,7 +56,7 @@ namespace Bootstrap {
     };
 
     // Parse a snapshot.manifest file into a SnapshotManifest struct.
-    bool ParseManifest(const boost::filesystem::path& manifestPath,
+    bool ParseManifest(const std::filesystem::path& manifestPath,
                        SnapshotManifest& manifest,
                        std::string& strError);
 
@@ -68,7 +68,7 @@ namespace Bootstrap {
     // This is much faster than downloading the full bootstrap archive.
     // Returns true if snapshot was downloaded and loaded successfully.
     bool DownloadUtxoSnapshot(const std::string& host,
-                              const boost::filesystem::path& dataDir,
+                              const std::filesystem::path& dataDir,
                               ProgressCallback progressFn,
                               std::string& strError);
 

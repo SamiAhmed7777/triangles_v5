@@ -5,12 +5,11 @@
 
 #include "walletdb.h"
 #include "wallet.h"
+#include <filesystem>
 #include <boost/version.hpp>
-#include <boost/filesystem.hpp>
 
 using namespace std;
-using namespace boost;
-namespace fs = boost::filesystem;
+namespace fs = std::filesystem;
 
 
 static uint64_t nAccountingEntryNumber = 0;
