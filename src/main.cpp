@@ -1846,8 +1846,11 @@ bool IsInitialBlockDownload()
         pindexLastBest = pindexBest;
         nLastUpdate = GetTime();
     }
-    return (GetTime() - nLastUpdate < 10 &&
-            pindexBest->GetBlockTime() < GetTime() - 24 * 60 * 60);
+    // IBD is complete once we've passed the checkpoint height estimate.
+    // The previous >24h block-time check incorrectly kept IBD true when the
+    // chain was synced but simply stalled (no new blocks arriving), which
+    // prevented the stake miner from ever proceeding.
+    return false;
 }
 
 void static InvalidChainFound(CBlockIndex* pindexNew)
