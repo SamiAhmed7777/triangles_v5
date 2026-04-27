@@ -101,6 +101,39 @@ namespace fs = std::filesystem;
 
 namespace
 {
+
+// rocksdb::DB::Open shipped the raw DB** overload for years, then added a
+// std::unique_ptr<DB>* form in 8.x and removed the raw form in newer
+// releases (Homebrew's macOS rocksdb hits this path; Ubuntu 22.04 and
+// MSYS2 still expose the DB** form). Pick whichever overload the linked
+// rocksdb actually has via SFINAE — `int` parameter is preferred over
+// `long`, so if DB** exists, the first overload wins; otherwise the
+// fallback that wraps unique_ptr is used.
+template<typename T>
+inline auto OpenSmsgDBImpl(const rocksdb::Options& opts, const std::string& path,
+                           T** dbptr, int)
+    -> decltype(rocksdb::DB::Open(opts, path, dbptr))
+{
+    return rocksdb::DB::Open(opts, path, dbptr);
+}
+
+template<typename T>
+inline rocksdb::Status OpenSmsgDBImpl(const rocksdb::Options& opts, const std::string& path,
+                                      T** dbptr, long)
+{
+    std::unique_ptr<T> tmp;
+    auto s = rocksdb::DB::Open(opts, path, &tmp);
+    if (s.ok()) *dbptr = tmp.release();
+    return s;
+}
+
+inline rocksdb::Status OpenSmsgDB(const rocksdb::Options& opts,
+                                  const std::string& path,
+                                  rocksdb::DB** dbptr)
+{
+    return OpenSmsgDBImpl(opts, path, dbptr, 0);
+}
+
 const long int SMSG_BUCKET_FILE_SIZE_LIMIT = 0x70000000L;
 const int64_t SMSG_THREAD_SHUTDOWN_WAIT_MS = 5000;
 const int64_t SMSG_THREAD_SHUTDOWN_POLL_MS = 50;
@@ -403,7 +436,7 @@ bool SecMsgDB::Open(const char* pszMode)
     
     rocksdb::Options options;
     options.create_if_missing = fCreate;
-    rocksdb::Status s = rocksdb::DB::Open(options, fullpath.string(), &smsgDB);
+    rocksdb::Status s = OpenSmsgDB(options, fullpath.string(), &smsgDB);
     
     if (!s.ok())
     {

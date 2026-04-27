@@ -141,6 +141,10 @@ public:
     bool HaveUtxo(const uint256& hash, unsigned int n);
     int64_t SumUtxoValues(int& nCount);
 
+    // Range scans use this directly (e.g. UtxoSnapshot::DumpSnapshot iterating
+    // the "u" keyspace). The iterator yields raw serialized key/value bytes.
+    virtual std::unique_ptr<CTxDBIteratorBase> NewIterator() const = 0;
+
 protected:
     bool fReadOnly = false;
 
@@ -149,7 +153,6 @@ protected:
     virtual bool WriteRaw(const std::string& key, const std::string& value) = 0;
     virtual bool EraseRaw(const std::string& key) = 0;
     virtual bool ExistsRaw(const std::string& key) const = 0;
-    virtual std::unique_ptr<CTxDBIteratorBase> NewIterator() const = 0;
 
     // Templated Read/Write/Erase/Exists are non-virtual (templates can't be
     // virtual in C++) — they serialize and dispatch to the byte-level virtuals.
