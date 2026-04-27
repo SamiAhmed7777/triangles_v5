@@ -3,6 +3,8 @@
 
 #include <QObject>
 
+#include "../signal.h"
+
 class OptionsModel;
 class AddressTableModel;
 class TransactionTableModel;
@@ -57,6 +59,8 @@ private:
 
     void subscribeToCoreSignals();
     void unsubscribeFromCoreSignals();
+
+    CSignalConnections m_core_signal_connections;
 signals:
     void numConnectionsChanged(int count);
     void numBlocksChanged(int count, int countOfPeers);

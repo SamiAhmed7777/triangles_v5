@@ -6,11 +6,9 @@
 #ifndef TRIANGLES_UI_INTERFACE_H
 #define TRIANGLES_UI_INTERFACE_H
 
-#include <boost/signals2/last_value.hpp>
-#include <boost/signals2/signal.hpp>
-#include <boost/bind/bind.hpp>
-using namespace boost::placeholders;
+#include "signal.h"
 
+#include <optional>
 #include <string>
 
 #include <stdint.h>
@@ -65,40 +63,41 @@ public:
     };
 
     /** Show message box. */
-    boost::signals2::signal<void (const std::string& message, const std::string& caption, int style)> ThreadSafeMessageBox;
+    CSignal<void(const std::string& message, const std::string& caption, int style)> ThreadSafeMessageBox;
 
     /** Ask the user whether they want to pay a fee or not. */
-    boost::signals2::signal<bool (int64_t nFeeRequired, const std::string& strCaption), boost::signals2::last_value<bool> > ThreadSafeAskFee;
+    CSignal<bool(int64_t nFeeRequired, const std::string& strCaption)> ThreadSafeAskFee;
 
     /** Handle a URL passed at the command line. */
-    boost::signals2::signal<void (const std::string& strURI)> ThreadSafeHandleURI;
+    CSignal<void(const std::string& strURI)> ThreadSafeHandleURI;
 
     /** Progress message during initialization. */
-    boost::signals2::signal<void (const std::string &message)> InitMessage;
+    CSignal<void(const std::string& message)> InitMessage;
 
     /** Initiate client shutdown. */
-    boost::signals2::signal<void ()> QueueShutdown;
+    CSignal<void()> QueueShutdown;
 
     /** Translate a message to the native language of the user. */
-    boost::signals2::signal<std::string (const char* psz)> Translate;
+    CSignal<std::string(const char* psz)> Translate;
 
     /** Block chain changed. */
-    boost::signals2::signal<void ()> NotifyBlocksChanged;
+    CSignal<void()> NotifyBlocksChanged;
 
     /** Number of network connections changed. */
-    boost::signals2::signal<void (int newNumConnections)> NotifyNumConnectionsChanged;
+    CSignal<void(int newNumConnections)> NotifyNumConnectionsChanged;
 };
 
 extern CClientUIInterface uiInterface;
 
 /**
- * Translation function: Call Translate signal on UI interface, which returns a boost::optional result.
- * If no translation slot is registered, nothing is returned, and simply return the input.
+ * Translation function: Call Translate signal on UI interface, which returns
+ * an std::optional. If no translation slot is registered, fall back to the
+ * untranslated input.
  */
 inline std::string _(const char* psz)
 {
-    boost::optional<std::string> rv = uiInterface.Translate(psz);
-    return rv ? (*rv) : psz;
+    std::optional<std::string> rv = uiInterface.Translate(psz);
+    return rv ? *rv : psz;
 }
 
 #endif

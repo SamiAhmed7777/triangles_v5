@@ -9,6 +9,7 @@
 
 #include "net.h"
 #include "db.h"
+#include "signal.h"
 #include "wallet.h"
 #include "lz4/lz4.h"
 
@@ -41,13 +42,13 @@ extern bool fSecMsgEnabled;
 class SecMsgStored;
 
 // Inbox db changed, called with lock cs_smsgDB held.
-extern boost::signals2::signal<void (SecMsgStored& inboxHdr)> NotifySecMsgInboxChanged;
+extern CSignal<void(SecMsgStored&)> NotifySecMsgInboxChanged;
 
 // Outbox db changed, called with lock cs_smsgDB held.
-extern boost::signals2::signal<void (SecMsgStored& outboxHdr)> NotifySecMsgOutboxChanged;
+extern CSignal<void(SecMsgStored&)> NotifySecMsgOutboxChanged;
 
 // Wallet Unlocked, called after all messages received while locked have been processed.
-extern boost::signals2::signal<void ()> NotifySecMsgWalletUnlocked;
+extern CSignal<void()> NotifySecMsgWalletUnlocked;
 
 
 class SecMsgBucket;

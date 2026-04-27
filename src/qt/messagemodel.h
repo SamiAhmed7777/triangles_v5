@@ -5,6 +5,7 @@
 
 #include <vector>
 #include "allocators.h" /* for SecureString */
+#include "../signal.h"
 #include "smessage.h"
 #include <map>
 #include <QSortFilterProxyModel>
@@ -174,6 +175,8 @@ private:
 
     void subscribeToCoreSignals();
     void unsubscribeFromCoreSignals();
+
+    CSignalConnections m_core_signal_connections;
 
 public slots:
 

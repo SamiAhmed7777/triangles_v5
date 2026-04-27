@@ -13,6 +13,7 @@
 #include "main.h"
 #include "net.h"
 #include "notificationqueue.h"
+#include "signal.h"
 
 #undef printf
 #include <boost/asio.hpp>
@@ -25,6 +26,7 @@
 #include <boost/asio/ssl.hpp>
 #include <fstream>
 #include <boost/shared_ptr.hpp>
+#include <boost/weak_ptr.hpp>
 #include <memory>
 #include <list>
 
@@ -886,7 +888,7 @@ void ThreadRPCServer2(void* parg)
     boost::system::error_code v6_only_error;
     boost::shared_ptr<ip::tcp::acceptor> acceptor(new ip::tcp::acceptor(io_service));
 
-    boost::signals2::signal<void ()> StopRequests;
+    CSignal<void()> StopRequests;
 
     bool fListening = false;
     std::string strerr;
@@ -902,10 +904,15 @@ void ThreadRPCServer2(void* parg)
         acceptor->listen(socket_base::max_listen_connections);
 
         RPCListen(acceptor, context, fUseSSL);
-        // Cancel outstanding listen-requests for this acceptor when shutting down
-        StopRequests.connect(signals2::slot<void ()>(
-                    static_cast<void (ip::tcp::acceptor::*)()>(&ip::tcp::acceptor::close), acceptor.get())
-                .track(acceptor));
+        // Cancel outstanding listen-requests for this acceptor when shutting down.
+        // weak_ptr emulates signals2's .track(): if the acceptor has already been
+        // released by the time StopRequests fires, the slot is a no-op.
+        {
+            boost::weak_ptr<ip::tcp::acceptor> weak_acceptor(acceptor);
+            StopRequests.connect([weak_acceptor]() {
+                if (auto a = weak_acceptor.lock()) a->close();
+            });
+        }
 
         fListening = true;
     }
@@ -928,10 +935,13 @@ void ThreadRPCServer2(void* parg)
             acceptor->listen(socket_base::max_listen_connections);
 
             RPCListen(acceptor, context, fUseSSL);
-            // Cancel outstanding listen-requests for this acceptor when shutting down
-            StopRequests.connect(signals2::slot<void ()>(
-                        static_cast<void (ip::tcp::acceptor::*)()>(&ip::tcp::acceptor::close), acceptor.get())
-                    .track(acceptor));
+            // See note above on weak_ptr-based .track() emulation.
+            {
+                boost::weak_ptr<ip::tcp::acceptor> weak_acceptor(acceptor);
+                StopRequests.connect([weak_acceptor]() {
+                    if (auto a = weak_acceptor.lock()) a->close();
+                });
+            }
 
             fListening = true;
         }

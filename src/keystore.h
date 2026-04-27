@@ -6,8 +6,8 @@
 #define TRIANGLES_KEYSTORE_H
 
 #include "crypter.h"
+#include "signal.h"
 #include "sync.h"
-#include <boost/signals2/signal.hpp>
 
 class CScript;
 
@@ -177,7 +177,7 @@ public:
     /* Wallet status (encrypted, locked) changed.
      * Note: Called without locks held.
      */
-    boost::signals2::signal<void (CCryptoKeyStore* wallet)> NotifyStatusChanged;
+    CSignal<void(CCryptoKeyStore*)> NotifyStatusChanged;
 };
 
 #endif

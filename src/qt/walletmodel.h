@@ -8,6 +8,7 @@
 #include <QMutex>
 
 #include "allocators.h" /* for SecureString */
+#include "../signal.h"
 
 class OptionsModel;
 class AddressTableModel;
@@ -156,6 +157,8 @@ private:
     void subscribeToCoreSignals();
     void unsubscribeFromCoreSignals();
     bool checkBalanceChanged();
+
+    CSignalConnections m_core_signal_connections;
 
 
 public slots:

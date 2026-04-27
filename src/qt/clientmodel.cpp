@@ -182,14 +182,13 @@ static void NotifyNumConnectionsChanged(ClientModel *clientmodel, int newNumConn
 
 void ClientModel::subscribeToCoreSignals()
 {
-    // Connect signals to client
-    uiInterface.NotifyBlocksChanged.connect(boost::bind(NotifyBlocksChanged, this));
-    uiInterface.NotifyNumConnectionsChanged.connect(boost::bind(NotifyNumConnectionsChanged, this, _1));
+    m_core_signal_connections.add(uiInterface.NotifyBlocksChanged.connect(
+        [this]() { NotifyBlocksChanged(this); }));
+    m_core_signal_connections.add(uiInterface.NotifyNumConnectionsChanged.connect(
+        [this](int n) { NotifyNumConnectionsChanged(this, n); }));
 }
 
 void ClientModel::unsubscribeFromCoreSignals()
 {
-    // Disconnect signals from client
-    uiInterface.NotifyBlocksChanged.disconnect(boost::bind(NotifyBlocksChanged, this));
-    uiInterface.NotifyNumConnectionsChanged.disconnect(boost::bind(NotifyNumConnectionsChanged, this, _1));
+    m_core_signal_connections.disconnect_all();
 }

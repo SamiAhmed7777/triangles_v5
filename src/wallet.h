@@ -334,12 +334,12 @@ public:
     /** Address book entry changed.
      * @note called with lock cs_wallet held.
      */
-    boost::signals2::signal<void (CWallet *wallet, const CTxDestination &address, const std::string &label, bool isMine, ChangeType status)> NotifyAddressBookChanged;
+    CSignal<void(CWallet*, const CTxDestination&, const std::string&, bool, ChangeType)> NotifyAddressBookChanged;
 
     /** Wallet transaction added, removed or updated.
      * @note called with lock cs_wallet held.
      */
-    boost::signals2::signal<void (CWallet *wallet, const uint256 &hashTx, ChangeType status)> NotifyTransactionChanged;
+    CSignal<void(CWallet*, const uint256&, ChangeType)> NotifyTransactionChanged;
 };
 
 /** A key allocated from the key pool. */
