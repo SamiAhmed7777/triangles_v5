@@ -8,7 +8,7 @@
 #include <QMutex>
 
 #include "allocators.h" /* for SecureString */
-#include "../signal.h"
+#include "../util_signal.h"
 
 class OptionsModel;
 class AddressTableModel;

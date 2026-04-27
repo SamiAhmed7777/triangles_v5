@@ -13,7 +13,7 @@
 #include "main.h"
 #include "net.h"
 #include "notificationqueue.h"
-#include "signal.h"
+#include "util_signal.h"
 
 #undef printf
 #include <boost/asio.hpp>

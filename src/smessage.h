@@ -9,7 +9,7 @@
 
 #include "net.h"
 #include "db.h"
-#include "signal.h"
+#include "util_signal.h"
 #include "wallet.h"
 #include "lz4/lz4.h"
 

@@ -6,7 +6,7 @@
 #define TRIANGLES_KEYSTORE_H
 
 #include "crypter.h"
-#include "signal.h"
+#include "util_signal.h"
 #include "sync.h"
 
 class CScript;

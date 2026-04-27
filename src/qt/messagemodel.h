@@ -5,7 +5,7 @@
 
 #include <vector>
 #include "allocators.h" /* for SecureString */
-#include "../signal.h"
+#include "../util_signal.h"
 #include "smessage.h"
 #include <map>
 #include <QSortFilterProxyModel>

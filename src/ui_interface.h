@@ -6,7 +6,7 @@
 #ifndef TRIANGLES_UI_INTERFACE_H
 #define TRIANGLES_UI_INTERFACE_H
 
-#include "signal.h"
+#include "util_signal.h"
 
 #include <optional>
 #include <string>

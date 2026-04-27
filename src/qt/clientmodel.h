@@ -3,7 +3,7 @@
 
 #include <QObject>
 
-#include "../signal.h"
+#include "../util_signal.h"
 
 class OptionsModel;
 class AddressTableModel;
