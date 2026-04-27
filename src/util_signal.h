@@ -19,7 +19,7 @@
  *   CSignal<void(Args...)>    fan-out signal, operator() returns void.
  *   CSignal<R(Args...)>       returns std::optional<R> from the most-recently
  *                             connected slot (mirroring signals2's last_value
- *                             policy with optional fallback when no slots).
+ *                             policy with optional fallback when no slots are connected).
  *
  * connect(slot) returns a Connection token; call .disconnect() to unsubscribe.
  *
@@ -34,7 +34,9 @@ namespace signal_detail {
 template <typename Slot>
 struct SignalState
 {
-    std::map<std::size_t, Slot> slots;
+    // Renamed from `slots` because Qt's MOC headers `#define slots` to expand
+    // empty, which strips the member name in any TU that pulls in <QtCore>.
+    std::map<std::size_t, Slot> slot_map;
     std::size_t next_id = 0;
 };
 
@@ -47,7 +49,7 @@ public:
     void disconnect()
     {
         if (auto sp = m_state.lock()) {
-            sp->slots.erase(m_id);
+            sp->slot_map.erase(m_id);
         }
         m_state.reset();
     }
@@ -76,11 +78,11 @@ public:
     Connection connect(slot_type slot)
     {
         std::size_t id = ++m_state->next_id;
-        m_state->slots.emplace(id, std::move(slot));
+        m_state->slot_map.emplace(id, std::move(slot));
         return Connection(m_state, id);
     }
 
-    bool empty() const { return m_state->slots.empty(); }
+    bool empty() const { return m_state->slot_map.empty(); }
 
 protected:
     std::shared_ptr<SignalState<Slot>> m_state;
@@ -97,7 +99,7 @@ public:
     void operator()(CallArgs&&... args) const
     {
         // Snapshot lets slots mutate connections during invocation.
-        auto snapshot = this->m_state->slots;
+        auto snapshot = this->m_state->slot_map;
         for (auto& kv : snapshot) {
             if (kv.second) kv.second(args...);
         }
@@ -113,7 +115,7 @@ public:
     template <typename... CallArgs>
     std::optional<R> operator()(CallArgs&&... args) const
     {
-        auto snapshot = this->m_state->slots;
+        auto snapshot = this->m_state->slot_map;
         std::optional<R> result;
         for (auto& kv : snapshot) {
             if (kv.second) result = kv.second(args...);

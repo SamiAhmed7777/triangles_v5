@@ -450,59 +450,29 @@ bool SecMsgDB::Open(const char* pszMode)
 };
 
 
-class SecMsgBatchScanner : public rocksdb::WriteBatch::Handler
-{
-public:
-    std::string needle;
-    bool* deleted;
-    std::string* foundValue;
-    bool foundEntry;
-
-    SecMsgBatchScanner() : foundEntry(false) {}
-
-    virtual void Put(const rocksdb::Slice& key, const rocksdb::Slice& value) override
-    {
-        if (key.ToString() == needle)
-        {
-            foundEntry = true;
-            *deleted = false;
-            *foundValue = value.ToString();
-        };
-    };
-
-    virtual void Delete(const rocksdb::Slice& key) override
-    {
-        if (key.ToString() == needle)
-        {
-            foundEntry = true;
-            *deleted = true;
-        };
-    };
-};
-
 // When performing a read, if we have an active batch we need to check it first
 // before reading from the database, as the rest of the code assumes that once
-// a database transaction begins reads are consistent with it. It would be good
-// to change that assumption in future and avoid the performance hit, though in
-// practice it does not appear to be large.
+// a database transaction begins reads are consistent with it.
+//
+// Previously implemented via rocksdb::WriteBatch::Handler subclass, which fails
+// to link against Ubuntu's librocksdb-dev (typeinfo for the Handler base class
+// isn't exported there). The pendingBatch map is updated alongside every Put
+// or Delete on activeBatch and answers ScanBatch queries directly.
 bool SecMsgDB::ScanBatch(const CDataStream& key, std::string* value, bool* deleted) const
 {
     if (!activeBatch)
         return false;
-    
+
     *deleted = false;
-    SecMsgBatchScanner scanner;
-    scanner.needle = key.str();
-    scanner.deleted = deleted;
-    scanner.foundValue = value;
-    rocksdb::Status s = activeBatch->Iterate(&scanner);
-    if (!s.ok())
-    {
-        printf("SecMsgDB ScanBatch error: %s\n", s.ToString().c_str());
+    auto it = pendingBatch.find(key.str());
+    if (it == pendingBatch.end())
         return false;
-    };
-    
-    return scanner.foundEntry;
+    if (!it->second.has_value()) {
+        *deleted = true;
+        return true;
+    }
+    *value = *it->second;
+    return true;
 }
 
 bool SecMsgDB::TxnBegin()
@@ -510,6 +480,7 @@ bool SecMsgDB::TxnBegin()
     if (activeBatch)
         return true;
     activeBatch = new rocksdb::WriteBatch();
+    pendingBatch.clear();
     return true;
 };
 
@@ -523,6 +494,7 @@ bool SecMsgDB::TxnCommit()
     rocksdb::Status status = pdb->Write(writeOptions, activeBatch);
     delete activeBatch;
     activeBatch = NULL;
+    pendingBatch.clear();
     
     if (!status.ok())
     {
@@ -537,6 +509,7 @@ bool SecMsgDB::TxnAbort()
 {
     delete activeBatch;
     activeBatch = NULL;
+    pendingBatch.clear();
     return true;
 };
 
@@ -602,9 +575,10 @@ bool SecMsgDB::WritePK(CKeyID& addr, CPubKey& pubkey)
     if (activeBatch)
     {
         activeBatch->Put(ssKey.str(), ssValue.str());
+        pendingBatch[ssKey.str()] = ssValue.str();
         return true;
     };
-    
+
     rocksdb::WriteOptions writeOptions;
     writeOptions.sync = true;
     rocksdb::Status s = pdb->Put(writeOptions, ssKey.str(), ssValue.str());
@@ -613,7 +587,7 @@ bool SecMsgDB::WritePK(CKeyID& addr, CPubKey& pubkey)
         printf("SecMsgDB write failure: %s\n", s.ToString().c_str());
         return false;
     };
-    
+
     return true;
 };
 
@@ -746,9 +720,10 @@ bool SecMsgDB::WriteSmesg(unsigned char* chKey, SecMsgStored& smsgStored)
     if (activeBatch)
     {
         activeBatch->Put(ssKey.str(), ssValue.str());
+        pendingBatch[ssKey.str()] = ssValue.str();
         return true;
     };
-    
+
     rocksdb::WriteOptions writeOptions;
     writeOptions.sync = true;
     rocksdb::Status s = pdb->Put(writeOptions, ssKey.str(), ssValue.str());
@@ -757,7 +732,7 @@ bool SecMsgDB::WriteSmesg(unsigned char* chKey, SecMsgStored& smsgStored)
         printf("SecMsgDB write failed: %s\n", s.ToString().c_str());
         return false;
     };
-    
+
     return true;
 };
 
@@ -792,9 +767,10 @@ bool SecMsgDB::EraseSmesg(unsigned char* chKey)
     if (activeBatch)
     {
         activeBatch->Delete(ssKey.str());
+        pendingBatch[ssKey.str()] = std::nullopt;
         return true;
     };
-    
+
     rocksdb::WriteOptions writeOptions;
     writeOptions.sync = true;
     rocksdb::Status s = pdb->Delete(writeOptions, ssKey.str());

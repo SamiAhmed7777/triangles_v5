@@ -32,6 +32,40 @@ namespace fs = std::filesystem;
 // the same way the LevelDB backend shares its txdb singleton.
 static rocksdb::DB* g_rocksdb = nullptr;
 
+namespace {
+
+// rocksdb::DB::Open shipped a raw DB** overload for years; newer releases
+// (Homebrew's macOS rocksdb 10.x) replaced it with std::unique_ptr<DB>*.
+// SFINAE picks whichever overload the linked rocksdb actually has —
+// `int` is preferred over `long`, so when DB** exists, the first overload
+// wins; otherwise the unique_ptr fallback runs.
+template<typename T>
+inline auto OpenRocksDBImpl(const rocksdb::Options& opts, const std::string& path,
+                            T** dbptr, int)
+    -> decltype(rocksdb::DB::Open(opts, path, dbptr))
+{
+    return rocksdb::DB::Open(opts, path, dbptr);
+}
+
+template<typename T>
+inline rocksdb::Status OpenRocksDBImpl(const rocksdb::Options& opts, const std::string& path,
+                                       T** dbptr, long)
+{
+    std::unique_ptr<T> tmp;
+    auto s = rocksdb::DB::Open(opts, path, &tmp);
+    if (s.ok()) *dbptr = tmp.release();
+    return s;
+}
+
+inline rocksdb::Status OpenRocksDB(const rocksdb::Options& opts,
+                                   const std::string& path,
+                                   rocksdb::DB** dbptr)
+{
+    return OpenRocksDBImpl(opts, path, dbptr, 0);
+}
+
+} // anonymous namespace
+
 static rocksdb::Options GetRocksOptions()
 {
     rocksdb::Options opts;
@@ -61,7 +95,7 @@ static void open_rocksdb(rocksdb::Options& options, bool fRemoveOld = false)
 
     fs::create_directory(directory);
     printf("Opening RocksDB in %s\n", directory.string().c_str());
-    rocksdb::Status status = rocksdb::DB::Open(options, directory.string(), &g_rocksdb);
+    rocksdb::Status status = OpenRocksDB(options, directory.string(), &g_rocksdb);
     if (!status.ok()) {
         throw runtime_error(strprintf("open_rocksdb(): error opening database: %s",
                                       status.ToString().c_str()));
@@ -139,6 +173,7 @@ bool CRocksTxDB::TxnBegin()
     if (activeBatch)
         return true;
     activeBatch = new rocksdb::WriteBatch();
+    pendingBatch.clear();
     return true;
 }
 
@@ -148,6 +183,7 @@ bool CRocksTxDB::TxnCommit()
     rocksdb::Status status = pdb->Write(rocksdb::WriteOptions(), activeBatch);
     delete activeBatch;
     activeBatch = nullptr;
+    pendingBatch.clear();
     if (!status.ok()) {
         printf("ERROR: RocksDB batch commit failure: %s\n", status.ToString().c_str());
         printf("ERROR: This may indicate disk full, corruption, or permissions issue.\n");
@@ -161,37 +197,11 @@ bool CRocksTxDB::TxnAbort()
 {
     delete activeBatch;
     activeBatch = nullptr;
+    pendingBatch.clear();
     return true;
 }
 
 namespace {
-
-// rocksdb::WriteBatch::Handler used to scan the active batch for a pending
-// write/delete on a given key, the same way the LevelDB backend does.
-class CRocksBatchScanner : public rocksdb::WriteBatch::Handler {
-public:
-    std::string needle;
-    bool* deleted = nullptr;
-    std::string* foundValue = nullptr;
-    bool foundEntry = false;
-
-    CRocksBatchScanner() = default;
-
-    void Put(const rocksdb::Slice& key, const rocksdb::Slice& value) override {
-        if (key.ToString() == needle) {
-            foundEntry = true;
-            *deleted = false;
-            *foundValue = value.ToString();
-        }
-    }
-
-    void Delete(const rocksdb::Slice& key) override {
-        if (key.ToString() == needle) {
-            foundEntry = true;
-            *deleted = true;
-        }
-    }
-};
 
 class CRocksDBIterator final : public CTxDBIteratorBase {
 public:
@@ -214,15 +224,15 @@ bool CRocksTxDB::ScanBatch(const std::string& key, std::string* value, bool* del
 {
     assert(activeBatch);
     *deleted = false;
-    CRocksBatchScanner scanner;
-    scanner.needle = key;
-    scanner.deleted = deleted;
-    scanner.foundValue = value;
-    rocksdb::Status status = activeBatch->Iterate(&scanner);
-    if (!status.ok()) {
-        throw runtime_error(status.ToString());
+    auto it = pendingBatch.find(key);
+    if (it == pendingBatch.end())
+        return false;
+    if (!it->second.has_value()) {
+        *deleted = true;
+        return true;
     }
-    return scanner.foundEntry;
+    *value = *it->second;
+    return true;
 }
 
 bool CRocksTxDB::ReadRaw(const std::string& key, std::string& value) const
@@ -250,6 +260,7 @@ bool CRocksTxDB::WriteRaw(const std::string& key, const std::string& value)
 {
     if (activeBatch) {
         activeBatch->Put(key, value);
+        pendingBatch[key] = value;
         return true;
     }
     rocksdb::Status status = pdb->Put(rocksdb::WriteOptions(), key, value);
@@ -266,6 +277,7 @@ bool CRocksTxDB::EraseRaw(const std::string& key)
         return false;
     if (activeBatch) {
         activeBatch->Delete(key);
+        pendingBatch[key] = std::nullopt;
         return true;
     }
     rocksdb::Status status = pdb->Delete(rocksdb::WriteOptions(), key);

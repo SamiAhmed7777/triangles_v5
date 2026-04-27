@@ -4,6 +4,9 @@
 #ifndef SEC_MESSAGE_H
 #define SEC_MESSAGE_H
 
+#include <map>
+#include <optional>
+
 #include <rocksdb/db.h>
 #include <rocksdb/write_batch.h>
 
@@ -323,7 +326,13 @@ public:
     
     rocksdb::DB *pdb;       // points to the global instance
     rocksdb::WriteBatch *activeBatch;
-    
+
+    // Parallel record of every pending write (value) or delete (nullopt) on
+    // activeBatch. Used by ScanBatch to answer "is this key in the active
+    // batch?" without iterating the WriteBatch via Handler — Ubuntu's
+    // librocksdb-dev hides typeinfo for rocksdb::WriteBatch::Handler so a
+    // subclass-based scan fails to link there.
+    std::map<std::string, std::optional<std::string>> pendingBatch;
 };
 
 std::string getTimeString(int64_t timestamp, char *buffer, size_t nBuffer);

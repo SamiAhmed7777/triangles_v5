@@ -7,6 +7,10 @@
 
 #include "txdb-base.h"
 
+#include <map>
+#include <optional>
+#include <string>
+
 #include <rocksdb/db.h>
 #include <rocksdb/options.h>
 #include <rocksdb/write_batch.h>
@@ -46,6 +50,13 @@ private:
     rocksdb::WriteBatch* activeBatch;   // When non-NULL, writes/deletes go here.
     rocksdb::Options options;
     int nVersion;
+
+    // Parallel record of every pending write (value) or delete (nullopt) on
+    // activeBatch. Used by ScanBatch to answer "is this key already in the
+    // active batch?" without iterating the WriteBatch via Handler — Ubuntu's
+    // librocksdb-dev hides typeinfo for rocksdb::WriteBatch::Handler so a
+    // subclass-based scan fails to link there.
+    std::map<std::string, std::optional<std::string>> pendingBatch;
 
     bool ScanBatch(const std::string& key, std::string* value, bool* deleted) const;
 };
