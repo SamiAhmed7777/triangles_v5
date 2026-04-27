@@ -27,4 +27,9 @@
 // CTxDB constructor convention.
 std::unique_ptr<CTxDBBase> MakeChainDB(const char* pszMode = "r+");
 
+// True when the configured chain-DB backend is RocksDB. Used by code paths
+// (e.g. UtxoSnapshot::LoadSnapshot) that haven't yet been ported off direct
+// LevelDB calls — they error out cleanly instead of corrupting state.
+bool IsRocksDbChainBackend();
+
 #endif // TRIANGLES_TXDB_H

@@ -24,9 +24,6 @@
 
 namespace fs = std::filesystem;
 
-// Global LevelDB pointer (defined in txdb-leveldb.cpp)
-extern leveldb::DB *txdb;
-
 namespace UtxoSnapshot {
 
 // ---------------------------------------------------------------------------
@@ -60,12 +57,14 @@ bool DumpSnapshot(const fs::path& destPath,
         std::reverse(vHeaders.begin(), vHeaders.end());
     }
 
+    // Open the chain DB once and reuse for both the UTXO count and the
+    // iteration below. Backend-agnostic via the CTxDBBase abstraction.
+    auto txdbHolder = MakeChainDB("r");
+    CTxDBBase& txdbRead = *txdbHolder;
+
     // Count UTXOs first
     int nUtxoCount = 0;
-    {
-        auto txdbRead_holder = MakeChainDB("r"); CTxDBBase& txdbRead = *txdbRead_holder;
-        txdbRead.SumUtxoValues(nUtxoCount);
-    }
+    txdbRead.SumUtxoValues(nUtxoCount);
 
     if (nUtxoCount == 0) {
         strError = "No UTXOs found in database";
@@ -124,31 +123,31 @@ bool DumpSnapshot(const fs::path& destPath,
         SHA256_Update(&sha256, strEntry.data(), entrySize);
     }
 
-    // Write UTXO section using LevelDB iterator (same pattern as SumUtxoValues)
+    // Write UTXO section using the backend-agnostic iterator (same pattern as
+    // SumUtxoValues). Iteration runs outside any active batch — the contract
+    // documented on CTxDBIteratorBase guarantees a stable view of committed state.
     {
-
         CDataStream ssKeyPrefix(SER_DISK, CLIENT_VERSION);
         ssKeyPrefix << std::make_pair(std::string("u"), std::make_pair(uint256(0), (unsigned int)0));
         std::string strPrefixBegin = ssKeyPrefix.str();
 
-        leveldb::Iterator* it = txdb->NewIterator(leveldb::ReadOptions());
+        auto it = txdbRead.NewIterator();
         unsigned int nWritten = 0;
         for (it->Seek(strPrefixBegin); it->Valid(); it->Next()) {
-            // Check key prefix is still "u"
-            CDataStream ssKey(it->key().data(), it->key().data() + it->key().size(), SER_DISK, CLIENT_VERSION);
+            std::string strKey = it->KeyStr();
+            CDataStream ssKey(strKey.data(), strKey.data() + strKey.size(), SER_DISK, CLIENT_VERSION);
             std::string strKeyType;
             ssKey >> strKeyType;
             if (strKeyType != "u")
                 break;
 
-            // Extract outpoint from key
             uint256 txhash;
             unsigned int nIndex;
             ssKey >> txhash;
             ssKey >> nIndex;
 
-            // Extract UTXO entry from value
-            CDataStream ssValue(it->value().data(), it->value().data() + it->value().size(), SER_DISK, CLIENT_VERSION);
+            std::string strRawValue = it->ValueStr();
+            CDataStream ssValue(strRawValue.data(), strRawValue.data() + strRawValue.size(), SER_DISK, CLIENT_VERSION);
             CUtxoEntry entry;
             ssValue >> entry;
 
@@ -170,7 +169,6 @@ bool DumpSnapshot(const fs::path& destPath,
             if (nWritten % 10000 == 0)
                 printf("UtxoSnapshot: wrote %d / %d UTXOs\n", nWritten, nUtxoCount);
         }
-        delete it;
 
         // Update actual count (in case it changed during iteration)
         if (nWritten != numUtxos) {
@@ -205,6 +203,19 @@ bool LoadSnapshot(const fs::path& snapshotPath,
                   const fs::path& dataDir,
                   std::string& strError)
 {
+    // The loader writes the snapshot directly into a fresh txleveldb/
+    // directory using the LevelDB API. Porting it to the CTxDBBase abstraction
+    // requires a "wipe + create-fresh + write-batch" path that doesn't exist
+    // on the base class yet — that work is bundled with the Phase-4 LevelDB
+    // retirement. Until then, refuse to load under rocksdb instead of silently
+    // creating a leveldb tree alongside an active rocksdb chain.
+    if (IsRocksDbChainBackend()) {
+        strError = "UTXO snapshot loading is not yet supported under "
+                   "-chaindb=rocksdb. Run with -chaindb=leveldb to load this "
+                   "snapshot, or sync from genesis.";
+        return false;
+    }
+
     FILE* file = fopen(snapshotPath.string().c_str(), "rb");
     if (!file) {
         strError = "Cannot open snapshot file: " + snapshotPath.string();

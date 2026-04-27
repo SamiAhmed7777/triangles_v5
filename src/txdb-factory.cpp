@@ -62,3 +62,8 @@ std::unique_ptr<CTxDBBase> MakeChainDB(const char* pszMode)
     // Unreachable — ResolveChainDbKind throws on bad input.
     return nullptr;
 }
+
+bool IsRocksDbChainBackend()
+{
+    return ResolveChainDbKind() == ChainDbKind::RocksDB;
+}
