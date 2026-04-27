@@ -962,10 +962,11 @@ bool AppInit2()
             }
         };
 
-        // Try UTXO snapshot first (fast: ~2-10 MB download)
+        // Try UTXO snapshot first (fast: ~2-10 MB download). Only attempted
+        // if the configured backend's chain DB doesn't already exist.
         bool success = false;
         bool triedUtxoSnapshot = false;
-        if (needsBootstrap && !fs::exists(dataPath / "txleveldb")) {
+        if (needsBootstrap && !fs::exists(GetChainDataDir())) {
             uiInterface.InitMessage(_("Downloading UTXO snapshot..."));
             printf("Bootstrap: trying UTXO snapshot from %s (fast path)...\n", host.c_str());
 
@@ -1002,13 +1003,14 @@ bool AppInit2()
 #endif
 
     // ********************************************************* Step 6c: manual UTXO snapshot loading
-    // If utxo-snapshot.bin exists in data dir and no txleveldb, load it.
+    // If utxo-snapshot.bin exists in data dir and the chain DB hasn't been
+    // initialized for the configured backend, load it.
     {
         fs::path dataPath = GetDataDir();
         fs::path snapshotFile = dataPath / "utxo-snapshot.bin";
-        fs::path txleveldbDir = dataPath / "txleveldb";
+        fs::path chainDbDir = GetChainDataDir();
 
-        if (fs::exists(snapshotFile) && !fs::exists(txleveldbDir)) {
+        if (fs::exists(snapshotFile) && !fs::exists(chainDbDir)) {
             printf("Found utxo-snapshot.bin — loading UTXO snapshot...\n");
             uiInterface.InitMessage(_("Loading UTXO snapshot..."));
 
@@ -1040,16 +1042,16 @@ bool AppInit2()
         return false;
     }
 
-    // Handle -reindex: delete the LevelDB block index so it gets rebuilt
-    // from the raw blk*.dat files via FastImportBlockFile().
-    // This recalculates money supply, tx index, and UTXO set from scratch.
+    // Handle -reindex: delete the chain DB so it gets rebuilt from the raw
+    // blk*.dat files via FastImportBlockFile(). This recalculates money
+    // supply, tx index, and UTXO set from scratch. Backend-agnostic via
+    // WipeChainDataDir(), which resolves the directory per the configured
+    // -chaindb backend.
     if (GetBoolArg("-reindex", false))
     {
-        printf("Reindex requested: removing block index database...\n");
-        uiInterface.InitMessage(_("Removing block index for reindex..."));
-        fs::path txleveldbPath = GetDataDir() / "txleveldb";
-        if (fs::exists(txleveldbPath))
-            fs::remove_all(txleveldbPath);
+        printf("Reindex requested: removing chain database...\n");
+        uiInterface.InitMessage(_("Removing chain database for reindex..."));
+        WipeChainDataDir();
     }
 
     uiInterface.InitMessage(_("Loading block index..."));

@@ -5,8 +5,11 @@
 #include "txdb.h"
 #include "util.h"
 
+#include <filesystem>
 #include <stdexcept>
 #include <string>
+
+namespace fs = std::filesystem;
 
 namespace {
 
@@ -51,4 +54,20 @@ std::unique_ptr<CTxDBBase> MakeChainDB(const char* pszMode)
 bool IsRocksDbChainBackend()
 {
     return ResolveChainDbKind() == ChainDbKind::RocksDB;
+}
+
+std::filesystem::path GetChainDataDir()
+{
+    switch (ResolveChainDbKind()) {
+    case ChainDbKind::LevelDB: return GetDataDir() / "txleveldb";
+    case ChainDbKind::RocksDB: return GetDataDir() / "rocksdb";
+    }
+    return GetDataDir() / "txleveldb"; // unreachable
+}
+
+void WipeChainDataDir()
+{
+    fs::path p = GetChainDataDir();
+    if (fs::exists(p))
+        fs::remove_all(p);
 }

@@ -11,11 +11,6 @@
 
 #include <filesystem>
 
-#include <leveldb/db.h>
-#include <leveldb/write_batch.h>
-#include <leveldb/cache.h>
-#include <leveldb/filter_policy.h>
-
 #include <openssl/sha.h>
 
 #include <vector>
@@ -200,22 +195,9 @@ bool DumpSnapshot(const fs::path& destPath,
 // ---------------------------------------------------------------------------
 
 bool LoadSnapshot(const fs::path& snapshotPath,
-                  const fs::path& dataDir,
+                  const fs::path& /*dataDir — unused; resolved per-backend via GetChainDataDir()*/,
                   std::string& strError)
 {
-    // The loader writes the snapshot directly into a fresh txleveldb/
-    // directory using the LevelDB API. Porting it to the CTxDBBase abstraction
-    // requires a "wipe + create-fresh + write-batch" path that doesn't exist
-    // on the base class yet — that work is bundled with the Phase-4 LevelDB
-    // retirement. Until then, refuse to load under rocksdb instead of silently
-    // creating a leveldb tree alongside an active rocksdb chain.
-    if (IsRocksDbChainBackend()) {
-        strError = "UTXO snapshot loading is not yet supported under "
-                   "-chaindb=rocksdb. Run with -chaindb=leveldb to load this "
-                   "snapshot, or sync from genesis.";
-        return false;
-    }
-
     FILE* file = fopen(snapshotPath.string().c_str(), "rb");
     if (!file) {
         strError = "Cannot open snapshot file: " + snapshotPath.string();
@@ -281,47 +263,42 @@ bool LoadSnapshot(const fs::path& snapshotPath,
     printf("UtxoSnapshot: loading snapshot at height %d (%d headers, %d UTXOs)\n",
            height, numHeaders, numUtxos);
 
-    // Create fresh LevelDB directory
-    fs::path txleveldbPath = dataDir / "txleveldb";
-    if (fs::exists(txleveldbPath))
-        fs::remove_all(txleveldbPath);
-    fs::create_directories(txleveldbPath);
+    // Wipe the chain DB directory for the configured backend, then open fresh
+    // via the factory. Must run before any other code touches the chain DB
+    // (the global handle is opened lazily on first MakeChainDB call).
+    WipeChainDataDir();
 
-    // Open LevelDB directly (not via CTxDB - it's not initialized yet)
-    leveldb::Options options;
-    int nCacheSizeMB = GetArg("-dbcache", 2048);
-    options.block_cache = leveldb::NewLRUCache(nCacheSizeMB * 1048576);
-    options.filter_policy = leveldb::NewBloomFilterPolicy(10);
-    options.write_buffer_size = 64 * 1048576;
-    options.max_open_files = 1000;
-    options.create_if_missing = true;
-
-    leveldb::DB* pdb = NULL;
-    leveldb::Status status = leveldb::DB::Open(options, txleveldbPath.string(), &pdb);
-    if (!status.ok()) {
+    auto txdbHolder = MakeChainDB("c+");
+    if (!txdbHolder) {
         fclose(file);
-        delete options.filter_policy;
-        delete options.block_cache;
-        strError = "Cannot create LevelDB: " + status.ToString();
+        strError = "Failed to open fresh chain DB";
         return false;
     }
+    CTxDBBase& txdb = *txdbHolder;
 
     SHA256_CTX sha256;
     SHA256_Init(&sha256);
 
-    leveldb::WriteBatch batch;
     bool success = true;
     unsigned int nBatchSize = 0;
+
+    if (!txdb.TxnBegin()) {
+        fclose(file);
+        strError = "Failed to begin chain DB transaction";
+        return false;
+    }
 
     auto flushBatch = [&]() -> bool {
         if (nBatchSize == 0)
             return true;
-        leveldb::Status s = pdb->Write(leveldb::WriteOptions(), &batch);
-        if (!s.ok()) {
-            strError = "LevelDB write failed: " + s.ToString();
+        if (!txdb.TxnCommit()) {
+            strError = "Chain DB batch commit failed";
             return false;
         }
-        batch.Clear();
+        if (!txdb.TxnBegin()) {
+            strError = "Chain DB batch restart failed";
+            return false;
+        }
         nBatchSize = 0;
         return true;
     };
@@ -355,14 +332,11 @@ bool LoadSnapshot(const fs::path& snapshotPath,
         ssEntry >> entryHash;
         ssEntry >> diskindex;
 
-        // Write to LevelDB as "blockindex" key
-        CDataStream ssKey(SER_DISK, CLIENT_VERSION);
-        ssKey << std::make_pair(std::string("blockindex"), entryHash);
-
-        CDataStream ssValue(SER_DISK, CLIENT_VERSION);
-        ssValue << diskindex;
-
-        batch.Put(ssKey.str(), ssValue.str());
+        if (!txdb.WriteBlockIndex(diskindex)) {
+            success = false;
+            strError = "WriteBlockIndex failed at header " + std::to_string(i);
+            break;
+        }
         nBatchSize++;
 
         if (nBatchSize >= 1000) {
@@ -404,14 +378,11 @@ bool LoadSnapshot(const fs::path& snapshotPath,
             ssRecord >> nIndex;
             ssRecord >> entry;
 
-            // Write to LevelDB with "u" prefix key
-            CDataStream ssKey(SER_DISK, CLIENT_VERSION);
-            ssKey << std::make_pair(std::string("u"), std::make_pair(txhash, nIndex));
-
-            CDataStream ssValue(SER_DISK, CLIENT_VERSION);
-            ssValue << entry;
-
-            batch.Put(ssKey.str(), ssValue.str());
+            if (!txdb.WriteUtxo(txhash, nIndex, entry)) {
+                success = false;
+                strError = "WriteUtxo failed at index " + std::to_string(i);
+                break;
+            }
             nBatchSize++;
 
             if (nBatchSize >= 50000) {
@@ -441,50 +412,34 @@ bool LoadSnapshot(const fs::path& snapshotPath,
         }
     }
 
-    // Write metadata
+    // Write metadata via the abstraction's named operations. These produce
+    // bit-identical key bytes across backends, so the new DB is in the same
+    // canonical state as it would be after a normal IBD.
     if (success) {
-        leveldb::WriteBatch metaBatch;
-
-        // hashBestChain
-        CDataStream ssKey1(SER_DISK, CLIENT_VERSION);
-        ssKey1 << std::string("hashBestChain");
-        CDataStream ssVal1(SER_DISK, CLIENT_VERSION);
-        ssVal1 << blockHash;
-        metaBatch.Put(ssKey1.str(), ssVal1.str());
-
-        // dbformat = 3
-        CDataStream ssKey2(SER_DISK, CLIENT_VERSION);
-        ssKey2 << std::string("dbformat");
-        CDataStream ssVal2(SER_DISK, CLIENT_VERSION);
-        ssVal2 << (int)3;
-        metaBatch.Put(ssKey2.str(), ssVal2.str());
-
-        // version
-        CDataStream ssKey3(SER_DISK, CLIENT_VERSION);
-        ssKey3 << std::string("version");
-        CDataStream ssVal3(SER_DISK, CLIENT_VERSION);
-        ssVal3 << DATABASE_VERSION;
-        metaBatch.Put(ssKey3.str(), ssVal3.str());
-
-        leveldb::Status s = pdb->Write(leveldb::WriteOptions(), &metaBatch);
-        if (!s.ok()) {
+        if (!txdb.TxnBegin()) {
             success = false;
-            strError = "Failed to write metadata: " + s.ToString();
+            strError = "Failed to begin metadata transaction";
         }
     }
-
-    // Clean up LevelDB
-    delete pdb;
-    delete options.filter_policy;
-    delete options.block_cache;
+    if (success) {
+        if (!txdb.WriteHashBestChain(blockHash) ||
+            !txdb.WriteDbFormat(3) ||
+            !txdb.WriteVersion(DATABASE_VERSION) ||
+            !txdb.TxnCommit())
+        {
+            success = false;
+            strError = "Failed to write snapshot metadata";
+        }
+    }
 
     fclose(file);
 
     if (!success) {
-        // Remove corrupted/incomplete database
+        // Roll back any pending batch and remove the partial DB so the next
+        // startup begins from a clean slate.
+        txdb.TxnAbort();
         printf("UtxoSnapshot: load failed: %s\n", strError.c_str());
-        if (fs::exists(txleveldbPath))
-            fs::remove_all(txleveldbPath);
+        WipeChainDataDir();
         return false;
     }
 
