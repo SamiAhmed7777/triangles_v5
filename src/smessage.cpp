@@ -60,6 +60,12 @@ Notes:
 
 #include "lz4/lz4.h"
 
+// LevelDB headers retained solely for the one-shot smsgDB leveldb→rocksdb
+// migration in MigrateSmsgDBLevelDbToRocksDb. Once all users have upgraded
+// past v5.10 the migration helper (and these includes) can be dropped.
+#include <leveldb/db.h>
+#include <leveldb/iterator.h>
+
 #include "xxhash/xxhash.h"
 #include "xxhash/xxhash.c"
 
@@ -132,6 +138,123 @@ inline rocksdb::Status OpenSmsgDB(const rocksdb::Options& opts,
                                   rocksdb::DB** dbptr)
 {
     return OpenSmsgDBImpl(opts, path, dbptr, 0);
+}
+
+// ── smsgDB leveldb → rocksdb migration ──────────────────────────────────────
+//
+// Pre-v5.10 the smessage store was backed by LevelDB at <datadir>/smsgDB/.
+// Phase 3a switched it to RocksDB. Existing installations need their pubkey
+// cache and inbox/outbox to carry across. The migration is one-shot and
+// runs lazily inside SecMsgDB::Open: detect the legacy format, rename the
+// directory aside as a backup, copy every key into a fresh rocksdb tree,
+// then proceed with the normal open path. The leveldb backup is preserved
+// (never deleted) so the user can roll back by deleting smsgDB/ and
+// renaming smsgDB.leveldb-backup/ back.
+
+// LevelDB and RocksDB share several filenames (CURRENT, MANIFEST-*, LOG).
+// RocksDB additionally writes IDENTITY and OPTIONS-* on first open;
+// presence of CURRENT *without* IDENTITY indicates a legacy LevelDB tree.
+inline bool IsLegacyLevelDbSmsgDir(const fs::path& dir)
+{
+    if (!fs::exists(dir / "CURRENT"))
+        return false;
+    if (fs::exists(dir / "IDENTITY"))
+        return false;
+    return true;
+}
+
+inline bool MigrateSmsgDBLevelDbToRocksDb(std::string& strError)
+{
+    fs::path smsgDir   = GetDataDir() / "smsgDB";
+    fs::path backupDir = GetDataDir() / "smsgDB.leveldb-backup";
+
+    if (fs::exists(backupDir)) {
+        strError = "smsgDB.leveldb-backup/ already present at " + backupDir.string()
+                 + " — manual cleanup required before retrying migration.";
+        return false;
+    }
+
+    printf("smessage: migrating LevelDB-format smsgDB to RocksDB...\n");
+
+    // Atomic rename so the legacy data is never deleted by this routine —
+    // worst case we leave the backup and bail. Filesystem rename within the
+    // same datadir is atomic on every supported platform.
+    std::error_code ec;
+    fs::rename(smsgDir, backupDir, ec);
+    if (ec) {
+        strError = "Failed to rename smsgDB to backup: " + ec.message();
+        return false;
+    }
+
+    // Open backup as leveldb (read-only) — create_if_missing left at default
+    // false so a malformed dir errors out cleanly.
+    leveldb::Options leveldbOpts;
+    leveldb::DB* oldDb = nullptr;
+    leveldb::Status ls = leveldb::DB::Open(leveldbOpts, backupDir.string(), &oldDb);
+    if (!ls.ok()) {
+        strError = "Failed to open legacy LevelDB smsgDB at "
+                 + backupDir.string() + ": " + ls.ToString();
+        return false;
+    }
+
+    // Open destination as fresh rocksdb.
+    rocksdb::Options rdbOpts;
+    rdbOpts.create_if_missing = true;
+    rocksdb::DB* newDb = nullptr;
+    rocksdb::Status rs = OpenSmsgDB(rdbOpts, smsgDir.string(), &newDb);
+    if (!rs.ok()) {
+        delete oldDb;
+        strError = "Failed to create new RocksDB smsgDB: " + rs.ToString();
+        return false;
+    }
+
+    // Copy every key in batches of 5000.
+    leveldb::Iterator* it = oldDb->NewIterator(leveldb::ReadOptions());
+    rocksdb::WriteBatch batch;
+    int nMigrated = 0;
+    int nBatch = 0;
+    bool fOk = true;
+    for (it->SeekToFirst(); it->Valid(); it->Next()) {
+        batch.Put(it->key().ToString(), it->value().ToString());
+        nBatch++;
+        nMigrated++;
+        if (nBatch >= 5000) {
+            rocksdb::Status ws = newDb->Write(rocksdb::WriteOptions(), &batch);
+            if (!ws.ok()) {
+                strError = "RocksDB batch write failed during migration: " + ws.ToString();
+                fOk = false;
+                break;
+            }
+            batch.Clear();
+            nBatch = 0;
+        }
+    }
+    if (fOk && nBatch > 0) {
+        rocksdb::Status ws = newDb->Write(rocksdb::WriteOptions(), &batch);
+        if (!ws.ok()) {
+            strError = "RocksDB final batch write failed: " + ws.ToString();
+            fOk = false;
+        }
+    }
+    if (fOk && !it->status().ok()) {
+        strError = "LevelDB iterator failed mid-migration: " + it->status().ToString();
+        fOk = false;
+    }
+    delete it;
+    delete oldDb;
+    delete newDb;
+
+    if (!fOk) {
+        // Leave smsgDB/ in a partially-written state but the backup is
+        // intact. The user can recover by removing smsgDB/ and renaming
+        // smsgDB.leveldb-backup/ → smsgDB/.
+        return false;
+    }
+
+    printf("smessage: migrated %d entries from LevelDB to RocksDB. "
+           "Original data preserved at %s\n",
+           nMigrated, backupDir.string().c_str());
+    return true;
 }
 
 const long int SMSG_BUCKET_FILE_SIZE_LIMIT = 0x70000000L;
@@ -423,9 +546,9 @@ bool SecMsgDB::Open(const char* pszMode)
     };
     
     bool fCreate = strchr(pszMode, 'c');
-    
+
     fs::path fullpath = GetDataDir() / "smsgDB";
-    
+
     if (!fCreate
         && (!fs::exists(fullpath)
             || !fs::is_directory(fullpath)))
@@ -433,7 +556,18 @@ bool SecMsgDB::Open(const char* pszMode)
         printf("SecMsgDB::open() - DB does not exist.\n");
         return false;
     };
-    
+
+    // One-shot migration: pre-v5.10 nodes have a LevelDB tree under smsgDB/.
+    // Detect that and convert to RocksDB before opening. The legacy data is
+    // renamed to smsgDB.leveldb-backup/ as a recovery option.
+    if (fs::is_directory(fullpath) && IsLegacyLevelDbSmsgDir(fullpath)) {
+        std::string migrateError;
+        if (!MigrateSmsgDBLevelDbToRocksDb(migrateError)) {
+            printf("SecMsgDB::open() - migration failed: %s\n", migrateError.c_str());
+            return false;
+        }
+    }
+
     rocksdb::Options options;
     options.create_if_missing = fCreate;
     rocksdb::Status s = OpenSmsgDB(options, fullpath.string(), &smsgDB);
