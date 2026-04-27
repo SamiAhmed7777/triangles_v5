@@ -609,7 +609,7 @@ Value smsginbox(const Array& params, bool fHelp)
         {
             dbInbox.TxnBegin();
             
-            leveldb::Iterator* it = dbInbox.pdb->NewIterator(leveldb::ReadOptions());
+            rocksdb::Iterator* it = dbInbox.pdb->NewIterator(rocksdb::ReadOptions());
             while (dbInbox.NextSmesgKey(it, sPrefix, chKey))
             {
                 dbInbox.EraseSmesg(chKey);
@@ -631,7 +631,7 @@ Value smsginbox(const Array& params, bool fHelp)
             
             dbInbox.TxnBegin();
             
-            leveldb::Iterator* it = dbInbox.pdb->NewIterator(leveldb::ReadOptions());
+            rocksdb::Iterator* it = dbInbox.pdb->NewIterator(rocksdb::ReadOptions());
             while (dbInbox.NextSmesg(it, sPrefix, chKey, smsgStored))
             {
                 if (fCheckReadStatus
@@ -719,7 +719,7 @@ Value smsgoutbox(const Array& params, bool fHelp)
         {
             dbOutbox.TxnBegin();
             
-            leveldb::Iterator* it = dbOutbox.pdb->NewIterator(leveldb::ReadOptions());
+            rocksdb::Iterator* it = dbOutbox.pdb->NewIterator(rocksdb::ReadOptions());
             while (dbOutbox.NextSmesgKey(it, sPrefix, chKey))
             {
                 dbOutbox.EraseSmesg(chKey);
@@ -736,7 +736,7 @@ Value smsgoutbox(const Array& params, bool fHelp)
         {
             SecMsgStored smsgStored;
             MessageData msg;
-            leveldb::Iterator* it = dbOutbox.pdb->NewIterator(leveldb::ReadOptions());
+            rocksdb::Iterator* it = dbOutbox.pdb->NewIterator(rocksdb::ReadOptions());
             while (dbOutbox.NextSmesg(it, sPrefix, chKey, smsgStored))
             {
                 uint32_t nPayload = smsgStored.vchMessage.size() - SMSG_HDR_LEN;
@@ -932,7 +932,7 @@ Value smsgbroadcast(const Array& params, bool fHelp)
 
         // Iterate all "pk" entries
         std::string sPrefix("pk");
-        leveldb::Iterator* it = dbPub.pdb->NewIterator(leveldb::ReadOptions());
+        rocksdb::Iterator* it = dbPub.pdb->NewIterator(rocksdb::ReadOptions());
         for (it->Seek(sPrefix); it->Valid(); it->Next())
         {
             std::string key = it->key().ToString();

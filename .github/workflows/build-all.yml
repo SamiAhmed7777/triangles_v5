@@ -20,7 +20,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build \
             libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
-            libevent-dev libminiupnpc-dev zlib1g-dev
+            librocksdb-dev libevent-dev libminiupnpc-dev zlib1g-dev
 
       - name: Configure
         run: |
@@ -60,7 +60,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build \
             libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
-            libevent-dev libminiupnpc-dev zlib1g-dev
+            librocksdb-dev libevent-dev libminiupnpc-dev zlib1g-dev
 
       - name: Configure with sanitizers
         run: |
@@ -105,6 +105,7 @@ jobs:
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-miniupnpc
             mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-rocksdb
 
       - name: Set VERSION
         run: |
@@ -253,6 +254,7 @@ jobs:
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-miniupnpc
             mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-rocksdb
 
       - name: Configure
         run: |
@@ -318,7 +320,7 @@ jobs:
           sudo apt-get install -y build-essential cmake ninja-build \
             qtbase5-dev qttools5-dev-tools \
             libboost-all-dev libssl-dev libdb++-dev \
-            libleveldb-dev libevent-dev libminiupnpc-dev zlib1g-dev
+            libleveldb-dev librocksdb-dev libevent-dev libminiupnpc-dev zlib1g-dev
 
       - name: Configure
         run: |
@@ -434,7 +436,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build \
             libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
-            libevent-dev libminiupnpc-dev zlib1g-dev
+            librocksdb-dev libevent-dev libminiupnpc-dev zlib1g-dev
 
       - name: Configure
         run: |
@@ -561,7 +563,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install cmake ninja qt@5 openssl@3 boost berkeley-db@5 leveldb libevent miniupnpc
+          brew install cmake ninja qt@5 openssl@3 boost berkeley-db@5 leveldb rocksdb libevent miniupnpc
 
       - name: Configure
         run: |

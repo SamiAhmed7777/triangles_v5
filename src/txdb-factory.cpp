@@ -24,25 +24,12 @@ ChainDbKind ResolveChainDbKind()
 
         if (s == "leveldb")
             return ChainDbKind::LevelDB;
-
-        if (s == "rocksdb") {
-#ifdef BUILD_ROCKSDB
+        if (s == "rocksdb")
             return ChainDbKind::RocksDB;
-#else
-            throw std::runtime_error(
-                "-chaindb=rocksdb requested but this binary was built without "
-                "BUILD_ROCKSDB. Rebuild with -DBUILD_ROCKSDB=ON, or use "
-                "-chaindb=leveldb.");
-#endif
-        }
 
         throw std::runtime_error(
             "-chaindb=" + s + " is not a recognized backend. "
-            "Valid values: leveldb"
-#ifdef BUILD_ROCKSDB
-            ", rocksdb"
-#endif
-            ".");
+            "Valid values: leveldb, rocksdb.");
     }();
     return kKind;
 }
@@ -54,10 +41,8 @@ std::unique_ptr<CTxDBBase> MakeChainDB(const char* pszMode)
     switch (ResolveChainDbKind()) {
     case ChainDbKind::LevelDB:
         return std::unique_ptr<CTxDBBase>(new CTxDB(pszMode));
-#ifdef BUILD_ROCKSDB
     case ChainDbKind::RocksDB:
         return std::unique_ptr<CTxDBBase>(new CRocksTxDB(pszMode));
-#endif
     }
     // Unreachable — ResolveChainDbKind throws on bad input.
     return nullptr;

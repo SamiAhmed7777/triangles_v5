@@ -5,13 +5,13 @@ Measures `FastImportBlockFile()` speed under each chain-DB backend
 
 ## Prerequisites
 
-- A `trianglesd` binary built with both backends:
+- A `trianglesd` binary (RocksDB is now a hard build dep, both backends are
+  always available):
   ```
   cmake -B build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_QT=OFF \
-      -DBUILD_DAEMON=ON \
-      -DBUILD_ROCKSDB=ON
+      -DBUILD_DAEMON=ON
   cmake --build build
   ```
 - An `blk0001.dat` file (old-style block stream). If you have a synced

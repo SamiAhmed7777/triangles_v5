@@ -17,7 +17,7 @@
 #     [--rpc-port=BASE]                  default 19112; each run uses BASE+offset
 #
 # Notes:
-#   - The binary must be built with BUILD_ROCKSDB=ON when --backends includes rocksdb.
+#   - RocksDB is a hard build dep, so any current trianglesd has both backends.
 #   - This script does not assume Tor is configured. It launches with -nolisten
 #     and -connect=0 to keep the run network-isolated.
 #   - Wall time comes from the daemon's own perf log line:

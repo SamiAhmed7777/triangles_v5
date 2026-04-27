@@ -97,10 +97,9 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm|ARM")
     list(APPEND CORE_SOURCES scrypt-arm.S)
 endif()
 
-# Optional: RocksDB chain database backend
-if(BUILD_ROCKSDB)
-    list(APPEND CORE_SOURCES txdb-rocksdb.cpp)
-endif()
+# RocksDB chain database backend (always built; see top-level CMakeLists.txt
+# for the rationale — RocksDB also backs the smessage store).
+list(APPEND CORE_SOURCES txdb-rocksdb.cpp)
 
 add_library(triangles_common OBJECT ${CORE_SOURCES})
 
@@ -148,14 +147,11 @@ if(USE_ZMQ)
     target_link_libraries(triangles_common PUBLIC PkgConfig::ZMQ)
 endif()
 
-# Optional: RocksDB
-if(BUILD_ROCKSDB)
-    target_compile_definitions(triangles_common PUBLIC BUILD_ROCKSDB)
-    if(TARGET RocksDB::rocksdb)
-        target_link_libraries(triangles_common PUBLIC RocksDB::rocksdb)
-    elseif(TARGET PkgConfig::RocksDB)
-        target_link_libraries(triangles_common PUBLIC PkgConfig::RocksDB)
-    endif()
+# RocksDB (mandatory)
+if(TARGET RocksDB::rocksdb)
+    target_link_libraries(triangles_common PUBLIC RocksDB::rocksdb)
+elseif(TARGET PkgConfig::RocksDB)
+    target_link_libraries(triangles_common PUBLIC PkgConfig::RocksDB)
 endif()
 
 # Optional: Embedded Tor

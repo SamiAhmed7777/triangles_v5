@@ -9,18 +9,15 @@
 
 #include "txdb-base.h"
 #include "txdb-leveldb.h"
-
-#ifdef BUILD_ROCKSDB
 #include "txdb-rocksdb.h"
-#endif
 
 #include <memory>
 
 // Factory: returns a chain-database handle whose concrete backend is chosen
 // by the -chaindb command-line argument:
 //
-//   -chaindb=leveldb  (default)
-//   -chaindb=rocksdb  (only when built with -DBUILD_ROCKSDB=ON)
+//   -chaindb=leveldb  (default — pending Phase-4 retirement)
+//   -chaindb=rocksdb
 //
 // Callers receive a CTxDBBase*, so the rest of the codebase stays
 // backend-agnostic. Mode strings ("r", "r+", "cr+") match the pre-existing

@@ -4,8 +4,8 @@
 #ifndef SEC_MESSAGE_H
 #define SEC_MESSAGE_H
 
-#include <leveldb/db.h>
-#include <leveldb/write_batch.h>
+#include <rocksdb/db.h>
+#include <rocksdb/write_batch.h>
 
 #include "net.h"
 #include "db.h"
@@ -314,15 +314,15 @@ public:
     bool WritePK(CKeyID& addr, CPubKey& pubkey);
     bool ExistsPK(CKeyID& addr);
     
-    bool NextSmesg(leveldb::Iterator* it, std::string& prefix, unsigned char* vchKey, SecMsgStored& smsgStored);
-    bool NextSmesgKey(leveldb::Iterator* it, std::string& prefix, unsigned char* vchKey);
+    bool NextSmesg(rocksdb::Iterator* it, std::string& prefix, unsigned char* vchKey, SecMsgStored& smsgStored);
+    bool NextSmesgKey(rocksdb::Iterator* it, std::string& prefix, unsigned char* vchKey);
     bool ReadSmesg(unsigned char* chKey, SecMsgStored& smsgStored);
     bool WriteSmesg(unsigned char* chKey, SecMsgStored& smsgStored);
     bool ExistsSmesg(unsigned char* chKey);
     bool EraseSmesg(unsigned char* chKey);
     
-    leveldb::DB *pdb;       // points to the global instance
-    leveldb::WriteBatch *activeBatch;
+    rocksdb::DB *pdb;       // points to the global instance
+    rocksdb::WriteBatch *activeBatch;
     
 };
 

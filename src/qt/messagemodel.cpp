@@ -93,7 +93,7 @@ public:
             QDateTime received_datetime;
 
             std::string sPrefix("im");
-            leveldb::Iterator* it = dbSmsg.pdb->NewIterator(leveldb::ReadOptions());
+            rocksdb::Iterator* it = dbSmsg.pdb->NewIterator(rocksdb::ReadOptions());
             while (dbSmsg.NextSmesg(it, sPrefix, chKey, smsgStored))
             {
                 uint32_t nPayload = smsgStored.vchMessage.size() - SMSG_HDR_LEN;
@@ -121,7 +121,7 @@ public:
             delete it;
 
             sPrefix = "sm";
-            it = dbSmsg.pdb->NewIterator(leveldb::ReadOptions());
+            it = dbSmsg.pdb->NewIterator(rocksdb::ReadOptions());
             while (dbSmsg.NextSmesg(it, sPrefix, chKey, smsgStored))
             {
                 uint32_t nPayload = smsgStored.vchMessage.size() - SMSG_HDR_LEN;

@@ -5,8 +5,6 @@
 #ifndef TRIANGLES_TXDB_ROCKSDB_H
 #define TRIANGLES_TXDB_ROCKSDB_H
 
-#ifdef BUILD_ROCKSDB
-
 #include "txdb-base.h"
 
 #include <rocksdb/db.h>
@@ -51,7 +49,5 @@ private:
 
     bool ScanBatch(const std::string& key, std::string* value, bool* deleted) const;
 };
-
-#endif // BUILD_ROCKSDB
 
 #endif // TRIANGLES_TXDB_ROCKSDB_H

@@ -94,7 +94,7 @@ uint32_t nPeerIdCounter = 1;
 CCriticalSection cs_smsg;
 CCriticalSection cs_smsgDB;
 
-leveldb::DB *smsgDB = NULL;
+rocksdb::DB *smsgDB = NULL;
 
 
 namespace fs = std::filesystem;
@@ -401,9 +401,9 @@ bool SecMsgDB::Open(const char* pszMode)
         return false;
     };
     
-    leveldb::Options options;
+    rocksdb::Options options;
     options.create_if_missing = fCreate;
-    leveldb::Status s = leveldb::DB::Open(options, fullpath.string(), &smsgDB);
+    rocksdb::Status s = rocksdb::DB::Open(options, fullpath.string(), &smsgDB);
     
     if (!s.ok())
     {
@@ -417,17 +417,17 @@ bool SecMsgDB::Open(const char* pszMode)
 };
 
 
-class SecMsgBatchScanner : public leveldb::WriteBatch::Handler
+class SecMsgBatchScanner : public rocksdb::WriteBatch::Handler
 {
 public:
     std::string needle;
     bool* deleted;
     std::string* foundValue;
     bool foundEntry;
-    
+
     SecMsgBatchScanner() : foundEntry(false) {}
-    
-    virtual void Put(const leveldb::Slice& key, const leveldb::Slice& value)
+
+    virtual void Put(const rocksdb::Slice& key, const rocksdb::Slice& value) override
     {
         if (key.ToString() == needle)
         {
@@ -436,8 +436,8 @@ public:
             *foundValue = value.ToString();
         };
     };
-    
-    virtual void Delete(const leveldb::Slice& key)
+
+    virtual void Delete(const rocksdb::Slice& key) override
     {
         if (key.ToString() == needle)
         {
@@ -462,7 +462,7 @@ bool SecMsgDB::ScanBatch(const CDataStream& key, std::string* value, bool* delet
     scanner.needle = key.str();
     scanner.deleted = deleted;
     scanner.foundValue = value;
-    leveldb::Status s = activeBatch->Iterate(&scanner);
+    rocksdb::Status s = activeBatch->Iterate(&scanner);
     if (!s.ok())
     {
         printf("SecMsgDB ScanBatch error: %s\n", s.ToString().c_str());
@@ -476,7 +476,7 @@ bool SecMsgDB::TxnBegin()
 {
     if (activeBatch)
         return true;
-    activeBatch = new leveldb::WriteBatch();
+    activeBatch = new rocksdb::WriteBatch();
     return true;
 };
 
@@ -484,10 +484,10 @@ bool SecMsgDB::TxnCommit()
 {
     if (!activeBatch)
         return false;
-    
-    leveldb::WriteOptions writeOptions;
+
+    rocksdb::WriteOptions writeOptions;
     writeOptions.sync = true;
-    leveldb::Status status = pdb->Write(writeOptions, activeBatch);
+    rocksdb::Status status = pdb->Write(writeOptions, activeBatch);
     delete activeBatch;
     activeBatch = NULL;
     
@@ -531,12 +531,12 @@ bool SecMsgDB::ReadPK(CKeyID& addr, CPubKey& pubkey)
     
     if (readFromDb)
     {
-        leveldb::Status s = pdb->Get(leveldb::ReadOptions(), ssKey.str(), &strValue);
+        rocksdb::Status s = pdb->Get(rocksdb::ReadOptions(), ssKey.str(), &strValue);
         if (!s.ok())
         {
             if (s.IsNotFound())
                 return false;
-            printf("LevelDB read failure: %s\n", s.ToString().c_str());
+            printf("RocksDB read failure: %s\n", s.ToString().c_str());
             return false;
         };
     };
@@ -572,9 +572,9 @@ bool SecMsgDB::WritePK(CKeyID& addr, CPubKey& pubkey)
         return true;
     };
     
-    leveldb::WriteOptions writeOptions;
+    rocksdb::WriteOptions writeOptions;
     writeOptions.sync = true;
-    leveldb::Status s = pdb->Put(writeOptions, ssKey.str(), ssValue.str());
+    rocksdb::Status s = pdb->Put(writeOptions, ssKey.str(), ssValue.str());
     if (!s.ok())
     {
         printf("SecMsgDB write failure: %s\n", s.ToString().c_str());
@@ -605,12 +605,12 @@ bool SecMsgDB::ExistsPK(CKeyID& addr)
         };
     };
     
-    leveldb::Status s = pdb->Get(leveldb::ReadOptions(), ssKey.str(), &unused);
+    rocksdb::Status s = pdb->Get(rocksdb::ReadOptions(), ssKey.str(), &unused);
     return s.IsNotFound() == false;
 };
 
 
-bool SecMsgDB::NextSmesg(leveldb::Iterator* it, std::string& prefix, unsigned char* chKey, SecMsgStored& smsgStored)
+bool SecMsgDB::NextSmesg(rocksdb::Iterator* it, std::string& prefix, unsigned char* chKey, SecMsgStored& smsgStored)
 {
     if (!pdb)
         return false;
@@ -638,7 +638,7 @@ bool SecMsgDB::NextSmesg(leveldb::Iterator* it, std::string& prefix, unsigned ch
     return true;
 };
 
-bool SecMsgDB::NextSmesgKey(leveldb::Iterator* it, std::string& prefix, unsigned char* chKey)
+bool SecMsgDB::NextSmesgKey(rocksdb::Iterator* it, std::string& prefix, unsigned char* chKey)
 {
     if (!pdb)
         return false;
@@ -679,12 +679,12 @@ bool SecMsgDB::ReadSmesg(unsigned char* chKey, SecMsgStored& smsgStored)
     
     if (readFromDb)
     {
-        leveldb::Status s = pdb->Get(leveldb::ReadOptions(), ssKey.str(), &strValue);
+        rocksdb::Status s = pdb->Get(rocksdb::ReadOptions(), ssKey.str(), &strValue);
         if (!s.ok())
         {
             if (s.IsNotFound())
                 return false;
-            printf("LevelDB read failure: %s\n", s.ToString().c_str());
+            printf("RocksDB read failure: %s\n", s.ToString().c_str());
             return false;
         };
     };
@@ -716,9 +716,9 @@ bool SecMsgDB::WriteSmesg(unsigned char* chKey, SecMsgStored& smsgStored)
         return true;
     };
     
-    leveldb::WriteOptions writeOptions;
+    rocksdb::WriteOptions writeOptions;
     writeOptions.sync = true;
-    leveldb::Status s = pdb->Put(writeOptions, ssKey.str(), ssValue.str());
+    rocksdb::Status s = pdb->Put(writeOptions, ssKey.str(), ssValue.str());
     if (!s.ok())
     {
         printf("SecMsgDB write failed: %s\n", s.ToString().c_str());
@@ -746,7 +746,7 @@ bool SecMsgDB::ExistsSmesg(unsigned char* chKey)
         };
     };
     
-    leveldb::Status s = pdb->Get(leveldb::ReadOptions(), ssKey.str(), &unused);
+    rocksdb::Status s = pdb->Get(rocksdb::ReadOptions(), ssKey.str(), &unused);
     return s.IsNotFound() == false;
     return true;
 };
@@ -762,9 +762,9 @@ bool SecMsgDB::EraseSmesg(unsigned char* chKey)
         return true;
     };
     
-    leveldb::WriteOptions writeOptions;
+    rocksdb::WriteOptions writeOptions;
     writeOptions.sync = true;
-    leveldb::Status s = pdb->Delete(writeOptions, ssKey.str());
+    rocksdb::Status s = pdb->Delete(writeOptions, ssKey.str());
     
     if (s.ok() || s.IsNotFound())
         return true;
@@ -881,7 +881,7 @@ void ThreadSecureMsgPow(void* parg)
         // -- sleep at end, then fSecMsgEnabled is tested on wake
         
         SecMsgDB dbOutbox;
-        leveldb::Iterator* it;
+        rocksdb::Iterator* it;
         {
             LOCK(cs_smsgDB);
             
@@ -889,7 +889,7 @@ void ThreadSecureMsgPow(void* parg)
                 continue;
             
             // -- fifo (smallest key first)
-            it = dbOutbox.pdb->NewIterator(leveldb::ReadOptions());
+            it = dbOutbox.pdb->NewIterator(rocksdb::ReadOptions());
         }
         // -- break up lock, SecureMsgSetHash will take long
         
