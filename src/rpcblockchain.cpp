@@ -558,6 +558,105 @@ Value recalculatesupply(const Array& params, bool fHelp)
     return result;
 }
 
+// Walks every non-coinbase transaction input across [start_height, end_height]
+// and runs the existing VerifySignature path. Reports counts and the first 100
+// failures so the caller can spot regressions when the underlying ECDSA
+// implementation changes (e.g. OpenSSL EC -> libsecp256k1).
+Value auditsignatures(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() > 2)
+        throw runtime_error(
+            "auditsignatures [start_height] [end_height]\n"
+            "Walk the active chain in [start_height, end_height] (inclusive) and run\n"
+            "VerifySignature on every non-coinbase input. Returns counts plus up to 100\n"
+            "failures.\n"
+            "Defaults: start = max(1, tip-1000), end = tip.\n"
+            "Pre-migration this should always report 0 failures; post-migration any non-zero\n"
+            "result identifies a behavioural regression in the new ECDSA path.");
+
+    LOCK(cs_main);
+
+    if (!pindexBest)
+        throw runtime_error("auditsignatures: no best block");
+
+    int tip = nBestHeight;
+    int start = (params.size() > 0) ? params[0].get_int() : std::max(1, tip - 1000);
+    int end   = (params.size() > 1) ? params[1].get_int() : tip;
+
+    if (start < 1)        throw runtime_error("auditsignatures: start_height must be >= 1");
+    if (end > tip)        throw runtime_error("auditsignatures: end_height exceeds tip");
+    if (start > end)      throw runtime_error("auditsignatures: start_height > end_height");
+
+    // Build forward walk by descending from tip.
+    CBlockIndex* pindex = pindexBest;
+    while (pindex && pindex->nHeight > end)
+        pindex = pindex->pprev;
+
+    std::vector<CBlockIndex*> walk;
+    while (pindex && pindex->nHeight >= start) {
+        walk.push_back(pindex);
+        pindex = pindex->pprev;
+    }
+    std::reverse(walk.begin(), walk.end());
+
+    int     nBlocksScanned  = 0;
+    int64_t nInputsChecked  = 0;
+    int64_t nInputsFailed   = 0;
+    Array   failures;
+    const size_t kMaxFailures = 100;
+
+    auto recordFailure = [&](int height, const uint256& txid, unsigned int vin, const char* reason) {
+        ++nInputsFailed;
+        if (failures.size() >= kMaxFailures) return;
+        Object f;
+        f.push_back(Pair("height", height));
+        f.push_back(Pair("txid",   txid.GetHex()));
+        f.push_back(Pair("vin",    (int)vin));
+        f.push_back(Pair("reason", reason));
+        failures.push_back(f);
+    };
+
+    for (CBlockIndex* pi : walk) {
+        CBlock block;
+        if (!block.ReadFromDisk(pi, true)) {
+            ++nBlocksScanned;
+            continue;
+        }
+        for (const CTransaction& tx : block.vtx) {
+            if (tx.IsCoinBase()) continue;
+            for (unsigned int i = 0; i < tx.vin.size(); ++i) {
+                const COutPoint& prev = tx.vin[i].prevout;
+                CTransaction txFrom;
+                uint256 hashBlock;
+                if (!GetTransaction(prev.hash, txFrom, hashBlock)) {
+                    recordFailure(pi->nHeight, tx.GetHash(), i, "prevout transaction not found");
+                    continue;
+                }
+                if (prev.n >= txFrom.vout.size()) {
+                    recordFailure(pi->nHeight, tx.GetHash(), i, "prevout index out of range");
+                    continue;
+                }
+                ++nInputsChecked;
+                if (!VerifySignature(txFrom, tx, i, 0))
+                    recordFailure(pi->nHeight, tx.GetHash(), i, "VerifySignature returned false");
+            }
+        }
+        ++nBlocksScanned;
+        if (nBlocksScanned % 1000 == 0)
+            printf("auditsignatures: scanned %d blocks, %lld inputs, %lld failures\n",
+                   nBlocksScanned, (long long)nInputsChecked, (long long)nInputsFailed);
+    }
+
+    Object result;
+    result.push_back(Pair("start_height",   start));
+    result.push_back(Pair("end_height",     end));
+    result.push_back(Pair("blocks_scanned", nBlocksScanned));
+    result.push_back(Pair("inputs_checked", nInputsChecked));
+    result.push_back(Pair("inputs_failed",  nInputsFailed));
+    result.push_back(Pair("failures",       failures));
+    return result;
+}
+
 
 // triangles: get information of sync-checkpoint
 Value getcheckpoint(const Array& params, bool fHelp)

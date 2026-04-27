@@ -322,6 +322,7 @@ static const CRPCCommand vRPCCommands[] =
     { "invalidateblock",        &invalidateblock,        false,  false },
     { "reconsiderblock",        &reconsiderblock,        false,  false },
     { "recalculatesupply",      &recalculatesupply,      false,  false },
+    { "auditsignatures",        &auditsignatures,        true,   false },
     { "dumputxoset",            &dumputxoset,            false,  false },
     { "reservebalance",         &reservebalance,         false,  true},
     { "checkwallet",            &checkwallet,            false,  true},
