@@ -1,0 +1,11 @@
+# Revisions listed here are skipped by `git blame` when --ignore-revs-file
+# is configured. GitHub honors this file automatically.
+#
+# Add the SHA of any large mechanical reformat / rename / mass-style commit
+# below, with a one-line comment.
+#
+# Example:
+#   abc1234567890abcdef  # repo-wide clang-format (no behavior change)
+#
+# To enable locally:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs

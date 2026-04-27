@@ -1,0 +1,46 @@
+# Triangles clang-tidy config.
+#
+# Goal: catch real bugs in new/edited code without drowning in noise from
+# legacy patterns. Enforced *diff-only* in CI (changed lines on PRs).
+#
+# Conservative starter set. Graduate checks to WarningsAsErrors only after
+# the codebase is clean for that check.
+
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  readability-misleading-indentation,
+  readability-redundant-control-flow,
+  readability-redundant-smartptr-get,
+  readability-redundant-string-cstr,
+  readability-redundant-string-init,
+  readability-string-compare,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-deprecated-headers,
+  cppcoreguidelines-init-variables,
+  cppcoreguidelines-pro-type-member-init,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-narrowing-conversions,
+  -bugprone-branch-clone,
+  -bugprone-signed-char-misuse,
+  -bugprone-reserved-identifier,
+  -bugprone-unchecked-optional-access,
+  -performance-no-int-to-ptr,
+  -performance-avoid-endl
+
+# Warn-only initially. Once a check is clean repo-wide we can promote it here.
+WarningsAsErrors: ''
+
+# Run on project sources; skip vendored/generated code.
+HeaderFilterRegex: '^.*src/(?!json/nlohmann_json|leveldb|lz4|tor/tor-src).*\.h$'
+
+FormatStyle: file
+
+CheckOptions:
+  - key: readability-identifier-naming.IgnoreMainLikeFunctions
+    value: '1'
+  - key: cppcoreguidelines-init-variables.IncludeStyle
+    value: 'google'

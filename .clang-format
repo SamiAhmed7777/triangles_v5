@@ -1,0 +1,49 @@
+# Triangles code style.
+# Conservative: do not reflow long lines, do not reorganize includes.
+# This config is enforced *only on changed lines* via `git clang-format` in CI,
+# so it shapes new/edited code without touching legacy files until they're touched.
+
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++17
+
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+AccessModifierOffset: -4
+
+ColumnLimit: 0          # Don't reflow long lines — too disruptive for legacy code.
+ReflowComments: false
+
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+
+PointerAlignment: Left
+DerivePointerAlignment: false
+SpaceAfterCStyleCast: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+SpaceBeforeAssignmentOperators: true
+
+NamespaceIndentation: None
+FixNamespaceComments: true
+
+# Includes: don't shuffle — header order in this codebase is load-bearing
+# (e.g. main.cpp's mix of project + system headers carries platform meaning).
+SortIncludes: false
+IncludeBlocks: Preserve
+
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 2
+
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignTrailingComments: true
+
+# Don't auto-add braces to single-statement bodies — too invasive.
+InsertBraces: false

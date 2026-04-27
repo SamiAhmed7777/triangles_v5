@@ -1,0 +1,100 @@
+name: Lint
+
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# Diff-only enforcement: clang-format and clang-tidy run only on lines changed
+# in the PR. Existing files keep their current style until they're edited.
+# See .clang-format and .clang-tidy for the rule sets.
+
+jobs:
+  clang-format-diff:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need merge-base with target branch to compute the diff.
+          fetch-depth: 0
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-15
+          sudo ln -sf /usr/bin/clang-format-15 /usr/local/bin/clang-format
+
+      - name: Check format on changed lines
+        run: |
+          BASE_SHA=$(git merge-base origin/${{ github.base_ref }} HEAD)
+          echo "Comparing against merge-base: $BASE_SHA"
+
+          # git-clang-format prints a diff if any changed line violates style.
+          # --diff exits non-zero when reformatting would change something.
+          OUTPUT=$(git clang-format --diff "$BASE_SHA" -- '*.cpp' '*.h' '*.hpp' '*.cc' || true)
+
+          if [ -z "$OUTPUT" ] || [ "$OUTPUT" = "no modified files to format" ] || [ "$OUTPUT" = "clang-format did not modify any files" ]; then
+            echo "clang-format: clean"
+            exit 0
+          fi
+
+          echo "::error::clang-format wants to change the following on lines you touched."
+          echo "Run \`git clang-format $BASE_SHA\` locally and commit the result."
+          echo "$OUTPUT"
+          exit 1
+
+  clang-tidy-diff:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies + clang-tidy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build clang-tidy-15 \
+            libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
+            libevent-dev libminiupnpc-dev zlib1g-dev
+          sudo ln -sf /usr/bin/clang-tidy-15 /usr/local/bin/clang-tidy
+
+      - name: Configure (export compile_commands.json)
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DBUILD_QT=OFF \
+            -DBUILD_DAEMON=ON \
+            -DBUILD_TESTS=ON \
+            -DUSE_UPNP=OFF
+
+      - name: Generate build artifacts that headers depend on
+        # build.h, qt UI headers, etc. — clang-tidy needs them to parse sources.
+        run: cmake --build build --target generate_build_info
+
+      - name: Run clang-tidy on changed lines
+        run: |
+          BASE_SHA=$(git merge-base origin/${{ github.base_ref }} HEAD)
+          echo "Comparing against merge-base: $BASE_SHA"
+
+          # clang-tidy-diff.py ships with clang-tidy; runs tidy only on changed lines.
+          DIFF_SCRIPT=$(dpkg -L clang-tidy-15 | grep clang-tidy-diff.py | head -1)
+          if [ -z "$DIFF_SCRIPT" ]; then
+            DIFF_SCRIPT=/usr/share/clang/clang-tidy-diff.py
+          fi
+          echo "Using: $DIFF_SCRIPT"
+
+          # -p1 strips the leading "a/"/"b/" from git diff paths.
+          # -path=build points clang-tidy at compile_commands.json.
+          # -iregex restricts to project sources (not vendored).
+          git diff -U0 "$BASE_SHA" -- 'src/*.cpp' 'src/*.h' \
+            ':(exclude)src/json/nlohmann_json.hpp' \
+            ':(exclude)src/leveldb/*' \
+            ':(exclude)src/lz4/*' \
+            ':(exclude)src/tor/tor-src/*' \
+            | python3 "$DIFF_SCRIPT" -p1 -path build \
+                -iregex '.*\.(cpp|cc|h|hpp)$' \
+                -j$(nproc) || EXIT=$?
+
+          # Warn-only initially. Flip this to `exit ${EXIT:-0}` once we're clean.
+          exit 0
