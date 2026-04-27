@@ -12,6 +12,7 @@
 
 #include <openssl/bn.h>
 
+#include <algorithm>
 #include <stdexcept>
 #include <vector>
 
