@@ -12,7 +12,9 @@ project(Triangles
 )
 
 # ── C++ Standard ──
-set(CMAKE_CXX_STANDARD 17)
+# C++20 required: RocksDB headers in MSYS2/Homebrew (8.x+) use `using enum`
+# and defaulted operator== on user-defined types, both C++20-only.
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_C_STANDARD 11)
@@ -96,12 +98,39 @@ if(USE_ZMQ)
 endif()
 
 # RocksDB is now a hard dependency: backs both the chain database and the
-# secure-messaging store (smessage). On MSYS2/Homebrew/vcpkg the imported
-# target is RocksDB::rocksdb; on older Linux distros we fall back to pkg-config.
-find_package(RocksDB CONFIG)
+# secure-messaging store (smessage). Probe in order:
+#   1. CMake config package (MSYS2, Homebrew, vcpkg, recent Linux)
+#   2. pkg-config (some Linux distros, no .cmake files)
+#   3. Manual find_path/find_library (Ubuntu 22.04's librocksdb-dev ships
+#      neither a CMake config nor a .pc file)
+# In all paths, a target named RocksDB::rocksdb is exposed for consumers.
+find_package(RocksDB CONFIG QUIET)
 if(NOT RocksDB_FOUND)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(RocksDB REQUIRED IMPORTED_TARGET rocksdb)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(RocksDB IMPORTED_TARGET QUIET rocksdb)
+    endif()
+endif()
+if(NOT TARGET RocksDB::rocksdb AND NOT TARGET PkgConfig::RocksDB)
+    find_path(ROCKSDB_INCLUDE_DIR
+        NAMES rocksdb/db.h
+        PATHS /usr/include /usr/local/include
+    )
+    find_library(ROCKSDB_LIBRARY
+        NAMES rocksdb
+        PATHS /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib
+    )
+    if(NOT ROCKSDB_INCLUDE_DIR OR NOT ROCKSDB_LIBRARY)
+        message(FATAL_ERROR
+            "RocksDB not found. Install librocksdb-dev (Ubuntu/Debian), "
+            "rocksdb (Homebrew), or mingw-w64-x86_64-rocksdb (MSYS2).")
+    endif()
+    add_library(RocksDB::rocksdb UNKNOWN IMPORTED)
+    set_target_properties(RocksDB::rocksdb PROPERTIES
+        IMPORTED_LOCATION "${ROCKSDB_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${ROCKSDB_INCLUDE_DIR}"
+    )
+    message(STATUS "Found RocksDB (manual probe): ${ROCKSDB_LIBRARY}")
 endif()
 
 if(BUILD_QT)
