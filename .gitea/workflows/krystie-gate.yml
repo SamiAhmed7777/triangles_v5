@@ -114,21 +114,19 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          # Refuse to merge if it's not actually a Krystie-signed commit.
-          # (Static-gate already verified, but defense in depth.)
+          # The wip branch is master + N Krystie commits. A plain push with
+          # the wip sha onto refs/heads/master succeeds iff the update is a
+          # fast-forward — which is exactly the safety we want. (Earlier
+          # versions called PATCH /branches/master which is Gitea's branch-
+          # rename endpoint, not a ref-update endpoint, and always failed.)
           REPO="${GITHUB_REPOSITORY}"  # owner/name
-          GITEA_URL="http://localhost:3030"
-          # Fast-forward via Gitea API: update master ref to the wip-branch sha.
-          curl -fsS -X PATCH \
-            -H "Authorization: token ${GITEA_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "{\"sha\":\"${SHA}\",\"force\":false}" \
-            "${GITEA_URL}/api/v1/repos/${REPO}/branches/master" \
+          GIT_URL="http://localhost:3030/${REPO}.git"
+          git -c "http.extraHeader=Authorization: token ${GITEA_TOKEN}" \
+              push "${GIT_URL}" "${SHA}:refs/heads/master" \
             && echo "Master fast-forwarded to ${SHA:0:12}" \
-            || (echo "::error::Fast-forward failed — master has likely diverged" && exit 1)
-          # Delete the wip-branch (cleanup)
-          curl -fsS -X DELETE \
-            -H "Authorization: token ${GITEA_TOKEN}" \
-            "${GITEA_URL}/api/v1/repos/${REPO}/branches/${BRANCH}" \
+            || (echo "::error::Fast-forward push refused — master has likely diverged" && exit 1)
+          # Clean up the wip branch via the same push channel (delete = empty source).
+          git -c "http.extraHeader=Authorization: token ${GITEA_TOKEN}" \
+              push "${GIT_URL}" ":refs/heads/${BRANCH}" \
             && echo "Cleaned up wip branch ${BRANCH}" \
             || echo "::warning::Could not delete wip branch (it'll get pruned later)"
