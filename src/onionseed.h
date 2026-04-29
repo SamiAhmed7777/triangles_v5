@@ -5,12 +5,18 @@
 // Hardcoded onion seed nodes for initial peer discovery.
 // Also fetched dynamically via https://seeds.cryptographic-triangles.org/seeds.txt
 static const char *strMainNetOnionSeed[][1] = {
-    {"6ygpphp2qsucwvhwefv6h6ehvk6zjf7b7zdp4ggkzjjwe76cg6jwm7id.onion"},
-    {"jbpfhe7zw3qm67wy3j2ayysp3mnrjobopthnko3b3sgahqtecblwqmid.onion"},
-    {"uddaxjbo3lh2zskg7w6gwln4ty5cel7q4c5jbx7fdtv6zf2j47gdlyad.onion"},
-    {"el5sirhhleecuctpeeprelzubpqmoqivvra3rzlwbjttinxa4fq3wnid.onion"},
-    {"sj5dhybnlp3v4y5niyc5unrnd6s43lyx5ibup7rolyosjbi2u2hsbvyd.onion"},
-    {"i3kr5meha7se4ns3wss3h7v46m6uksfzv4wrohdqxpj6n35wyo2bvlid.onion"},
+    // DNS2 - primary bootstrap server (DNS2, 194.233.88.206)
+    {"gxvrhv3qitnc6kobrhsrse46bmcfitnybapor3or3oczzuxn6hfzxyid.onion"},
+    // DNS3 - canonical chain reference (74.208.167.19)
+    {"i6tk7soznftvoibtskwlezviskiererhjndpsmrff4kaxw7jnd5izfqd.onion"},
+    // Contabo seed 1 (173.212.201.200)
+    {"cuazgshkl53hzgq4ejndcalezsefwloddxqqqigoe6kshwgqpn2dqzyd.onion"},
+    // Contabo seed 2
+    {"jmq5rovbovbg3erm7drv35rep5cpusu5chd6yuquvffphazliwj5cmid.onion"},
+    // Contabo seed 3
+    {"q27mry33e4mveo6lib3ktkp3ayovdcdphxw2vnkdocot3udedszkfpad.onion"},
+    // Contabo seed 4
+    {"2szbeqcq32orxbvja6a5xrmbqoqpggwf24ck5bjyzerkivkqplmmquid.onion"},
     {NULL}
 };
 
