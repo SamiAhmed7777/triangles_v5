@@ -418,7 +418,7 @@ std::string HelpMessage()
         //"  -proxy=<ip:port>       " + _("Connect through socks proxy") + "\n" +
         //"  -socks=<n>             " + _("Select the version of socks proxy to use (4-5, default: 5)") + "\n" +
         "  -tor=<ip:port>         " + _("Use proxy to reach tor hidden services (default: same as -proxy)") + "\n"
-        "  -notor                 " + _("Disable Tor (WARNING: wallet will not start - Tor is required)") + "\n" +
+        "  -notor                 " + _("Disable Tor - run in clearnet-only mode (no .onion connectivity)") + "\n" +
         "  -torsocks=<port>       " + _("Set embedded or managed Tor SOCKS proxy port (default: 19099)") + "\n" +
         "  -torhiddenservice      " + _("Enable the managed Tor hidden service (default: 1)") + "\n" +
         "  -torhsport=<port>      " + _("Set embedded or managed Tor hidden service port (default: wallet listen port)") + "\n" +
@@ -1334,6 +1334,15 @@ bool AppInit2()
             #ifdef USE_UPNP
             fUseUPnP = false;
             #endif
+        } else if (GetBoolArg("-notor", false)) {
+            // -notor: user explicitly disabled Tor.  Allow the daemon to start
+            // in clearnet-only mode (useful for diagnostics, benchmarking, and
+            // recovery).  .onion connectivity will not be available.
+            printf("NOTICE: Tor disabled via -notor. Running in clearnet-only mode.\n");
+            printf("  .onion connections will NOT be available.\n");
+            SetReachable(NET_IPV4, true);
+            SetReachable(NET_IPV6, true);
+            SetReachable(NET_TOR, false);
         } else {
             std::string torError = CTorEmbedded::GetInstance()->GetStartupError();
             if (torError.empty())
