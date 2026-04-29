@@ -74,6 +74,7 @@ set(CORE_SOURCES
     rpcsmessage.cpp
     zmqpublishnotifier.cpp
     txdb-base.cpp
+    txdb.cpp
     txdb-leveldb.cpp
     utxosnapshot.cpp
     snapshotnet.cpp

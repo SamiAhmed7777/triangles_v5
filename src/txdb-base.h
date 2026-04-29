@@ -80,6 +80,13 @@ public:
 
     bool IsReadOnly() const { return fReadOnly; }
 
+    // Wrapper accessors for backend forwarding (used by CActiveTxDB).
+    bool ReadRawBytes(const std::string& key, std::string& value) const { return ReadRaw(key, value); }
+    bool WriteRawBytes(const std::string& key, const std::string& value) { return WriteRaw(key, value); }
+    bool EraseRawBytes(const std::string& key) { return EraseRaw(key); }
+    bool ExistsRawBytes(const std::string& key) const { return ExistsRaw(key); }
+    std::unique_ptr<CTxDBIteratorBase> NewRawIterator() const { return NewIterator(); }
+
     // ── Schema versioning ────────────────────────────────────────────────────
     bool ReadVersion(int& nVersion);
     bool WriteVersion(int nVersion);

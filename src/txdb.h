@@ -7,5 +7,37 @@
 #define TRIANGLES_TXDB_H
 
 #include "txdb-leveldb.h"
+#ifdef BUILD_ROCKSDB
+#include "txdb-rocksdb.h"
+#endif
+
+#include <memory>
+
+bool UseRocksDbBackend();
+const char* GetActiveChainDbBackendName();
+const char* GetActiveChainDbDirName();
+
+class CActiveTxDB final : public CTxDBBase
+{
+public:
+    explicit CActiveTxDB(const char* pszMode = "r+");
+    ~CActiveTxDB() override;
+
+    void Close() override;
+    bool TxnBegin() override;
+    bool TxnCommit() override;
+    bool TxnAbort() override;
+    bool LoadBlockIndex() override;
+
+protected:
+    bool ReadRaw(const std::string& key, std::string& value) const override;
+    bool WriteRaw(const std::string& key, const std::string& value) override;
+    bool EraseRaw(const std::string& key) override;
+    bool ExistsRaw(const std::string& key) const override;
+    std::unique_ptr<CTxDBIteratorBase> NewIterator() const override;
+
+private:
+    std::unique_ptr<CTxDBBase> impl;
+};
 
 #endif  // TRIANGLES_TXDB_H

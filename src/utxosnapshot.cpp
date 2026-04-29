@@ -16,6 +16,13 @@
 #include <leveldb/write_batch.h>
 #include <leveldb/cache.h>
 #include <leveldb/filter_policy.h>
+#ifdef BUILD_ROCKSDB
+#include <rocksdb/db.h>
+#include <rocksdb/write_batch.h>
+#include <rocksdb/cache.h>
+#include <rocksdb/filter_policy.h>
+#include <rocksdb/table.h>
+#endif
 
 #include <openssl/sha.h>
 
@@ -64,7 +71,7 @@ bool DumpSnapshot(const fs::path& destPath,
     // Count UTXOs first
     int nUtxoCount = 0;
     {
-        CTxDB txdbRead("r");
+        CActiveTxDB txdbRead("r");
         txdbRead.SumUtxoValues(nUtxoCount);
     }
 
@@ -271,47 +278,104 @@ bool LoadSnapshot(const fs::path& snapshotPath,
     printf("UtxoSnapshot: loading snapshot at height %d (%d headers, %d UTXOs)\n",
            height, numHeaders, numUtxos);
 
-    // Create fresh LevelDB directory
-    fs::path txleveldbPath = dataDir / "txleveldb";
-    if (fs::exists(txleveldbPath))
-        fs::remove_all(txleveldbPath);
-    fs::create_directories(txleveldbPath);
+    // Create fresh chain DB directory for the active backend.
+    const bool useRocksDb = UseRocksDbBackend();
+    fs::path chainDbPath = dataDir / GetActiveChainDbDirName();
+    if (fs::exists(chainDbPath))
+        fs::remove_all(chainDbPath);
+    fs::create_directories(chainDbPath);
 
-    // Open LevelDB directly (not via CTxDB - it's not initialized yet)
-    leveldb::Options options;
     int nCacheSizeMB = GetArg("-dbcache", 2048);
-    options.block_cache = leveldb::NewLRUCache(nCacheSizeMB * 1048576);
-    options.filter_policy = leveldb::NewBloomFilterPolicy(10);
-    options.write_buffer_size = 64 * 1048576;
-    options.max_open_files = 1000;
-    options.create_if_missing = true;
-
     leveldb::DB* pdb = NULL;
-    leveldb::Status status = leveldb::DB::Open(options, txleveldbPath.string(), &pdb);
-    if (!status.ok()) {
+    leveldb::Options options;
+    options.block_cache = NULL;
+    options.filter_policy = NULL;
+#ifdef BUILD_ROCKSDB
+    rocksdb::DB* rdb = NULL;
+    std::shared_ptr<rocksdb::Cache> rocksCache;
+    rocksdb::BlockBasedTableOptions rocksTableOptions;
+#endif
+
+    if (useRocksDb) {
+#ifdef BUILD_ROCKSDB
+        rocksdb::Options rocksOptions;
+        rocksOptions.create_if_missing = true;
+        rocksOptions.compression = rocksdb::kSnappyCompression;
+        rocksOptions.write_buffer_size = 64 * 1048576;
+        rocksOptions.max_open_files = 1000;
+        rocksCache = rocksdb::NewLRUCache(static_cast<size_t>(nCacheSizeMB) * 1048576);
+        rocksTableOptions.block_cache = rocksCache;
+        rocksTableOptions.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, false));
+        rocksOptions.table_factory.reset(rocksdb::NewBlockBasedTableFactory(rocksTableOptions));
+        rocksdb::Status rocksStatus = rocksdb::DB::Open(rocksOptions, chainDbPath.string(), &rdb);
+        if (!rocksStatus.ok()) {
+            fclose(file);
+            strError = "Cannot create RocksDB: " + rocksStatus.ToString();
+            return false;
+        }
+#else
         fclose(file);
-        delete options.filter_policy;
-        delete options.block_cache;
-        strError = "Cannot create LevelDB: " + status.ToString();
+        strError = "RocksDB snapshot load requested but binary was built without RocksDB";
         return false;
+#endif
+    } else {
+        options.block_cache = leveldb::NewLRUCache(nCacheSizeMB * 1048576);
+        options.filter_policy = leveldb::NewBloomFilterPolicy(10);
+        options.write_buffer_size = 64 * 1048576;
+        options.max_open_files = 1000;
+        options.create_if_missing = true;
+
+        leveldb::Status status = leveldb::DB::Open(options, chainDbPath.string(), &pdb);
+        if (!status.ok()) {
+            fclose(file);
+            delete options.filter_policy;
+            delete options.block_cache;
+            strError = "Cannot create LevelDB: " + status.ToString();
+            return false;
+        }
     }
 
     SHA256_CTX sha256;
     SHA256_Init(&sha256);
 
-    leveldb::WriteBatch batch;
     bool success = true;
     unsigned int nBatchSize = 0;
+    leveldb::WriteBatch batch;
+#ifdef BUILD_ROCKSDB
+    rocksdb::WriteBatch rocksBatch;
+#endif
+
+    auto batchPut = [&](const std::string& key, const std::string& value) {
+        if (useRocksDb) {
+#ifdef BUILD_ROCKSDB
+            rocksBatch.Put(key, value);
+#endif
+        } else {
+            batch.Put(key, value);
+        }
+        nBatchSize++;
+    };
 
     auto flushBatch = [&]() -> bool {
         if (nBatchSize == 0)
             return true;
-        leveldb::Status s = pdb->Write(leveldb::WriteOptions(), &batch);
-        if (!s.ok()) {
-            strError = "LevelDB write failed: " + s.ToString();
-            return false;
+        if (useRocksDb) {
+#ifdef BUILD_ROCKSDB
+            rocksdb::Status s = rdb->Write(rocksdb::WriteOptions(), &rocksBatch);
+            if (!s.ok()) {
+                strError = "RocksDB write failed: " + s.ToString();
+                return false;
+            }
+            rocksBatch.Clear();
+#endif
+        } else {
+            leveldb::Status s = pdb->Write(leveldb::WriteOptions(), &batch);
+            if (!s.ok()) {
+                strError = "LevelDB write failed: " + s.ToString();
+                return false;
+            }
+            batch.Clear();
         }
-        batch.Clear();
         nBatchSize = 0;
         return true;
     };
@@ -352,8 +416,7 @@ bool LoadSnapshot(const fs::path& snapshotPath,
         CDataStream ssValue(SER_DISK, CLIENT_VERSION);
         ssValue << diskindex;
 
-        batch.Put(ssKey.str(), ssValue.str());
-        nBatchSize++;
+        batchPut(ssKey.str(), ssValue.str());
 
         if (nBatchSize >= 1000) {
             if (!flushBatch()) { success = false; break; }
@@ -401,8 +464,7 @@ bool LoadSnapshot(const fs::path& snapshotPath,
             CDataStream ssValue(SER_DISK, CLIENT_VERSION);
             ssValue << entry;
 
-            batch.Put(ssKey.str(), ssValue.str());
-            nBatchSize++;
+            batchPut(ssKey.str(), ssValue.str());
 
             if (nBatchSize >= 50000) {
                 if (!flushBatch()) { success = false; break; }
@@ -433,37 +495,50 @@ bool LoadSnapshot(const fs::path& snapshotPath,
 
     // Write metadata
     if (success) {
-        leveldb::WriteBatch metaBatch;
-
-        // hashBestChain
         CDataStream ssKey1(SER_DISK, CLIENT_VERSION);
         ssKey1 << std::string("hashBestChain");
         CDataStream ssVal1(SER_DISK, CLIENT_VERSION);
         ssVal1 << blockHash;
-        metaBatch.Put(ssKey1.str(), ssVal1.str());
 
-        // dbformat = 3
         CDataStream ssKey2(SER_DISK, CLIENT_VERSION);
         ssKey2 << std::string("dbformat");
         CDataStream ssVal2(SER_DISK, CLIENT_VERSION);
         ssVal2 << (int)3;
-        metaBatch.Put(ssKey2.str(), ssVal2.str());
 
-        // version
         CDataStream ssKey3(SER_DISK, CLIENT_VERSION);
         ssKey3 << std::string("version");
         CDataStream ssVal3(SER_DISK, CLIENT_VERSION);
         ssVal3 << DATABASE_VERSION;
-        metaBatch.Put(ssKey3.str(), ssVal3.str());
 
-        leveldb::Status s = pdb->Write(leveldb::WriteOptions(), &metaBatch);
-        if (!s.ok()) {
-            success = false;
-            strError = "Failed to write metadata: " + s.ToString();
+        if (useRocksDb) {
+#ifdef BUILD_ROCKSDB
+            rocksdb::WriteBatch metaBatch;
+            metaBatch.Put(ssKey1.str(), ssVal1.str());
+            metaBatch.Put(ssKey2.str(), ssVal2.str());
+            metaBatch.Put(ssKey3.str(), ssVal3.str());
+            rocksdb::Status s = rdb->Write(rocksdb::WriteOptions(), &metaBatch);
+            if (!s.ok()) {
+                success = false;
+                strError = "Failed to write RocksDB metadata: " + s.ToString();
+            }
+#endif
+        } else {
+            leveldb::WriteBatch metaBatch;
+            metaBatch.Put(ssKey1.str(), ssVal1.str());
+            metaBatch.Put(ssKey2.str(), ssVal2.str());
+            metaBatch.Put(ssKey3.str(), ssVal3.str());
+            leveldb::Status s = pdb->Write(leveldb::WriteOptions(), &metaBatch);
+            if (!s.ok()) {
+                success = false;
+                strError = "Failed to write metadata: " + s.ToString();
+            }
         }
     }
 
-    // Clean up LevelDB
+    // Clean up chain DB
+#ifdef BUILD_ROCKSDB
+    delete rdb;
+#endif
     delete pdb;
     delete options.filter_policy;
     delete options.block_cache;
@@ -473,8 +548,8 @@ bool LoadSnapshot(const fs::path& snapshotPath,
     if (!success) {
         // Remove corrupted/incomplete database
         printf("UtxoSnapshot: load failed: %s\n", strError.c_str());
-        if (fs::exists(txleveldbPath))
-            fs::remove_all(txleveldbPath);
+        if (fs::exists(chainDbPath))
+            fs::remove_all(chainDbPath);
         return false;
     }
 

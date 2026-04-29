@@ -3,6 +3,7 @@
 
 #include "bootstrap.h"
 #include "utxosnapshot.h"
+#include "txdb.h"
 
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -718,16 +719,16 @@ bool DownloadBootstrap(const std::string& host,
         return false;
     }
 
-    // Check if the archive included a trusted pre-built index (txleveldb/)
-    // with a valid snapshot.manifest. If verified, keep it to skip the
+    // Check if the archive included a trusted pre-built index for the active
+    // backend with a valid snapshot.manifest. If verified, keep it to skip the
     // multi-hour FastImportBlockFile() rebuild.
-    fs::path txleveldb = dataDir / "txleveldb";
+    fs::path chainDbPath = dataDir / GetActiveChainDbDirName();
     fs::path database  = dataDir / "database";
     fs::path manifestPath = dataDir / "snapshot.manifest";
 
     bool keepIndex = false;
 
-    if (fs::exists(manifestPath) && fs::exists(txleveldb)) {
+    if (fs::exists(manifestPath) && fs::exists(chainDbPath)) {
         SnapshotManifest manifest;
         std::string manifestError;
 
@@ -754,9 +755,9 @@ bool DownloadBootstrap(const std::string& host,
     if (!keepIndex) {
         // No valid manifest or verification failed - delete the index.
         // FastImportBlockFile() will rebuild from blk0001.dat on next startup.
-        printf("Bootstrap: removing extracted txleveldb/ (will rebuild index from blk0001.dat)\n");
-        if (fs::exists(txleveldb))
-            fs::remove_all(txleveldb);
+        printf("Bootstrap: removing extracted %s/ (will rebuild index from blk0001.dat)\n", GetActiveChainDbDirName());
+        if (fs::exists(chainDbPath))
+            fs::remove_all(chainDbPath);
     }
 
     // Always remove BDB database/ dir (wallet environment from another machine)
@@ -791,7 +792,7 @@ bool DownloadUtxoSnapshot(const std::string& host,
 
     printf("Bootstrap: UTXO snapshot downloaded, loading into database...\n");
 
-    // Load the snapshot into a fresh txleveldb
+    // Load the snapshot into a fresh active chain DB
     if (!UtxoSnapshot::LoadSnapshot(tmpPath, dataDir, strError)) {
         fs::remove(tmpPath);
         return false;

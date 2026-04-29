@@ -250,7 +250,7 @@ void Shutdown(void* parg)
             pNotificationQueue = NULL;
         }
 
-//        CTxDB().Close();
+//        CActiveTxDB().Close();
         bitdb.Flush(false);
         bitdb.Flush(true);
         fs::remove(GetPidFile());
@@ -955,7 +955,7 @@ bool AppInit2()
         // Try UTXO snapshot first (fast: ~2-10 MB download)
         bool success = false;
         bool triedUtxoSnapshot = false;
-        if (needsBootstrap && !fs::exists(dataPath / "txleveldb")) {
+        if (needsBootstrap && !fs::exists(dataPath / GetActiveChainDbDirName())) {
             uiInterface.InitMessage(_("Downloading UTXO snapshot..."));
             printf("Bootstrap: trying UTXO snapshot from %s (fast path)...\n", host.c_str());
 
@@ -992,13 +992,13 @@ bool AppInit2()
 #endif
 
     // ********************************************************* Step 6c: manual UTXO snapshot loading
-    // If utxo-snapshot.bin exists in data dir and no txleveldb, load it.
+    // If utxo-snapshot.bin exists in data dir and no active chain DB, load it.
     {
         fs::path dataPath = GetDataDir();
         fs::path snapshotFile = dataPath / "utxo-snapshot.bin";
-        fs::path txleveldbDir = dataPath / "txleveldb";
+        fs::path chainDbDir = dataPath / GetActiveChainDbDirName();
 
-        if (fs::exists(snapshotFile) && !fs::exists(txleveldbDir)) {
+        if (fs::exists(snapshotFile) && !fs::exists(chainDbDir)) {
             printf("Found utxo-snapshot.bin — loading UTXO snapshot...\n");
             uiInterface.InitMessage(_("Loading UTXO snapshot..."));
 
@@ -1024,7 +1024,7 @@ bool AppInit2()
 
     if (GetBoolArg("-loadblockindextest"))
     {
-        CTxDB txdb("r");
+        CActiveTxDB txdb("r");
         txdb.LoadBlockIndex();
         PrintBlockTree();
         return false;
@@ -1037,9 +1037,9 @@ bool AppInit2()
     {
         printf("Reindex requested: removing block index database...\n");
         uiInterface.InitMessage(_("Removing block index for reindex..."));
-        fs::path txleveldbPath = GetDataDir() / "txleveldb";
-        if (fs::exists(txleveldbPath))
-            fs::remove_all(txleveldbPath);
+        fs::path chainDbPath = GetDataDir() / GetActiveChainDbDirName();
+        if (fs::exists(chainDbPath))
+            fs::remove_all(chainDbPath);
     }
 
     uiInterface.InitMessage(_("Loading block index..."));
@@ -1224,7 +1224,7 @@ bool AppInit2()
         bool fScannedWithIndex = false;
         if (fAddressIndex && !GetBoolArg("-rescan"))
         {
-            CTxDB txdb("r");
+            CActiveTxDB txdb("r");
             int nAddressIndexStartHeight = 0;
             uint256 hashAddressIndexBestChain = 0;
             if (txdb.ReadAddressIndexStartHeight(nAddressIndexStartHeight) &&

@@ -931,7 +931,7 @@ bool CTransaction::ReadFromDisk(CTxDBBase& txdb, COutPoint prevout)
 
 bool CTransaction::ReadFromDisk(COutPoint prevout)
 {
-    CTxDB txdb("r");
+    CActiveTxDB txdb("r");
     CTxIndex txindex;
     return ReadFromDisk(txdb, prevout, txindex);
 }
@@ -1064,7 +1064,7 @@ int CMerkleTx::SetMerkleBranch(const CBlock* pblock)
         {
             // Load the block this tx is in
             CTxIndex txindex;
-            if (!CTxDB("r").ReadTxIndex(GetHash(), txindex))
+            if (!CActiveTxDB("r").ReadTxIndex(GetHash(), txindex))
                 return 0;
             if (!blockTmp.ReadFromDisk(txindex.pos.nFile, txindex.pos.nBlockPos))
                 return 0;
@@ -1487,7 +1487,7 @@ bool CMerkleTx::AcceptToMemoryPool(CTxDBBase& txdb, bool fCheckInputs)
 
 bool CMerkleTx::AcceptToMemoryPool()
 {
-    CTxDB txdb("r");
+    CActiveTxDB txdb("r");
     return AcceptToMemoryPool(txdb);
 }
 
@@ -1515,7 +1515,7 @@ bool CWalletTx::AcceptWalletTransaction(CTxDBBase& txdb, bool fCheckInputs)
 
 bool CWalletTx::AcceptWalletTransaction()
 {
-    CTxDB txdb("r");
+    CActiveTxDB txdb("r");
     return AcceptWalletTransaction(txdb);
 }
 
@@ -1548,7 +1548,7 @@ bool GetTransaction(const uint256 &hash, CTransaction &tx, uint256 &hashBlock)
                 return true;
             }
         }
-        CTxDB txdb("r");
+        CActiveTxDB txdb("r");
         CTxIndex txindex;
         if (tx.ReadFromDisk(txdb, COutPoint(hash, 0), txindex))
         {
@@ -1858,7 +1858,7 @@ void static InvalidChainFound(CBlockIndex* pindexNew)
     if (pindexNew->nChainTrust > nBestInvalidTrust)
     {
         nBestInvalidTrust = pindexNew->nChainTrust;
-        CTxDB().WriteBestInvalidTrust(CBigNum(nBestInvalidTrust));
+        CActiveTxDB().WriteBestInvalidTrust(CBigNum(nBestInvalidTrust));
         uiInterface.NotifyBlocksChanged();
     }
 
@@ -3171,7 +3171,7 @@ bool CBlock::GetCoinAge(uint64_t& nCoinAge) const
 {
     nCoinAge = 0;
 
-    CTxDB txdb("r");
+    CActiveTxDB txdb("r");
     for (const CTransaction& tx : vtx)
     {
         uint64_t nTxCoinAge;
@@ -3250,7 +3250,7 @@ bool CBlock::AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const u
     pindexNew->phashBlock = &((*mi).first);
 
     // Write to disk block index
-    CTxDB txdb;
+    CActiveTxDB txdb;
     if (!txdb.TxnBegin())
         return false;
     txdb.WriteBlockIndex(CDiskBlockIndex(pindexNew));
@@ -3897,7 +3897,7 @@ bool LoadBlockIndex(bool fAllowNew)
     //
     // Load block index
     //
-    CTxDB txdb("cr+");
+    CActiveTxDB txdb("cr+");
     if (!txdb.LoadBlockIndex())
         return false;
 
@@ -4181,7 +4181,7 @@ bool FastImportBlockFile()
         LOCK(cs_main);
         CAutoFile blkdat(fileIn, SER_DISK, CLIENT_VERSION);
 
-        CTxDB txdb;
+        CActiveTxDB txdb;
         txdb.TxnBegin();
 
         unsigned int nPos = 0;
@@ -4783,7 +4783,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         printf("IBD-DIAG: inv received: %d blocks, %d tx from %s (our height=%d)\n",
             nBlockInv, nTxInv, pfrom->addr.ToString().c_str(), nBestHeight);
 
-        CTxDB txdb("r");
+        CActiveTxDB txdb("r");
         int nNew = 0, nAlready = 0, nAboveBest = 0;
         int nFirstInvHeight = -1, nLastInvHeight = -1;
         for (unsigned int nInv = 0; nInv < vInv.size(); nInv++)
@@ -5129,7 +5129,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         vector<uint256> vWorkQueue;
         vector<uint256> vEraseQueue;
         CDataStream vMsg(vRecv);
-        CTxDB txdb("r");
+        CActiveTxDB txdb("r");
         CTransaction tx;
         vRecv >> tx;
 
@@ -6107,24 +6107,55 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
                         (int)pto->mapAskFor.size());
                     nLastStallLog = GetTime();
                 }
-                // Use the walk-forward progress point if available, to avoid
-                // restarting from pindexBest (which hits the CBlockLocator
-                // exponential gap and starts the walk-forward from scratch).
-                pto->pindexLastGetBlocksBegin = NULL;
-                if (nHighestInvWalk > nBestHeight && hashHighestInvWalk != 0 &&
-                    mapBlockIndex.count(hashHighestInvWalk))
+                // During IBD, avoid falling back to legacy getblocks recovery
+                // anchored at pindexBest or a stale inv walk point. That path can
+                // repeatedly resolve the locator to the same low common ancestor
+                // on a weak peer set, which looks like a sync "freeze" near an
+                // early height (for example around 570) even though the real bug
+                // is the recovery loop. Keep stall recovery header-driven instead
+                // so the planner tip advances from the newest known header state.
+                if (IsInitialBlockDownload())
                 {
-                    pto->PushGetBlocks(mapBlockIndex[hashHighestInvWalk], uint256(0));
-                    printf("SYNC-DIAG: stall re-request from walk=%d (not best=%d)\n",
-                        nHighestInvWalk, nBestHeight);
-                } else {
-                    pto->PushGetBlocks(pindexBest, uint256(0));
+                    pto->pindexLastGetHeadersBegin = NULL;
+
+                    uint256 hashLocatorTip = hashBestHeaderSync;
+                    if (hashLocatorTip == 0 && nHighestInvWalk > nBestHeight &&
+                        hashHighestInvWalk != 0 && mapBlockIndex.count(hashHighestInvWalk))
+                    {
+                        hashLocatorTip = hashHighestInvWalk;
+                    }
+
+                    unsigned int nRefilled = RequestHeaderSyncRefillAllPeers(
+                        hashLocatorTip,
+                        0,
+                        "stall-recovery");
+                    unsigned int nQueued = QueueHeaderSyncBlocksParallel(HEADER_DOWNLOAD_WINDOW);
+
+                    printf("SYNC-DIAG: stall recovery used headers-first path (locator=%s, refillPeers=%u, queued=%u)\n",
+                        hashLocatorTip.ToString().substr(0,20).c_str(),
+                        nRefilled,
+                        nQueued);
                 }
-                // Also send getheaders during stall to restart the header planner.
-                // Without this, a drained header cache stays empty because only
-                // getblocks is sent on stall, which can't refill mapHeaderSync.
-                pto->pindexLastGetHeadersBegin = NULL;
-                pto->PushGetHeaders(pindexBest, uint256(0));
+                else
+                {
+                    // Outside IBD, preserve the older walk-forward getblocks
+                    // behavior since we're no longer building out a header planner.
+                    pto->pindexLastGetBlocksBegin = NULL;
+                    if (nHighestInvWalk > nBestHeight && hashHighestInvWalk != 0 &&
+                        mapBlockIndex.count(hashHighestInvWalk))
+                    {
+                        pto->PushGetBlocks(mapBlockIndex[hashHighestInvWalk], uint256(0));
+                        printf("SYNC-DIAG: stall re-request from walk=%d (not best=%d)\n",
+                            nHighestInvWalk, nBestHeight);
+                    }
+                    else
+                    {
+                        pto->PushGetBlocks(pindexBest, uint256(0));
+                    }
+
+                    pto->pindexLastGetHeadersBegin = NULL;
+                    pto->PushGetHeaders(pindexBest, uint256(0));
+                }
                 nLastBlockReceived = GetTime();
             }
         }
@@ -6212,7 +6243,7 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
 
         vector<CInv> vGetData;
         int64_t nNow = GetTime() * 1000000;
-        CTxDB txdb("r");
+        CActiveTxDB txdb("r");
         // During IBD, send larger getdata batches since PoS blocks are small
         // and the bottleneck is round-trip latency, not bandwidth.
         unsigned int nGetDataBatchSize = IsInitialBlockDownload() ? 4000 : 1000;
