@@ -42,6 +42,8 @@ set(CORE_SOURCES
     bootstrap.cpp
     checkpoints.cpp
     crypter.cpp
+    crypto_ecdh.cpp
+    crypto_ecdsa.cpp
     db.cpp
     key.cpp
     keystore.cpp
@@ -146,6 +148,10 @@ if(USE_ZMQ)
     target_compile_definitions(triangles_common PUBLIC ENABLE_ZMQ)
     target_link_libraries(triangles_common PUBLIC PkgConfig::ZMQ)
 endif()
+
+# libsecp256k1 (mandatory) — ECDH / ECDSA replacement for OpenSSL EC.
+# Provided by add_subdirectory(src/secp256k1) in the top-level CMakeLists.
+target_link_libraries(triangles_common PUBLIC secp256k1)
 
 # RocksDB (mandatory)
 if(TARGET RocksDB::rocksdb)

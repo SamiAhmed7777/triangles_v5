@@ -6039,6 +6039,7 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
             const unsigned int nInFlight = CountHeaderSyncInFlight();
             static int64_t nLastHeaderPlannerControl = 0;
             static int64_t nLastHeaderWatchdog = 0;
+            static int64_t nLastBlockPlannerControl = 0;
 
             if (nLastNewHeaderTime == 0)
                 nLastNewHeaderTime = nNowSec;
@@ -6076,6 +6077,22 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
 
             if (nNowSec - pto->nLastIbdHeaderRequest >= nMinInterval)
                 RequestHeaderSyncRefill(pto, hashBestHeaderSync, nMinInterval, "heartbeat");
+
+            // Keep the block planner alive even when no new headers arrive and
+            // no blocks are being accepted. Without this periodic kick, the
+            // redundant-request and timeout logic inside QueueHeaderSyncBlocksParallel()
+            // only runs on header arrivals or block acceptance, so IBD can park
+            // indefinitely behind one missing frontier block.
+            if (nNowSec - nLastBlockPlannerControl >= HEADER_SYNC_CONTROL_INTERVAL_SECONDS &&
+                hashBestHeaderSync != 0 &&
+                nPlannerDepth > 0)
+            {
+                const unsigned int nRequeued = QueueHeaderSyncBlocksParallel(HEADER_DOWNLOAD_WINDOW);
+                if (nRequeued > 0)
+                    printf("IBD-DIAG: block-planner control queued %u block requests (plannerDepth=%u inflight=%u)\n",
+                        nRequeued, nPlannerDepth, nInFlight);
+                nLastBlockPlannerControl = nNowSec;
+            }
         }
 
         //

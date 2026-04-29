@@ -133,6 +133,30 @@ if(NOT TARGET RocksDB::rocksdb AND NOT TARGET PkgConfig::RocksDB)
     message(STATUS "Found RocksDB (manual probe): ${ROCKSDB_LIBRARY}")
 endif()
 
+# libsecp256k1 — vendored as a git submodule under src/secp256k1. Provides
+# ECDSA signing/verification, pubkey recovery (via the recovery module), and
+# ECDH for secure messaging. Configure the submodule's build for our needs:
+# only ECDH + recovery, none of the test/benchmark/extra-module bloat, and
+# don't install (we link statically against the in-tree target).
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/src/secp256k1/CMakeLists.txt")
+    message(FATAL_ERROR
+        "src/secp256k1 is empty. Run: git submodule update --init --recursive")
+endif()
+set(SECP256K1_DISABLE_SHARED            ON  CACHE INTERNAL "")
+set(SECP256K1_INSTALL                   OFF CACHE INTERNAL "")
+set(SECP256K1_BUILD_BENCHMARK           OFF CACHE INTERNAL "")
+set(SECP256K1_BUILD_TESTS               OFF CACHE INTERNAL "")
+set(SECP256K1_BUILD_EXHAUSTIVE_TESTS    OFF CACHE INTERNAL "")
+set(SECP256K1_BUILD_CTIME_TESTS         OFF CACHE INTERNAL "")
+set(SECP256K1_BUILD_EXAMPLES            OFF CACHE INTERNAL "")
+set(SECP256K1_ENABLE_MODULE_ECDH        ON  CACHE INTERNAL "")
+set(SECP256K1_ENABLE_MODULE_RECOVERY    ON  CACHE INTERNAL "")
+set(SECP256K1_ENABLE_MODULE_EXTRAKEYS   OFF CACHE INTERNAL "")
+set(SECP256K1_ENABLE_MODULE_SCHNORRSIG  OFF CACHE INTERNAL "")
+set(SECP256K1_ENABLE_MODULE_MUSIG       OFF CACHE INTERNAL "")
+set(SECP256K1_ENABLE_MODULE_ELLSWIFT    OFF CACHE INTERNAL "")
+add_subdirectory(src/secp256k1 EXCLUDE_FROM_ALL)
+
 if(BUILD_QT)
     find_package(Qt5 5.9 REQUIRED COMPONENTS Core Gui Widgets)
     find_package(Qt5 COMPONENTS LinguistTools QUIET)

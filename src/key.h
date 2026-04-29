@@ -13,8 +13,6 @@
 #include "uint256.h"
 #include "util.h"
 
-#include <openssl/ec.h> // for EC_KEY definition
-
 // secp160k1
 // const unsigned int PRIVATE_KEY_SIZE = 192;
 // const unsigned int PUBLIC_KEY_SIZE  = 41;
@@ -105,20 +103,22 @@ typedef std::vector<unsigned char, secure_allocator<unsigned char> > CPrivKey;
 // CSecret is a serialization of just the secret parameter (32 bytes)
 typedef std::vector<unsigned char, secure_allocator<unsigned char> > CSecret;
 
-/** An encapsulated OpenSSL Elliptic Curve key (public and/or private) */
+/** An encapsulated secp256k1 elliptic-curve key (public and/or private). */
 class CKey
 {
 protected:
-    EC_KEY* pkey;
+    // 32-byte private scalar. Valid iff fSet && fHavePrivKey.
+    unsigned char vch[32];
+    // Cached serialized public key (33 or 65 bytes). Valid iff fSet.
+    std::vector<unsigned char> vchPubKey;
     bool fSet;
     bool fCompressedPubKey;
+    bool fHavePrivKey;
 
 public:
     void SetCompressedPubKey();
     void SetUnCompressedPubKey();
-    
-    EC_KEY* GetECKey();
-    
+
     void Reset();
 
     CKey();

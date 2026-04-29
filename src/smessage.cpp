@@ -41,8 +41,6 @@ Notes:
 #include <errno.h>
 
 #include <openssl/crypto.h>
-#include <openssl/ec.h>
-#include <openssl/ecdh.h>
 #include <openssl/sha.h>
 #include <openssl/aes.h>
 #include <openssl/evp.h>
@@ -53,6 +51,7 @@ Notes:
 
 
 #include "base58.h"
+#include "crypto_ecdh.h"
 #include "db.h"
 #include "init.h" // pwalletMain
 #include "txdb.h"
@@ -3682,7 +3681,7 @@ int SecureMsgEncrypt(SecureMessage& smsg, std::string& addressFrom, std::string&
             3       addressFrom is invalid.
             4       addressTo is invalid.
             5       Could not get public key for addressTo.
-            6       ECDH_compute_key failed
+            6       ECDH key derivation failed
             7       Could not get private key for addressFrom.
             8       Could not allocate memory.
             9       Could not compress message data.
@@ -3777,22 +3776,26 @@ int SecureMsgEncrypt(SecureMessage& smsg, std::string& addressFrom, std::string&
     
     std::vector<unsigned char> vchP;
     vchP.resize(32);
-    EC_KEY* pkeyr = keyR.GetECKey();
-    EC_KEY* pkeyK = keyK.GetECKey();
-    
-    // always seems to be 32, worth checking?
-    //int field_size = EC_GROUP_get_degree(EC_KEY_get0_group(pkeyr));
-    //int secret_len = (field_size+7)/8;
-    //printf("secret_len %d.\n", secret_len);
-    
-    // -- ECDH_compute_key returns the same P if fed compressed or uncompressed public keys
-    int lenP = ECDH_compute_key(&vchP[0], 32, EC_KEY_get0_public_key(pkeyK), pkeyr, NULL);
-    
-    if (lenP != 32)
+
+    bool fCompressedR = false;
+    CSecret secretR = keyR.GetSecret(fCompressedR);
+    if (secretR.size() != 32)
     {
-        printf("ECDH_compute_key failed, lenP: %d.\n", lenP);
+        printf("ECDH: keyR secret has unexpected size %zu.\n", secretR.size());
         return 6;
-    };
+    }
+    std::vector<unsigned char> vchPubK = keyK.GetPubKey().Raw();
+    if (vchPubK.size() != 33 && vchPubK.size() != 65)
+    {
+        printf("ECDH: keyK pubkey has unexpected size %zu.\n", vchPubK.size());
+        return 6;
+    }
+
+    if (!ECDH_xonly_secp256k1(&vchP[0], &secretR[0], &vchPubK[0], vchPubK.size()))
+    {
+        printf("ECDH (encrypt): secp256k1_ecdh failed.\n");
+        return 6;
+    }
     
     CPubKey cpkR = keyR.GetPubKey();
     if (!cpkR.IsValid()
@@ -3980,7 +3983,7 @@ int SecureMsgSend(std::string& addressFrom, std::string& addressTo, std::string&
             case 3:  sError = "Invalid addressFrom.";                       break;
             case 4:  sError = "Invalid addressTo.";                         break;
             case 5:  sError = "Could not get public key for addressTo.";    break;
-            case 6:  sError = "ECDH_compute_key failed.";                   break;
+            case 6:  sError = "ECDH key derivation failed.";                break;
             case 7:  sError = "Could not get private key for addressFrom."; break;
             case 8:  sError = "Could not allocate memory.";                 break;
             case 9:  sError = "Could not compress message data.";           break;
@@ -4193,16 +4196,26 @@ int SecureMsgDecrypt(bool fTestOnly, std::string& address, unsigned char *pHeade
     // -- Do an EC point multiply with private key k and public key R. This gives you public key P.
     std::vector<unsigned char> vchP;
     vchP.resize(32);
-    EC_KEY* pkeyk = keyDest.GetECKey();
-    EC_KEY* pkeyR = keyR.GetECKey();
-    
-    int lenPdec = ECDH_compute_key(&vchP[0], 32, EC_KEY_get0_public_key(pkeyR), pkeyk, NULL);
-    
-    if (lenPdec != 32)
+
+    bool fCompressedDest = false;
+    CSecret secretDest = keyDest.GetSecret(fCompressedDest);
+    if (secretDest.size() != 32)
     {
-        printf("ECDH_compute_key failed, lenPdec: %d.\n", lenPdec);
+        printf("ECDH: keyDest secret has unexpected size %zu.\n", secretDest.size());
         return 1;
-    };
+    }
+    std::vector<unsigned char> vchPubR = keyR.GetPubKey().Raw();
+    if (vchPubR.size() != 33 && vchPubR.size() != 65)
+    {
+        printf("ECDH: keyR pubkey has unexpected size %zu.\n", vchPubR.size());
+        return 1;
+    }
+
+    if (!ECDH_xonly_secp256k1(&vchP[0], &secretDest[0], &vchPubR[0], vchPubR.size()))
+    {
+        printf("ECDH (decrypt): secp256k1_ecdh failed.\n");
+        return 1;
+    }
     
     
     // -- Use public key P to calculate the SHA512 hash H. 
