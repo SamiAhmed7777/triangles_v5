@@ -28,11 +28,17 @@ jobs:
       - name: Import Krystie public key (for verification)
         run: |
           mkdir -p ~/.gnupg && chmod 700 ~/.gnupg
-          # The key is published in the repo at .gitea/krystie-release.pub.asc
           if [ -f .gitea/krystie-release.pub.asc ]; then
             gpg --import .gitea/krystie-release.pub.asc
-            echo "Imported Krystie public key"
-            gpg --list-keys
+            # Mark the key as ultimately trusted so `git log %GK` will consider
+            # signatures valid. Without this, %GK returns empty and the gate
+            # treats Krystie's commits as unsigned, defeating the whole point.
+            FP=$(gpg --list-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
+            echo "${FP}:6:" | gpg --import-ownertrust
+            echo "Imported and trusted Krystie public key: ${FP}"
+            # Configure git to call gpg for verification (it does by default,
+            # but explicit doesn't hurt) and not to require signed-by-default.
+            git config --global gpg.program gpg
           else
             echo "WARN: .gitea/krystie-release.pub.asc not found — gate will treat all commits as non-Krystie (i.e. allow)"
           fi
