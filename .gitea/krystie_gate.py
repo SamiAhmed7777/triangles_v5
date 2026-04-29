@@ -116,11 +116,18 @@ def commits_in_push() -> list[str]:
     if not before or set(before) == {"0"}:
         # New branch — only inspect the head commit (don't walk history)
         return [sha]
-    out = subprocess.run(
-        ["git", "rev-list", f"{before}..{sha}"],
-        check=True, capture_output=True, text=True,
-    ).stdout
-    return [c for c in out.split() if c]
+    # On force-push, `before` may have been orphaned and is unreachable in the
+    # checked-out repo. `git rev-list before..sha` then exits 128. Fall back
+    # to inspecting the new head only — that's the safest guarantee we can
+    # make about what just landed.
+    try:
+        out = subprocess.run(
+            ["git", "rev-list", f"{before}..{sha}"],
+            check=True, capture_output=True, text=True,
+        ).stdout
+        return [c for c in out.split() if c]
+    except subprocess.CalledProcessError:
+        return [sha]
 
 
 def changed_files(sha: str) -> list[str]:
