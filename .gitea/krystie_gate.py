@@ -28,7 +28,15 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-KRYSTIE_FP = "DCF2579968107984"
+# Krystie's GPG identity. We accept both the primary long-ID and the
+# signing subkey because `git log %GK` returns the subkey that was actually
+# used to sign, not the primary. The full primary fingerprint is also
+# included so a paranoid future check can validate the chain.
+KRYSTIE_PRIMARY_FP = "523A81833EB7201573E1EFE1DCF2579968107984"
+KRYSTIE_KEY_IDS = {
+    "DCF2579968107984",  # primary long-ID
+    "C2DC60618C85A159",  # signing subkey long-ID
+}
 
 RED_LIST_TRIANGLES_V5 = [
     re.compile(r"^src/main\.(cpp|h)$"),
@@ -105,7 +113,9 @@ def is_krystie_commit(sha: str) -> bool:
     fp = commit_signer(sha)
     if not fp:
         return False
-    return KRYSTIE_FP.endswith(fp) or fp.endswith(KRYSTIE_FP[-16:])
+    # Accept any key ID we know belongs to Krystie. `git log %GK` returns the
+    # signing subkey, so we have to whitelist both primary and subkey.
+    return any(fp == known or known.endswith(fp) for known in KRYSTIE_KEY_IDS)
 
 
 def commits_in_push() -> list[str]:
