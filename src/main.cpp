@@ -5994,24 +5994,55 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
                         (int)pto->mapAskFor.size());
                     nLastStallLog = GetTime();
                 }
-                // Use the walk-forward progress point if available, to avoid
-                // restarting from pindexBest (which hits the CBlockLocator
-                // exponential gap and starts the walk-forward from scratch).
-                pto->pindexLastGetBlocksBegin = NULL;
-                if (nHighestInvWalk > nBestHeight && hashHighestInvWalk != 0 &&
-                    mapBlockIndex.count(hashHighestInvWalk))
+                // During IBD, avoid falling back to legacy getblocks recovery
+                // anchored at pindexBest or a stale inv walk point. That path can
+                // repeatedly resolve the locator to the same low common ancestor
+                // on a weak peer set, which looks like a sync "freeze" near an
+                // early height even though the real bug is the recovery loop.
+                // Keep stall recovery header-driven instead so the planner tip
+                // advances from the newest known header state.
+                if (IsInitialBlockDownload())
                 {
-                    pto->PushGetBlocks(mapBlockIndex[hashHighestInvWalk], uint256(0));
-                    printf("SYNC-DIAG: stall re-request from walk=%d (not best=%d)\n",
-                        nHighestInvWalk, nBestHeight);
-                } else {
-                    pto->PushGetBlocks(pindexBest, uint256(0));
+                    pto->pindexLastGetHeadersBegin = NULL;
+
+                    uint256 hashLocatorTip = hashBestHeaderSync;
+                    if (hashLocatorTip == 0 && nHighestInvWalk > nBestHeight &&
+                        hashHighestInvWalk != 0 && mapBlockIndex.count(hashHighestInvWalk))
+                    {
+                        hashLocatorTip = hashHighestInvWalk;
+                    }
+
+                    unsigned int nRefilled = RequestHeaderSyncRefillAllPeers(
+                        hashLocatorTip,
+                        0,
+                        "stall-recovery");
+                    unsigned int nQueued = QueueHeaderSyncBlocksParallel(HEADER_DOWNLOAD_WINDOW);
+
+                    printf("SYNC-DIAG: stall recovery used headers-first path (locator=%s, refillPeers=%u, queued=%u)\n",
+                        hashLocatorTip.ToString().substr(0,20).c_str(),
+                        nRefilled,
+                        nQueued);
                 }
-                // Also send getheaders during stall to restart the header planner.
-                // Without this, a drained header cache stays empty because only
-                // getblocks is sent on stall, which can't refill mapHeaderSync.
-                pto->pindexLastGetHeadersBegin = NULL;
-                pto->PushGetHeaders(pindexBest, uint256(0));
+                else
+                {
+                    // Outside IBD, preserve the older walk-forward getblocks
+                    // behavior since we're no longer building out a header planner.
+                    pto->pindexLastGetBlocksBegin = NULL;
+                    if (nHighestInvWalk > nBestHeight && hashHighestInvWalk != 0 &&
+                        mapBlockIndex.count(hashHighestInvWalk))
+                    {
+                        pto->PushGetBlocks(mapBlockIndex[hashHighestInvWalk], uint256(0));
+                        printf("SYNC-DIAG: stall re-request from walk=%d (not best=%d)\n",
+                            nHighestInvWalk, nBestHeight);
+                    }
+                    else
+                    {
+                        pto->PushGetBlocks(pindexBest, uint256(0));
+                    }
+
+                    pto->pindexLastGetHeadersBegin = NULL;
+                    pto->PushGetHeaders(pindexBest, uint256(0));
+                }
                 nLastBlockReceived = GetTime();
             }
         }

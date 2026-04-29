@@ -38,6 +38,7 @@ namespace Checkpoints
         {2200000, uint256("0x0a8d0442f031f1258120f713f34e45f4f9a625fb753558e27b89b32ad5a9a740")},
         {2205000, uint256("0xf7aa893ec012181e321783d6a5487addf6997377908faa3e760c9054a4217d29")},
         {2206000, uint256("0x780ae878f8b10b6cbd51ceb2c0799c90d3551fa916be62974375071b9e36581c")},
+        {2203594, uint256("0x5e016ae5d1f163c6679292b717a3db467a39d24b0a315182f4783caa79c722d8")},
         {2207000, uint256("0x8836d67b0f08036c4a7c26ff0a29d4461a52b6d8f552165ad9c1abec2f3cadfd")},
     };
 
@@ -50,7 +51,7 @@ namespace Checkpoints
     // here. The corresponding (height, blockhash) must already exist in
     // mapCheckpoints / mapCheckpointsTestnet.
     static std::map<int, uint256> mapSnapshotHashes = {
-        // {2186940, uint256("0x...sha256-of-utxo-snapshot.bin...")},
+        {2203594, uint256("0x49b35dd01659975c4a31954f37174c6e2e8878dd0723ab306ccecd991c80f79a")},
     };
 
     static std::map<int, uint256> mapSnapshotHashesTestnet = {
