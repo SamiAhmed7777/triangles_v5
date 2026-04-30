@@ -928,7 +928,8 @@ bool AppInit2()
     // v5.9.5: P2P UTXO snapshot fetch is the default for fresh installs (Step 11.6).
     // The legacy clearnet HTTP bootstrap only runs when the user explicitly requests
     // it via -bootstrap, or when -snapshot=0 disables the P2P fetcher.
-#ifndef QT_GUI
+// Bootstrap auto-download works for both GUI and daemon.
+    // GUI users get the same automatic bootstrap on fresh installs.
     {
         bool wantsBootstrap = GetBoolArg("-bootstrap", false);
         bool noBootstrap = GetBoolArg("-nobootstrap", false);
@@ -939,6 +940,7 @@ bool AppInit2()
         if (needsBootstrap && !noBootstrap && !snapshotMode) {
             printf("Bootstrap: no blockchain data found — downloading automatically.\n");
             printf("Bootstrap: (use -nobootstrap to skip)\n");
+            uiInterface.InitMessage(_("Downloading blockchain data..."));
             wantsBootstrap = true;
         } else if (needsBootstrap && snapshotMode && !wantsBootstrap) {
             printf("Bootstrap: no blockchain data found — will fetch UTXO snapshot via P2P after network start.\n");
@@ -952,13 +954,24 @@ bool AppInit2()
         std::string host = Bootstrap::DEFAULT_HOST;
         std::string strError;
 
-        auto progressFn = [](int64_t bytesDownloaded, int64_t totalBytes) {
+        int64_t lastGuiUpdate = 0;
+        auto progressFn = [&lastGuiUpdate](int64_t bytesDownloaded, int64_t totalBytes) {
             if (totalBytes > 0) {
                 printf("\rBootstrap: %lld / %lld MB (%lld%%)",
                        (long long)(bytesDownloaded / (1024*1024)),
                        (long long)(totalBytes / (1024*1024)),
                        (long long)((bytesDownloaded * 100) / totalBytes));
                 fflush(stdout);
+                // Update GUI status bar every ~1 MB
+                int64_t now = GetTimeMillis();
+                if (now - lastGuiUpdate > 1000) {
+                    lastGuiUpdate = now;
+                    std::string msg = strprintf("Downloading blockchain: %lld / %lld MB (%lld%%)",
+                        (long long)(bytesDownloaded / (1024*1024)),
+                        (long long)(totalBytes / (1024*1024)),
+                        (long long)((bytesDownloaded * 100) / totalBytes));
+                    uiInterface.InitMessage(msg);
+                }
             }
         };
 
@@ -1000,7 +1013,6 @@ bool AppInit2()
             strprintf("host=%s success=%d utxo_snapshot=%d", host.c_str(), success, triedUtxoSnapshot));
     }
     } // end bootstrap scope
-#endif
 
     // ********************************************************* Step 6c: manual UTXO snapshot loading
     // If utxo-snapshot.bin exists in data dir and the chain DB hasn't been
