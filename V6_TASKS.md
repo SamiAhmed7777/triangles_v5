@@ -63,7 +63,7 @@
 - **Acceptance**: New node can get UTXO snapshot from peers via P2P (not just HTTPS)
 - **Model**: Claude Code + MiniMax M2.7 (architecture + implementation)
 
-### T012: Implement automated checkpoint generation
+### T012: Implement automated checkpoint generation (DESIGN DONE)
 - **Status**: TODO
 - **Depends**: none
 - **Description**: Checkpoints exist through block 2,207,000 but are manually maintained. Need automated checkpoint generation: every N blocks, compute checkpoint hash, push to code or external manifest.
