@@ -13,7 +13,13 @@ jobs:
     runs-on: ubuntu-22.04
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout (with history for submodule)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Init submodules
+        run: git submodule update --init --recursive
 
       - name: Install dependencies
         run: |
@@ -53,7 +59,13 @@ jobs:
       # and BDB until they're fixed file-by-file.
       SAN_FLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -fno-sanitize=alignment,signed-integer-overflow,vptr"
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout (with history for submodule)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Init submodules
+        run: git submodule update --init --recursive
 
       - name: Install dependencies
         run: |
@@ -87,7 +99,13 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout (with history for submodule)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Init submodules
+        run: git submodule update --init --recursive
 
       - uses: msys2/setup-msys2@v2
         with:
@@ -238,7 +256,13 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout (with history for submodule)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Init submodules
+        run: git submodule update --init --recursive
 
       - uses: msys2/setup-msys2@v2
         with:
@@ -301,7 +325,13 @@ jobs:
   build-linux-qt:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout (with history for submodule)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Init submodules
+        run: git submodule update --init --recursive
 
       - name: Set VERSION
         run: |
@@ -418,7 +448,13 @@ jobs:
   build-linux-daemon:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout (with history for submodule)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Init submodules
+        run: git submodule update --init --recursive
 
       - name: Set VERSION
         run: |
@@ -548,7 +584,13 @@ jobs:
   build-macos:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout (with history for submodule)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Init submodules
+        run: git submodule update --init --recursive
 
       - name: Set VERSION
         run: |
