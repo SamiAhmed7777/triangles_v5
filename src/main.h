@@ -137,7 +137,7 @@ int64_t GetProofOfStakeReward(int64_t nCoinAge, int64_t nFees);
 unsigned int ComputeMinWork(unsigned int nBase, int64_t nTime);
 unsigned int ComputeMinStake(unsigned int nBase, int64_t nTime, unsigned int nBlockTime);
 int GetNumBlocksOfPeers();
-bool IsInitialBlockDownload();
+[[nodiscard]] bool IsInitialBlockDownload();
 std::string GetWarnings(std::string strFor);
 bool GetTransaction(const uint256 &hash, CTransaction &tx, uint256 &hashBlock);
 uint256 WantedByOrphan(const CBlock* pblockOrphan);
@@ -589,7 +589,7 @@ public:
     /** Check for standard transaction types
         @return True if all outputs (scriptPubKeys) use only standard transaction forms
     */
-    bool IsStandard() const;
+    [[nodiscard]] bool IsStandard() const;
 
     /** Check for standard transaction types
         @param[in] mapInputs	Map of previous transactions that have outputs we're spending
@@ -734,12 +734,12 @@ public:
         @param[in] fMiner       true if called from CreateNewBlock
         @return Returns true if all checks succeed
      */
-    bool ConnectInputs(CTxDBBase& txdb, const MapPrevTx& inputs,
+    [[nodiscard]] bool ConnectInputs(CTxDBBase& txdb, const MapPrevTx& inputs,
                        const CBlockIndex* pindexBlock, bool fBlock, bool fMiner,
                        std::vector<CScriptCheck>* pvChecks = nullptr);
     bool ClientConnectInputs();
-    bool CheckTransaction() const;
-    bool AcceptToMemoryPool(CTxDBBase& txdb, bool fCheckInputs=true, bool* pfMissingInputs=nullptr);
+    [[nodiscard]] bool CheckTransaction() const;
+    [[nodiscard]] bool AcceptToMemoryPool(CTxDBBase& txdb, bool fCheckInputs=true, bool* pfMissingInputs=nullptr);
     bool GetCoinAge(CTxDBBase& txdb, uint64_t& nCoinAge) const;  // triangles: get transaction coin age
 
 protected:
@@ -1137,12 +1137,12 @@ public:
 
 
     bool DisconnectBlock(CTxDBBase& txdb, CBlockIndex* pindex);
-    bool ConnectBlock(CTxDBBase& txdb, CBlockIndex* pindex, bool fJustCheck=false);
+    [[nodiscard]] bool ConnectBlock(CTxDBBase& txdb, CBlockIndex* pindex, bool fJustCheck=false);
     bool ReadFromDisk(const CBlockIndex* pindex, bool fReadTransactions=true);
     bool SetBestChain(CTxDBBase& txdb, CBlockIndex* pindexNew);
     bool AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const uint256& hashProofOfStake);
     bool CheckBlock(bool fCheckPOW=true, bool fCheckMerkleRoot=true, bool fCheckSig=true) const;
-    bool AcceptBlock();
+    [[nodiscard]] bool AcceptBlock();
     bool GetCoinAge(uint64_t& nCoinAge) const; // triangles: calculate total coin age spent in block
     bool SignBlock(CWallet& keystore, int64_t nFees);
     bool CheckBlockSignature() const;

@@ -216,9 +216,9 @@ public:
     std::set< std::set<CTxDestination> > GetAddressGroupings();
     std::map<CTxDestination, int64_t> GetAddressBalances();
 
-    bool IsMine(const CTxIn& txin) const;
+    [[nodiscard]] bool IsMine(const CTxIn& txin) const;
     int64_t GetDebit(const CTxIn& txin) const;
-    bool IsMine(const CTxOut& txout) const
+    [[nodiscard]] bool IsMine(const CTxOut& txout) const
     {
         return ::IsMine(*this, txout.scriptPubKey);
     }
@@ -235,7 +235,7 @@ public:
             throw std::runtime_error("CWallet::GetChange() : value out of range");
         return (IsChange(txout) ? txout.nValue : 0);
     }
-    bool IsMine(const CTransaction& tx) const
+    [[nodiscard]] bool IsMine(const CTransaction& tx) const
     {
         for (const CTxOut& txout : tx.vout)
             if (IsMine(txout) && txout.nValue >= nMinimumInputValue)
