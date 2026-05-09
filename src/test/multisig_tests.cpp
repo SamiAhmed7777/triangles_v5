@@ -181,7 +181,7 @@ BOOST_AUTO_TEST_CASE(multisig_Solver1)
 
     {
         vector<valtype> solutions;
-        txnouttype whichType;
+        TxnOutType whichType;
         CScript s;
         s << key[0].GetPubKey() << OP_CHECKSIG;
         BOOST_CHECK(Solver(s, whichType, solutions));
@@ -194,7 +194,7 @@ BOOST_AUTO_TEST_CASE(multisig_Solver1)
     }
     {
         vector<valtype> solutions;
-        txnouttype whichType;
+        TxnOutType whichType;
         CScript s;
         s << OP_DUP << OP_HASH160 << key[0].GetPubKey().GetID() << OP_EQUALVERIFY << OP_CHECKSIG;
         BOOST_CHECK(Solver(s, whichType, solutions));
@@ -207,7 +207,7 @@ BOOST_AUTO_TEST_CASE(multisig_Solver1)
     }
     {
         vector<valtype> solutions;
-        txnouttype whichType;
+        TxnOutType whichType;
         CScript s;
         s << OP_2 << key[0].GetPubKey() << key[1].GetPubKey() << OP_2 << OP_CHECKMULTISIG;
         BOOST_CHECK(Solver(s, whichType, solutions));
@@ -220,7 +220,7 @@ BOOST_AUTO_TEST_CASE(multisig_Solver1)
     }
     {
         vector<valtype> solutions;
-        txnouttype whichType;
+        TxnOutType whichType;
         CScript s;
         s << OP_1 << key[0].GetPubKey() << key[1].GetPubKey() << OP_2 << OP_CHECKMULTISIG;
         BOOST_CHECK(Solver(s, whichType, solutions));
@@ -237,7 +237,7 @@ BOOST_AUTO_TEST_CASE(multisig_Solver1)
     }
     {
         vector<valtype> solutions;
-        txnouttype whichType;
+        TxnOutType whichType;
         CScript s;
         s << OP_2 << key[0].GetPubKey() << key[1].GetPubKey() << key[2].GetPubKey() << OP_3 << OP_CHECKMULTISIG;
         BOOST_CHECK(Solver(s, whichType, solutions));

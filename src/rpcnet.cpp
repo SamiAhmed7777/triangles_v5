@@ -31,7 +31,7 @@ Value getnetworkinfo(const Array& params, bool fHelp)
     healthObj.push_back(Pair("torpeers", health.torPeers));
     healthObj.push_back(Pair("bootstrapped", health.isBootstrapped));
     healthObj.push_back(Pair("syncing", health.isSyncing));
-    healthObj.push_back(Pair("lastblocktime", static_cast<boost::int64_t>(health.lastBlockTime)));
+    healthObj.push_back(Pair("lastblocktime", static_cast<int64_t>(health.lastBlockTime)));
     healthObj.push_back(Pair("networkmode", "tor_native"));
 
     Object obj;
@@ -88,9 +88,9 @@ Value getpeerinfo(const Array& params, bool fHelp)
 
         obj.push_back(Pair("addr", stats.addrName));
         obj.push_back(Pair("services", strprintf("%08"PRIx64, stats.nServices)));
-        obj.push_back(Pair("lastsend", (boost::int64_t)stats.nLastSend));
-        obj.push_back(Pair("lastrecv", (boost::int64_t)stats.nLastRecv));
-        obj.push_back(Pair("conntime", (boost::int64_t)stats.nTimeConnected));
+        obj.push_back(Pair("lastsend", (int64_t)stats.nLastSend));
+        obj.push_back(Pair("lastrecv", (int64_t)stats.nLastRecv));
+        obj.push_back(Pair("conntime", (int64_t)stats.nTimeConnected));
         obj.push_back(Pair("version", stats.nVersion));
         obj.push_back(Pair("subver", stats.strSubVer));
         obj.push_back(Pair("inbound", stats.fInbound));
@@ -195,7 +195,7 @@ Value getseedlist(const Array& params, bool fHelp)
         Object obj;
         obj.push_back(Pair("address", addr.ToStringIP()));
         obj.push_back(Pair("port", (int)addr.GetPort()));
-        obj.push_back(Pair("lastseen", (boost::int64_t)addr.nTime));
+        obj.push_back(Pair("lastseen", (int64_t)addr.nTime));
         ret.push_back(obj);
     }
 
@@ -274,11 +274,11 @@ Value getnetworkstability(const Array& params, bool fHelp)
     obj.push_back(Pair("ping", pingObj));
 
     Object uptimeObj;
-    uptimeObj.push_back(Pair("newest_sec", nTotal > 0 ? (boost::int64_t)nNewestConnection : 0));
-    uptimeObj.push_back(Pair("oldest_sec", nTotal > 0 ? (boost::int64_t)nOldestConnection : 0));
+    uptimeObj.push_back(Pair("newest_sec", nTotal > 0 ? (int64_t)nNewestConnection : 0));
+    uptimeObj.push_back(Pair("oldest_sec", nTotal > 0 ? (int64_t)nOldestConnection : 0));
     obj.push_back(Pair("connection_uptime", uptimeObj));
 
-    obj.push_back(Pair("seconds_since_last_block", (boost::int64_t)(GetTime() - nTimeBestReceived)));
+    obj.push_back(Pair("seconds_since_last_block", (int64_t)(GetTime() - nTimeBestReceived)));
     obj.push_back(Pair("current_height", nBestHeight));
 
     return obj;

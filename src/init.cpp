@@ -30,7 +30,6 @@
 #include <filesystem>
 #include <fstream>
 #include <boost/interprocess/sync/file_lock.hpp>
-#include <boost/algorithm/string/predicate.hpp>
 #include <openssl/crypto.h>
 
 #ifndef WIN32
@@ -339,7 +338,7 @@ bool AppInit(int argc, char* argv[])
 
         // Command-line RPC
         for (int i = 1; i < argc; i++)
-            if (!IsSwitchChar(argv[i][0]) && !boost::algorithm::istarts_with(argv[i], "Triangles:"))
+            if (!IsSwitchChar(argv[i][0]) && !std::equal(std::begin("Triangles:"), std::end("Triangles:") - 1, argv[i], [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b)); }))
                 fCommandLine = true;
 
         if (fCommandLine)

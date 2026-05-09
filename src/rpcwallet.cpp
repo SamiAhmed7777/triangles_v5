@@ -59,11 +59,11 @@ void WalletTxToJSON(const CWalletTx& wtx, Object& entry)
         entry.push_back(Pair("blockindex", wtx.nIndex));
         auto mi = mapBlockIndex.find(wtx.hashBlock);
         if (mi != mapBlockIndex.end() && mi->second)
-            entry.push_back(Pair("blocktime", (boost::int64_t)(mi->second->nTime)));
+            entry.push_back(Pair("blocktime", (int64_t)(mi->second->nTime)));
     }
     entry.push_back(Pair("txid", wtx.GetHash().GetHex()));
-    entry.push_back(Pair("time", (boost::int64_t)wtx.GetTxTime()));
-    entry.push_back(Pair("timereceived", (boost::int64_t)wtx.nTimeReceived));
+    entry.push_back(Pair("time", (int64_t)wtx.GetTxTime()));
+    entry.push_back(Pair("timereceived", (int64_t)wtx.nTimeReceived));
     for (const auto& item : wtx.mapValue)
         entry.push_back(Pair(item.first, item.second));
 }
@@ -94,7 +94,7 @@ Value getinfo(const Array& params, bool fHelp)
     obj.push_back(Pair("newmint",       ValueFromAmount(pwalletMain->GetNewMint())));
     obj.push_back(Pair("stake",         ValueFromAmount(pwalletMain->GetStake())));
     obj.push_back(Pair("blocks",        (int)nBestHeight));
-    obj.push_back(Pair("timeoffset",    (boost::int64_t)GetTimeOffset()));
+    obj.push_back(Pair("timeoffset",    (int64_t)GetTimeOffset()));
     obj.push_back(Pair("moneysupply",   ValueFromAmount(pindexBest->nMoneySupply)));
     obj.push_back(Pair("connections",   (int)vNodes.size()));
     obj.push_back(Pair("proxy",         (proxy.first.IsValid() ? proxy.first.ToStringIPPort() : string())));
@@ -105,14 +105,14 @@ Value getinfo(const Array& params, bool fHelp)
     obj.push_back(Pair("difficulty",    diff));
 
     obj.push_back(Pair("testnet",       fTestNet));
-    obj.push_back(Pair("keypoololdest", (boost::int64_t)pwalletMain->GetOldestKeyPoolTime()));
+    obj.push_back(Pair("keypoololdest", (int64_t)pwalletMain->GetOldestKeyPoolTime()));
     obj.push_back(Pair("keypoolsize",   (int)pwalletMain->GetKeyPoolSize()));
     obj.push_back(Pair("paytxfee",      ValueFromAmount(nTransactionFee)));
     obj.push_back(Pair("mininput",      ValueFromAmount(nMinimumInputValue)));
     if (pwalletMain->IsCrypted())
     {
         LOCK(cs_nWalletUnlockTime);
-        obj.push_back(Pair("unlocked_until", (boost::int64_t)nWalletUnlockTime / 1000));
+        obj.push_back(Pair("unlocked_until", (int64_t)nWalletUnlockTime / 1000));
     }
     obj.push_back(Pair("errors",        GetWarnings("statusbar")));
     return obj;
@@ -139,14 +139,14 @@ Value getwalletinfo(const Array& params, bool fHelp)
     obj.push_back(Pair("stake",         ValueFromAmount(pwalletMain->GetStake())));
     obj.push_back(Pair("newmint",       ValueFromAmount(pwalletMain->GetNewMint())));
     obj.push_back(Pair("txcount",       txCount));
-    obj.push_back(Pair("keypoololdest", (boost::int64_t)pwalletMain->GetOldestKeyPoolTime()));
+    obj.push_back(Pair("keypoololdest", (int64_t)pwalletMain->GetOldestKeyPoolTime()));
     obj.push_back(Pair("keypoolsize",   (int)pwalletMain->GetKeyPoolSize()));
     obj.push_back(Pair("paytxfee",      ValueFromAmount(nTransactionFee)));
     obj.push_back(Pair("mininput",      ValueFromAmount(nMinimumInputValue)));
     if (pwalletMain->IsCrypted())
     {
         LOCK(cs_nWalletUnlockTime);
-        obj.push_back(Pair("unlocked_until", (boost::int64_t)nWalletUnlockTime / 1000));
+        obj.push_back(Pair("unlocked_until", (int64_t)nWalletUnlockTime / 1000));
     }
     return obj;
 }
@@ -1151,7 +1151,7 @@ void AcentryToJSON(const CAccountingEntry& acentry, const string& strAccount, Ar
         Object entry;
         entry.push_back(Pair("account", acentry.strAccount));
         entry.push_back(Pair("category", "move"));
-        entry.push_back(Pair("time", (boost::int64_t)acentry.nTime));
+        entry.push_back(Pair("time", (int64_t)acentry.nTime));
         entry.push_back(Pair("amount", ValueFromAmount(acentry.nCreditDebit)));
         entry.push_back(Pair("otheraccount", acentry.strOtherAccount));
         entry.push_back(Pair("comment", acentry.strComment));
@@ -1654,7 +1654,7 @@ public:
         CScript subscript;
         pwalletMain->GetCScript(scriptID, subscript);
         std::vector<CTxDestination> addresses;
-        txnouttype whichType;
+        TxnOutType whichType;
         int nRequired;
         ExtractDestinations(subscript, whichType, addresses, nRequired);
         obj.push_back(Pair("script", GetTxnOutputType(whichType)));
@@ -1663,7 +1663,7 @@ public:
         for (const CTxDestination& addr : addresses)
             a.push_back(CTrianglesAddress(addr).ToString());
         obj.push_back(Pair("addresses", a));
-        if (whichType == TX_MULTISIG)
+        if (whichType == TxnOutType::MultiSig)
             obj.push_back(Pair("sigsrequired", nRequired));
         return obj;
     }

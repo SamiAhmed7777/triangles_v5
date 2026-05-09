@@ -7,7 +7,6 @@
 
 #include <filesystem>
 #include <fstream>
-#include <boost/algorithm/string.hpp>
 
 #include <zlib.h>
 
@@ -300,7 +299,7 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
                     location = headerData.substr(valStart, lineEnd - valStart);
                 else
                     location = headerData.substr(valStart);
-                boost::trim(location);
+                location = TrimString(location);
 
                 // Parse redirect URL — supports http://, https://, and relative paths
                 if (location.compare(0, 7, "http://") == 0 ||
@@ -416,7 +415,7 @@ bool FetchFileList(const std::string& host,
     files.clear();
     std::string line;
     while (std::getline(in, line)) {
-        boost::trim(line);
+        line = TrimString(line);
         if (!line.empty() && line[0] != '#')
             files.push_back(line);
     }
@@ -576,7 +575,7 @@ bool ParseManifest(const fs::path& manifestPath,
 
     std::string line;
     while (std::getline(in, line)) {
-        boost::trim(line);
+        line = TrimString(line);
         if (line.empty() || line[0] == '#')
             continue;
 
@@ -586,8 +585,8 @@ bool ParseManifest(const fs::path& manifestPath,
 
         std::string key = line.substr(0, eq);
         std::string val = line.substr(eq + 1);
-        boost::trim(key);
-        boost::trim(val);
+        key = TrimString(key);
+        val = TrimString(val);
 
         if (key == "format")
             manifest.format = std::atoi(val.c_str());

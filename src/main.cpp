@@ -24,7 +24,6 @@
 #include <algorithm>
 #include <deque>
 #include <memory>
-#include <boost/algorithm/string/replace.hpp>
 #include <filesystem>
 #include <fstream>
 
@@ -984,8 +983,7 @@ bool CTransaction::AreInputsStandard(const MapPrevTx& mapInputs) const
         const CUtxoEntry& entry = mi->second;
 
         vector<vector<unsigned char> > vSolutions;
-        txnouttype whichType;
-        // get the scriptPubKey corresponding to this input:
+        TxnOutType whichType;
         const CScript& prevScript = entry.scriptPubKey;
         if (!Solver(prevScript, whichType, vSolutions))
             return false;
@@ -993,25 +991,20 @@ bool CTransaction::AreInputsStandard(const MapPrevTx& mapInputs) const
         if (nArgsExpected < 0)
             return false;
 
-        // Transactions with extra stuff in their scriptSigs are
-        // non-standard. Note that this EvalScript() call will
-        // be quick, because if there are any operations
-        // beside "push data" in the scriptSig the
-        // IsStandard() call returns false
         vector<vector<unsigned char> > stack;
         if (!EvalScript(stack, vin[i].scriptSig, *this, i, 0))
             return false;
 
-        if (whichType == TX_SCRIPTHASH)
+        if (whichType == TxnOutType::ScriptHash)
         {
             if (stack.empty())
                 return false;
             CScript subscript(stack.back().begin(), stack.back().end());
             vector<vector<unsigned char> > vSolutions2;
-            txnouttype whichType2;
+            TxnOutType whichType2;
             if (!Solver(subscript, whichType2, vSolutions2))
                 return false;
-            if (whichType2 == TX_SCRIPTHASH)
+            if (whichType2 == TxnOutType::ScriptHash)
                 return false;
 
             int tmpExpected;
@@ -3048,7 +3041,7 @@ bool CBlock::SetBestChain(CTxDBBase& txdb, CBlockIndex* pindexNew)
 
     if (!fIsInitialDownload && !strCmd.empty())
     {
-        boost::replace_all(strCmd, "%s", hashBestChain.GetHex());
+        ReplaceAll(strCmd, "%s", hashBestChain.GetHex());
         std::thread(runCommand, strCmd).detach(); // thread runs free
     }
 
@@ -3795,14 +3788,14 @@ bool CBlock::CheckBlockSignature() const
         return vchBlockSig.empty();
 
     vector<valtype> vSolutions;
-    txnouttype whichType;
+    TxnOutType whichType;
 
     const CTxOut& txout = vtx[1].vout[1];
 
     if (!Solver(txout.scriptPubKey, whichType, vSolutions))
         return false;
 
-    if (whichType == TX_PUBKEY)
+    if (whichType == TxnOutType::PubKey)
     {
         valtype& vchPubKey = vSolutions[0];
         CKey key;

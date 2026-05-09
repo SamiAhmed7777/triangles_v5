@@ -22,7 +22,6 @@
 #include <filesystem>
 #include <boost/iostreams/concepts.hpp>
 #include <boost/iostreams/stream.hpp>
-#include <boost/algorithm/string.hpp>
 #include <boost/asio/ssl.hpp>
 #include <fstream>
 #include <boost/shared_ptr.hpp>
@@ -461,7 +460,7 @@ int ReadHTTPStatus(std::basic_istream<char>& stream, int &proto,
     if (!str.empty() && str[str.size()-1] == '\r')
         str.resize(str.size()-1);
     vector<string> vWords;
-    boost::split(vWords, str, boost::is_any_of(" "));
+    auto vWords = SplitString(str, ' ');
     if (vWords.size() < 2)
         return HTTP_INTERNAL_SERVER_ERROR;
     proto = 0;
@@ -493,10 +492,10 @@ int ReadHTTPHeader(std::basic_istream<char>& stream, map<string, string>& mapHea
         if (nColon != string::npos)
         {
             string strHeader = str.substr(0, nColon);
-            boost::trim(strHeader);
-            boost::to_lower(strHeader);
+            strHeader = TrimString(strHeader);
+            strHeader = ToLower(strHeader);
             string strValue = str.substr(nColon+1);
-            boost::trim(strValue);
+            strValue = TrimString(strValue);
             mapHeadersRet[strHeader] = strValue;
             if (strHeader == "content-length")
                 nLen = atoi(strValue.c_str());
@@ -550,7 +549,7 @@ bool HTTPAuthorized(map<string, string>& mapHeaders)
     string strAuth = mapHeaders["authorization"];
     if (strAuth.substr(0,6) != "Basic ")
         return false;
-    string strUserPass64 = strAuth.substr(6); boost::trim(strUserPass64);
+    string strUserPass64 = strAuth.substr(6); strUserPass64 = TrimString(strUserPass64);
     string strUserPass = DecodeBase64(strUserPass64);
     return TimingResistantEqual(strUserPass, strRPCUserColonPass);
 }
@@ -768,12 +767,9 @@ static void RPCListen(boost::shared_ptr< basic_socket_acceptor<Protocol, SocketA
     acceptor->async_accept(
             conn->sslStream.lowest_layer(),
             conn->peer,
-            boost::bind(&RPCAcceptHandler<Protocol, SocketAcceptorService>,
-                acceptor,
-                boost::ref(context),
-                fUseSSL,
-                conn,
-                boost::asio::placeholders::error));
+            [acceptor, &context, fUseSSL, conn](const boost::system::error_code& error) {
+                RPCAcceptHandler(acceptor, context, fUseSSL, conn, error);
+            });
 }
 
 /**
@@ -1383,45 +1379,45 @@ Array RPCConvertValues(const std::string &strMethod, const std::vector<std::stri
     if (strMethod == "stop"                   && n > 0) ConvertTo<bool>(params[0]);
     if (strMethod == "sendtoaddress"          && n > 1) ConvertTo<double>(params[1]);
     if (strMethod == "settxfee"               && n > 0) ConvertTo<double>(params[0]);
-    if (strMethod == "getreceivedbyaddress"   && n > 1) ConvertTo<boost::int64_t>(params[1]);
-    if (strMethod == "getreceivedbyaccount"   && n > 1) ConvertTo<boost::int64_t>(params[1]);
-    if (strMethod == "listreceivedbyaddress"  && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "getreceivedbyaddress"   && n > 1) ConvertTo<int64_t>(params[1]);
+    if (strMethod == "getreceivedbyaccount"   && n > 1) ConvertTo<int64_t>(params[1]);
+    if (strMethod == "listreceivedbyaddress"  && n > 0) ConvertTo<int64_t>(params[0]);
     if (strMethod == "listreceivedbyaddress"  && n > 1) ConvertTo<bool>(params[1]);
-    if (strMethod == "listreceivedbyaccount"  && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "listreceivedbyaccount"  && n > 0) ConvertTo<int64_t>(params[0]);
     if (strMethod == "listreceivedbyaccount"  && n > 1) ConvertTo<bool>(params[1]);
-    if (strMethod == "getbalance"             && n > 1) ConvertTo<boost::int64_t>(params[1]);
+    if (strMethod == "getbalance"             && n > 1) ConvertTo<int64_t>(params[1]);
     if (strMethod == "getblock"               && n > 1) ConvertTo<bool>(params[1]);
-    if (strMethod == "getblockbynumber"       && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "getblockbynumber"       && n > 0) ConvertTo<int64_t>(params[0]);
     if (strMethod == "getblockbynumber"       && n > 1) ConvertTo<bool>(params[1]);
-    if (strMethod == "getblockhash"           && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "getblockhash"           && n > 0) ConvertTo<int64_t>(params[0]);
     if (strMethod == "move"                   && n > 2) ConvertTo<double>(params[2]);
-    if (strMethod == "move"                   && n > 3) ConvertTo<boost::int64_t>(params[3]);
+    if (strMethod == "move"                   && n > 3) ConvertTo<int64_t>(params[3]);
     if (strMethod == "sendfrom"               && n > 2) ConvertTo<double>(params[2]);
-    if (strMethod == "sendfrom"               && n > 3) ConvertTo<boost::int64_t>(params[3]);
-    if (strMethod == "listtransactions"       && n > 1) ConvertTo<boost::int64_t>(params[1]);
-    if (strMethod == "listtransactions"       && n > 2) ConvertTo<boost::int64_t>(params[2]);
-    if (strMethod == "listaccounts"           && n > 0) ConvertTo<boost::int64_t>(params[0]);
-    if (strMethod == "walletpassphrase"       && n > 1) ConvertTo<boost::int64_t>(params[1]);
+    if (strMethod == "sendfrom"               && n > 3) ConvertTo<int64_t>(params[3]);
+    if (strMethod == "listtransactions"       && n > 1) ConvertTo<int64_t>(params[1]);
+    if (strMethod == "listtransactions"       && n > 2) ConvertTo<int64_t>(params[2]);
+    if (strMethod == "listaccounts"           && n > 0) ConvertTo<int64_t>(params[0]);
+    if (strMethod == "walletpassphrase"       && n > 1) ConvertTo<int64_t>(params[1]);
     if (strMethod == "walletpassphrase"       && n > 2) ConvertTo<bool>(params[2]);
-    if (strMethod == "listsinceblock"         && n > 1) ConvertTo<boost::int64_t>(params[1]);
+    if (strMethod == "listsinceblock"         && n > 1) ConvertTo<int64_t>(params[1]);
 
     if (strMethod == "sendmany"               && n > 1) ConvertTo<Object>(params[1]);
-    if (strMethod == "sendmany"               && n > 2) ConvertTo<boost::int64_t>(params[2]);
+    if (strMethod == "sendmany"               && n > 2) ConvertTo<int64_t>(params[2]);
     if (strMethod == "reservebalance"         && n > 0) ConvertTo<bool>(params[0]);
     if (strMethod == "reservebalance"         && n > 1) ConvertTo<double>(params[1]);
-    if (strMethod == "addmultisigaddress"     && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "addmultisigaddress"     && n > 0) ConvertTo<int64_t>(params[0]);
     if (strMethod == "addmultisigaddress"     && n > 1) ConvertTo<Array>(params[1]);
-    if (strMethod == "listunspent"            && n > 0) ConvertTo<boost::int64_t>(params[0]);
-    if (strMethod == "listunspent"            && n > 1) ConvertTo<boost::int64_t>(params[1]);
+    if (strMethod == "listunspent"            && n > 0) ConvertTo<int64_t>(params[0]);
+    if (strMethod == "listunspent"            && n > 1) ConvertTo<int64_t>(params[1]);
     if (strMethod == "listunspent"            && n > 2) ConvertTo<Array>(params[2]);
-    if (strMethod == "getrawtransaction"      && n > 1) ConvertTo<boost::int64_t>(params[1]);
+    if (strMethod == "getrawtransaction"      && n > 1) ConvertTo<int64_t>(params[1]);
     if (strMethod == "createrawtransaction"   && n > 0) ConvertTo<Array>(params[0]);
     if (strMethod == "createrawtransaction"   && n > 1) ConvertTo<Object>(params[1]);
     if (strMethod == "signrawtransaction"     && n > 1) ConvertTo<Array>(params[1], true);
     if (strMethod == "signrawtransaction"     && n > 2) ConvertTo<Array>(params[2], true);
-    if (strMethod == "keypoolrefill"          && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "keypoolrefill"          && n > 0) ConvertTo<int64_t>(params[0]);
     if (strMethod == "getblockheader"         && n > 1) ConvertTo<bool>(params[1]);
-    if (strMethod == "estimatefee"            && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "estimatefee"            && n > 0) ConvertTo<int64_t>(params[0]);
     if (strMethod == "getaddressbalance"     && n > 0) ConvertTo<Object>(params[0]);
     if (strMethod == "getaddressutxos"       && n > 0) ConvertTo<Object>(params[0]);
     if (strMethod == "getaddresstxids"       && n > 0) ConvertTo<Object>(params[0]);

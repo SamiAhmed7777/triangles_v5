@@ -128,8 +128,8 @@ Object blockToJSON(const CBlock& block, const CBlockIndex* blockindex, bool fPri
     result.push_back(Pair("version", block.nVersion));
     result.push_back(Pair("merkleroot", block.hashMerkleRoot.GetHex()));
     result.push_back(Pair("mint", ValueFromAmount(blockindex->nMint)));
-    result.push_back(Pair("time", (boost::int64_t)block.GetBlockTime()));
-    result.push_back(Pair("nonce", (boost::uint64_t)block.nNonce));
+    result.push_back(Pair("time", (int64_t)block.GetBlockTime()));
+    result.push_back(Pair("nonce", (uint64_t)block.nNonce));
     result.push_back(Pair("bits", HexBits(block.nBits)));
     result.push_back(Pair("difficulty", GetDifficulty(blockindex)));
     result.push_back(Pair("blocktrust", leftTrim(blockindex->GetBlockTrust().GetHex(), '0')));
@@ -330,8 +330,8 @@ Value getblockheader(const Array& params, bool fHelp)
     result.push_back(Pair("version", pblockindex->nVersion));
     result.push_back(Pair("merkleroot", pblockindex->hashMerkleRoot.GetHex()));
     result.push_back(Pair("mint", ValueFromAmount(pblockindex->nMint)));
-    result.push_back(Pair("time", (boost::int64_t)pblockindex->GetBlockTime()));
-    result.push_back(Pair("nonce", (boost::uint64_t)pblockindex->nNonce));
+    result.push_back(Pair("time", (int64_t)pblockindex->GetBlockTime()));
+    result.push_back(Pair("nonce", (uint64_t)pblockindex->nNonce));
     result.push_back(Pair("bits", HexBits(pblockindex->nBits)));
     result.push_back(Pair("difficulty", GetDifficulty(pblockindex)));
     result.push_back(Pair("blocktrust", leftTrim(pblockindex->GetBlockTrust().GetHex(), '0')));
@@ -708,7 +708,7 @@ Value getblockchaininfo(const Array& params, bool fHelp)
     obj.push_back(Pair("difficulty", diff));
 
     obj.push_back(Pair("moneysupply", ValueFromAmount(pindexBest->nMoneySupply)));
-    obj.push_back(Pair("timeoffset", (boost::int64_t)GetTimeOffset()));
+    obj.push_back(Pair("timeoffset", (int64_t)GetTimeOffset()));
     obj.push_back(Pair("connections", (int)vNodes.size()));
     obj.push_back(Pair("errors", GetWarnings("statusbar")));
     return obj;

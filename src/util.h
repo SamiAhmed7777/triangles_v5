@@ -18,6 +18,8 @@
 #include <vector>
 #include <string>
 #include <string_view>
+#include <sstream>
+#include <algorithm>
 
 #include <chrono>
 #include <thread>
@@ -184,7 +186,7 @@ bool ParseMoney(const std::string& str, int64_t& nRet);
 bool ParseMoney(const char* pszIn, int64_t& nRet);
 std::vector<unsigned char> ParseHex(const char* psz);
 std::vector<unsigned char> ParseHex(const std::string& str);
-bool IsHex(const std::string& str);
+bool IsHex(std::string_view str);
 std::vector<unsigned char> DecodeBase64(const char* p, bool* pfInvalid = nullptr);
 std::string DecodeBase64(const std::string& str);
 std::string EncodeBase64(const unsigned char* pch, size_t len);
@@ -286,6 +288,52 @@ inline std::string leftTrim(std::string src, char chr)
         src.erase(0, pos);
 
     return src;
+}
+
+inline std::string TrimString(std::string str)
+{
+    auto start = str.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return {};
+    auto end = str.find_last_not_of(" \t\r\n");
+    return str.substr(start, end - start + 1);
+}
+
+inline std::string ToLower(std::string str)
+{
+    std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) { return std::tolower(c); });
+    return str;
+}
+
+inline void ReplaceAll(std::string& str, const std::string& from, const std::string& to)
+{
+    if (from.empty()) return;
+    size_t pos = 0;
+    while ((pos = str.find(from, pos)) != std::string::npos)
+    {
+        str.replace(pos, from.length(), to);
+        pos += to.length();
+    }
+}
+
+inline std::vector<std::string> SplitString(const std::string& str, char delim)
+{
+    std::vector<std::string> tokens;
+    std::istringstream iss(str);
+    std::string token;
+    while (std::getline(iss, token, delim))
+        tokens.push_back(token);
+    return tokens;
+}
+
+inline std::string JoinStrings(const std::vector<std::string>& parts, const std::string& sep)
+{
+    std::string result;
+    for (size_t i = 0; i < parts.size(); ++i)
+    {
+        if (i > 0) result += sep;
+        result += parts[i];
+    }
+    return result;
 }
 
 template<typename T>

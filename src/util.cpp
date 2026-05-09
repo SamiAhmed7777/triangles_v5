@@ -40,7 +40,6 @@
 #include "strlcpy.h"
 #include "version.h"
 #include "ui_interface.h"
-#include <boost/algorithm/string/join.hpp>
 
 // Work around clang compilation problem in Boost 1.46:
 // /usr/include/boost/program_options/detail/config_file.hpp:163:17: error: call to function 'to_internal' that is neither visible in the template definition nor found by argument-dependent lookup
@@ -464,7 +463,7 @@ static const signed char phexdigit[256] =
   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1, };
 
-bool IsHex(const string& str)
+bool IsHex(std::string_view str)
 {
     for (unsigned char c : str)
     {
@@ -1288,7 +1287,7 @@ std::string FormatSubVersion(const std::string& name, int nClientVersion, const 
     ss << "/";
     ss << name << ":" << FormatVersion(nClientVersion);
     if (!comments.empty())
-        ss << "(" << boost::algorithm::join(comments, "; ") << ")";
+        ss << "(" << JoinStrings(comments, "; ") << ")";
     ss << "/";
     return ss.str();
 }

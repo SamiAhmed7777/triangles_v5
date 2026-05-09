@@ -13,7 +13,6 @@
 #include "coincontrol.h"
 #include "addressindex.h"
 #include <memory>
-#include <boost/algorithm/string/replace.hpp>
 #include <algorithm>
 #include <random>
 #include <deque>
@@ -652,7 +651,7 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn)
 
         if ( !strCmd.empty())
         {
-            boost::replace_all(strCmd, "%s", wtxIn.GetHash().GetHex());
+            ReplaceAll(strCmd, "%s", wtxIn.GetHash().GetHex());
             std::thread(runCommand, strCmd).detach(); // thread runs free
         }
 
@@ -1983,7 +1982,7 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
                 if (fDebug && GetBoolArg("-printcoinstake"))
                     printf("CreateCoinStake : kernel found\n");
                 vector<valtype> vSolutions;
-                txnouttype whichType;
+                TxnOutType whichType;
                 CScript scriptPubKeyOut;
                 scriptPubKeyKernel = pcoin.first->vout[pcoin.second].scriptPubKey;
                 if (!Solver(scriptPubKeyKernel, whichType, vSolutions))
@@ -1993,31 +1992,30 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
                     break;
                 }
                 if (fDebug && GetBoolArg("-printcoinstake"))
-                    printf("CreateCoinStake : parsed kernel type=%d\n", whichType);
-                if (whichType != TX_PUBKEY && whichType != TX_PUBKEYHASH)
+                    printf("CreateCoinStake : parsed kernel type=%d\n", static_cast<int>(whichType));
+                if (whichType != TxnOutType::PubKey && whichType != TxnOutType::PubKeyHash)
                 {
                     if (fDebug && GetBoolArg("-printcoinstake"))
-                        printf("CreateCoinStake : no support for kernel type=%d\n", whichType);
-                    break;  // only support pay to public key and pay to address
+                        printf("CreateCoinStake : no support for kernel type=%d\n", static_cast<int>(whichType));
+                    break;
                 }
-                if (whichType == TX_PUBKEYHASH) // pay to address type
+                if (whichType == TxnOutType::PubKeyHash)
                 {
-                    // convert to pay to public key type
                     if (!keystore.GetKey(uint160(vSolutions[0]), key))
                     {
                         if (fDebug && GetBoolArg("-printcoinstake"))
-                            printf("CreateCoinStake : failed to get key for kernel type=%d\n", whichType);
-                        break;  // unable to find corresponding public key
+                            printf("CreateCoinStake : failed to get key for kernel type=%d\n", static_cast<int>(whichType));
+                        break;
                     }
                     scriptPubKeyOut << key.GetPubKey() << OP_CHECKSIG;
                 }
-                if (whichType == TX_PUBKEY)
+                if (whichType == TxnOutType::PubKey)
                 {
                     valtype& vchPubKey = vSolutions[0];
                     if (!keystore.GetKey(Hash160(vchPubKey), key))
                     {
                         if (fDebug && GetBoolArg("-printcoinstake"))
-                            printf("CreateCoinStake : failed to get key for kernel type=%d\n", whichType);
+                            printf("CreateCoinStake : failed to get key for kernel type=%d\n", static_cast<int>(whichType));
                         break;  // unable to find corresponding public key
                     }
 

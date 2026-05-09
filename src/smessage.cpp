@@ -47,8 +47,6 @@ Notes:
 #include <openssl/hmac.h>
 
 #include <string>
-#include <boost/algorithm/string/predicate.hpp>
-
 
 #include "base58.h"
 #include "crypto_ecdh.h"
@@ -292,12 +290,12 @@ bool SecureMsgAllDigits(const std::string& value)
 
 bool SecureMsgParseBucketFilename(const std::string& fileName, int64_t& bucket, uint32_t& fileIndex, bool& fWalletLocked)
 {
-    if (!boost::algorithm::ends_with(fileName, ".dat"))
+    if (!fileName.ends_with(".dat"))
         return false;
 
     std::string baseName = fileName.substr(0, fileName.size() - 4);
     fWalletLocked = false;
-    if (boost::algorithm::ends_with(baseName, "_wl"))
+    if (baseName.ends_with("_wl"))
     {
         fWalletLocked = true;
         baseName.erase(baseName.size() - 3);

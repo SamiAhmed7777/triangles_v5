@@ -30,14 +30,13 @@ enum
 };
 
 
-enum txnouttype
+enum class TxnOutType
 {
-    TX_NONSTANDARD,
-    // 'standard' transaction types:
-    TX_PUBKEY,
-    TX_PUBKEYHASH,
-    TX_SCRIPTHASH,
-    TX_MULTISIG,
+    NonStandard,
+    PubKey,
+    PubKeyHash,
+    ScriptHash,
+    MultiSig,
 };
 
 class CNoDestination {
@@ -54,7 +53,7 @@ public:
  */
 typedef std::variant<CNoDestination, CKeyID, CScriptID> CTxDestination;
 
-const char* GetTxnOutputType(txnouttype t);
+const char* GetTxnOutputType(TxnOutType t);
 
 /** Script opcodes */
 enum opcodetype
@@ -590,14 +589,14 @@ public:
 
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, const CTransaction& txTo, unsigned int nIn, int nHashType);
-bool Solver(const CScript& scriptPubKey, txnouttype& typeRet, std::vector<std::vector<unsigned char> >& vSolutionsRet);
-int ScriptSigArgsExpected(txnouttype t, const std::vector<std::vector<unsigned char> >& vSolutions);
+bool Solver(const CScript& scriptPubKey, TxnOutType& typeRet, std::vector<std::vector<unsigned char> >& vSolutionsRet);
+int ScriptSigArgsExpected(TxnOutType t, const std::vector<std::vector<unsigned char> >& vSolutions);
 bool IsStandard(const CScript& scriptPubKey);
 bool IsMine(const CKeyStore& keystore, const CScript& scriptPubKey);
 bool IsMine(const CKeyStore& keystore, const CTxDestination &dest);
 void ExtractAffectedKeys(const CKeyStore &keystore, const CScript& scriptPubKey, std::vector<CKeyID> &vKeys);
 bool ExtractDestination(const CScript& scriptPubKey, CTxDestination& addressRet);
-bool ExtractDestinations(const CScript& scriptPubKey, txnouttype& typeRet, std::vector<CTxDestination>& addressRet, int& nRequiredRet);
+bool ExtractDestinations(const CScript& scriptPubKey, TxnOutType& typeRet, std::vector<CTxDestination>& addressRet, int& nRequiredRet);
 bool SignSignature(const CKeyStore& keystore, const CScript& fromPubKey, CTransaction& txTo, unsigned int nIn, int nHashType=SIGHASH_ALL);
 bool SignSignature(const CKeyStore& keystore, const CTransaction& txFrom, CTransaction& txTo, unsigned int nIn, int nHashType=SIGHASH_ALL);
 bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CTransaction& txTo, unsigned int nIn,

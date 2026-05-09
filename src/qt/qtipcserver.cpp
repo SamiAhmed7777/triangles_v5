@@ -13,7 +13,6 @@
 #include "ui_interface.h"
 #include "util.h"
 
-#include <boost/algorithm/string/predicate.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/interprocess/ipc/message_queue.hpp>
 #include <boost/version.hpp>
@@ -25,6 +24,9 @@
 using namespace boost;
 using namespace boost::interprocess;
 using namespace boost::posix_time;
+
+#include <algorithm>
+#include <cctype>
 
 #if defined MAC_OSX || defined __FreeBSD__
 // URI handling not implemented on OSX yet
@@ -42,7 +44,7 @@ static bool ipcScanCmd(int argc, char *argv[], bool fRelay)
     bool fSent = false;
     for (int i = 1; i < argc; i++)
     {
-        if (boost::algorithm::istarts_with(argv[i], "Triangles:"))
+        if (std::equal(std::begin("Triangles:"), std::end("Triangles:") - 1, argv[i], [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b)); }))
         {
             const char *strURI = argv[i];
             try {

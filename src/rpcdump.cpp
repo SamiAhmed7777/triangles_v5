@@ -11,7 +11,6 @@
 #include "base58.h"
 
 #include <boost/date_time/posix_time/posix_time.hpp>
-#include <boost/algorithm/string.hpp>
 
 #define printf OutputDebugStringF
 
@@ -168,7 +167,7 @@ Value importwallet(const Array& params, bool fHelp)
             continue;
 
         std::vector<std::string> vstr;
-        boost::split(vstr, line, boost::is_any_of(" "));
+        auto vstr = SplitString(line, ' ');
         if (vstr.size() < 2)
             continue;
         CTrianglesSecret vchSecret;
@@ -189,13 +188,13 @@ Value importwallet(const Array& params, bool fHelp)
         std::string strLabel;
         bool fLabel = true;
         for (unsigned int nStr = 2; nStr < vstr.size(); nStr++) {
-            if (boost::algorithm::starts_with(vstr[nStr], "#"))
+            if (vstr[nStr].starts_with("#"))
                 break;
             if (vstr[nStr] == "change=1")
                 fLabel = false;
             if (vstr[nStr] == "reserve=1")
                 fLabel = false;
-            if (boost::algorithm::starts_with(vstr[nStr], "label=")) {
+            if (vstr[nStr].starts_with("label=")) {
                 strLabel = DecodeDumpString(vstr[nStr].substr(6));
                 fLabel = true;
             }
