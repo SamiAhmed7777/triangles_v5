@@ -59,12 +59,11 @@ enum
     unsigned int GetSerializeSize(int nType, int nVersion) const  \
     {                                           \
         CSerActionGetSerializeSize ser_action;  \
-        const bool fGetSize = true;             \
-        const bool fWrite = false;              \
-        const bool fRead = false;               \
+        [[maybe_unused]] const bool fGetSize = true; \
+        [[maybe_unused]] const bool fWrite = false;  \
+        [[maybe_unused]] const bool fRead = false;   \
         unsigned int nSerSize = 0;              \
         ser_streamplaceholder s;                \
-        assert(fGetSize||fWrite||fRead); /* suppress warning */ \
         s.nType = nType;                        \
         s.nVersion = nVersion;                  \
         {statements}                            \
@@ -74,22 +73,20 @@ enum
     void Serialize(Stream& s, int nType, int nVersion) const  \
     {                                           \
         CSerActionSerialize ser_action;         \
-        const bool fGetSize = false;            \
-        const bool fWrite = true;               \
-        const bool fRead = false;               \
-        unsigned int nSerSize = 0;              \
-        assert(fGetSize||fWrite||fRead); /* suppress warning */ \
+        [[maybe_unused]] const bool fGetSize = false; \
+        [[maybe_unused]] const bool fWrite = true;   \
+        [[maybe_unused]] const bool fRead = false;   \
+        [[maybe_unused]] unsigned int nSerSize = 0;  \
         {statements}                            \
     }                                           \
     template<typename Stream>                   \
     void Unserialize(Stream& s, int nType, int nVersion)  \
     {                                           \
         CSerActionUnserialize ser_action;       \
-        const bool fGetSize = false;            \
-        const bool fWrite = false;              \
-        const bool fRead = true;                \
-        unsigned int nSerSize = 0;              \
-        assert(fGetSize||fWrite||fRead); /* suppress warning */ \
+        [[maybe_unused]] const bool fGetSize = false; \
+        [[maybe_unused]] const bool fWrite = false;  \
+        [[maybe_unused]] const bool fRead = true;    \
+        [[maybe_unused]] unsigned int nSerSize = 0;  \
         {statements}                            \
     }
 
@@ -705,7 +702,7 @@ struct ser_streamplaceholder
 
 
 
-typedef std::vector<char, zero_after_free_allocator<char> > CSerializeData;
+using CSerializeData = std::vector<char, zero_after_free_allocator<char>>;
 
 /** Double ended buffer combining vector and stream-like interfaces.
  *

@@ -16,7 +16,7 @@
 #include "keystore.h"
 #include "bignum.h"
 
-typedef std::vector<unsigned char> valtype;
+using valtype = std::vector<unsigned char>;
 
 class CTransaction;
 
@@ -51,7 +51,7 @@ public:
  *  * CScriptID: TX_SCRIPTHASH destination
  *  A CTxDestination is the internal data type encoded in a CTrianglesAddress
  */
-typedef std::variant<CNoDestination, CKeyID, CScriptID> CTxDestination;
+using CTxDestination = std::variant<CNoDestination, CKeyID, CScriptID>;
 
 const char* GetTxnOutputType(TxnOutType t);
 

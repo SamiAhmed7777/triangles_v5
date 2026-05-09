@@ -50,7 +50,7 @@ uint64_t nLastBlockSize = 0;
 int64_t nLastCoinStakeSearchInterval = 0;
  
 // We want to sort transactions by priority and fee, so:
-typedef std::tuple<double, double, CTransaction*> TxPriority;
+using TxPriority = std::tuple<double, double, CTransaction*>;
 class TxPriorityCompare
 {
     bool byFee;

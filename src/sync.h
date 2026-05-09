@@ -9,10 +9,10 @@
 #include <condition_variable>
 
 /** Recursive mutex: supports recursive locking, but no waiting */
-typedef std::recursive_mutex CCriticalSection;
+using CCriticalSection = std::recursive_mutex;
 
 /** Plain mutex: supports waiting but not recursive locking */
-typedef std::mutex CWaitableCriticalSection;
+using CWaitableCriticalSection = std::mutex;
 
 #ifdef DEBUG_LOCKORDER
 void EnterCritical(const char* pszName, const char* pszFile, int nLine, void* cs, bool fTry = false);

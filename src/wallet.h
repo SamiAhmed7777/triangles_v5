@@ -29,7 +29,7 @@ class COutput;
 class CCoinControl;
 
 //typedef std::map<CKeyID, CStealthKeyMetadata> StealthKeyMetaMap;
-typedef std::map<std::string, std::string> mapValue_t;
+using mapValue_t = std::map<std::string, std::string>;
 
 /** (client) version numbers for particular wallet features */
 enum class WalletFeature : int
@@ -358,8 +358,6 @@ public:
     void KeepKey();
 };
 
-
-typedef std::map<std::string, std::string> mapValue_t;
 
 
 static void ReadOrderPos(int64_t& nOrderPos, mapValue_t& mapValue)

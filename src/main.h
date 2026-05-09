@@ -475,7 +475,7 @@ public:
     }
 };
 
-typedef std::map<COutPoint, CUtxoEntry> MapPrevTx;
+using MapPrevTx = std::map<COutPoint, CUtxoEntry>;
 
 /** The basic transaction that is broadcasted on the network and contained in
  * blocks.  A transaction can contain multiple inputs and outputs.

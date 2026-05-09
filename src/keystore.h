@@ -44,8 +44,8 @@ public:
     }
 };
 
-typedef std::map<CKeyID, std::pair<CSecret, bool> > KeyMap;
-typedef std::map<CScriptID, CScript > ScriptMap;
+using KeyMap = std::map<CKeyID, std::pair<CSecret, bool>>;
+using ScriptMap = std::map<CScriptID, CScript>;
 
 /** Basic key store, that keeps keys in an address->secret map */
 class CBasicKeyStore : public CKeyStore
@@ -94,7 +94,7 @@ public:
     virtual bool GetCScript(const CScriptID &hash, CScript& redeemScriptOut) const;
 };
 
-typedef std::map<CKeyID, std::pair<CPubKey, std::vector<unsigned char> > > CryptedKeyMap;
+using CryptedKeyMap = std::map<CKeyID, std::pair<CPubKey, std::vector<unsigned char>>>;
 
 /** Keystore which keeps the private keys encrypted.
  * It derives from the basic key store, which is used if no encryption is active.
