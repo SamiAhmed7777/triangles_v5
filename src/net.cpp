@@ -47,7 +47,7 @@ void ThreadMapPort2(void* parg);
 #endif
 void ThreadHTTPSeedFetch(void* parg);
 bool ThreadHTTPSeedFetch2(void* parg);
-bool OpenNetworkConnection(const CAddress& addrConnect, CSemaphoreGrant *grantOutbound = NULL, const char *strDest = NULL, bool fOneShot = false);
+bool OpenNetworkConnection(const CAddress& addrConnect, CSemaphoreGrant *grantOutbound = nullptr, const char *strDest = nullptr, bool fOneShot = false);
 
 
 struct LocalServiceInfo {
@@ -59,7 +59,7 @@ struct LocalServiceInfo {
 // Global state variables
 //
 bool fClient = false;
-//bool fDiscover = true;
+
 
 #ifdef USE_UPNP
 bool fUseUPnP = GetBoolArg("-upnp", USE_UPNP);
@@ -71,10 +71,10 @@ static CCriticalSection cs_mapLocalHost;
 static map<CNetAddr, LocalServiceInfo> mapLocalHost;
 static bool vfReachable[NET_MAX] = {};
 static bool vfLimited[NET_MAX] = {};
-static CNode* pnodeLocalHost = NULL;
+static CNode* pnodeLocalHost = nullptr;
 CAddress addrSeenByPeer(CService("0.0.0.0", 0), nLocalServices);
 uint64_t nLocalHostNonce = 0;
-boost::array<int, THREAD_MAX> vnThreadsRunning;
+std::array<int, THREAD_MAX> vnThreadsRunning;
 static std::vector<SOCKET> vhListenSocket;
 CAddrMan addrman;
 
@@ -91,7 +91,7 @@ CCriticalSection cs_vOneShots;
 set<CNetAddr> setservAddNodeAddresses;
 CCriticalSection cs_setservAddNodeAddresses;
 
-static CSemaphore *semOutbound = NULL;
+static CSemaphore *semOutbound = nullptr;
 
 void AddOneShot(string strDest)
 {
@@ -347,7 +347,7 @@ bool GetMyExternalIP2(const CService& addrConnect, const char* pszGet, const cha
                     closesocket(hSocket);
                     return false;
                 }
-                if (pszKeyword == NULL)
+                if (pszKeyword == nullptr)
                     break;
                 if (strLine.find(pszKeyword) != string::npos)
                 {
@@ -423,7 +423,7 @@ bool GetMyExternalIP(CNetAddr& ipRet)
                      "Connection: close\r\n"
                      "\r\n";
 
-            pszKeyword = NULL; // Returns just IP address
+            pszKeyword = nullptr; // Returns just IP address
         }
 
         if (GetMyExternalIP2(addrConnect, pszGet, pszKeyword, ipRet))
@@ -469,7 +469,7 @@ CNode* FindNode(const CNetAddr& ip)
             if ((CNetAddr)pnode->addr == ip)
                 return (pnode);
     }
-    return NULL;
+    return nullptr;
 }
 
 CNode* FindNode(std::string addrName)
@@ -478,7 +478,7 @@ CNode* FindNode(std::string addrName)
     for (CNode* pnode : vNodes)
         if (pnode->addrName == addrName)
             return (pnode);
-    return NULL;
+    return nullptr;
 }
 
 CNode* FindNode(const CService& addr)
@@ -489,7 +489,7 @@ CNode* FindNode(const CService& addr)
             if ((CService)pnode->addr == addr)
                 return (pnode);
     }
-    return NULL;
+    return nullptr;
 }
 
 CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
@@ -499,12 +499,12 @@ CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
     if (addrStr.find(".onion") == std::string::npos) {
         if (fDebug)
             printf("ConnectNode(): REJECTED non-onion address: %s (Tor-native mode)\n", addrStr.c_str());
-        return NULL;
+        return nullptr;
     }
 
-    if (pszDest == NULL) {
+    if (pszDest == nullptr) {
         if (IsLocal(addrConnect))
-            return NULL;
+            return nullptr;
 
         // Look for an existing connection
         CNode* pnode = FindNode((CService)addrConnect);
@@ -557,7 +557,7 @@ CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
     }
     else
     {
-        return NULL;
+        return nullptr;
     }
 }
 
@@ -1042,7 +1042,7 @@ void ThreadSocketHandler2(void* parg)
                     bool fIsSeed = false;
                     static const char *(*strOnionSeedCheck)[1] = fTestNet ? strTestNetOnionSeed : strMainNetOnionSeed;
                     std::string incomingAddr = addr.ToStringIP();
-                    for (unsigned int si = 0; strOnionSeedCheck[si][0] != NULL; si++) {
+                    for (unsigned int si = 0; strOnionSeedCheck[si][0] != nullptr; si++) {
                         if (incomingAddr.find(strOnionSeedCheck[si][0]) != std::string::npos) {
                             fIsSeed = true;
                             break;
@@ -1204,7 +1204,7 @@ void ThreadMapPort(void* parg)
         PrintException(&e, "ThreadMapPort()");
     } catch (...) {
         vnThreadsRunning[THREAD_UPNP]--;
-        PrintException(NULL, "ThreadMapPort()");
+        PrintException(nullptr, "ThreadMapPort()");
     }
     printf("ThreadMapPort exited\n");
 }
@@ -1325,7 +1325,7 @@ void MapPort()
     printf("MapPort()...\n");
     if (fUseUPnP && vnThreadsRunning[THREAD_UPNP] < 1)
     {
-        if (!NewThread(ThreadMapPort, NULL))
+        if (!NewThread(ThreadMapPort, nullptr))
             printf("Error: ThreadMapPort(ThreadMapPort) failed\n");
     }
 }
@@ -1403,7 +1403,7 @@ void ThreadOnionSeed(void* parg)
     static const char *(*strOnionSeed)[1] = fTestNet ? strTestNetOnionSeed : strMainNetOnionSeed;
     int found = 0;
 
-    for (unsigned int seed_idx = 0; strOnionSeed[seed_idx][0] != NULL; seed_idx++) {
+    for (unsigned int seed_idx = 0; strOnionSeed[seed_idx][0] != nullptr; seed_idx++) {
         CNetAddr parsed;
         if (!parsed.SetSpecial(strOnionSeed[seed_idx][0]))
             throw runtime_error("ThreadOnionSeed() : invalid .onion seed");
@@ -1441,7 +1441,7 @@ void ThreadOnionSeed(void* parg)
                     MilliSleep(1000);
             }
             if (!fShutdown)
-                ok = ThreadHTTPSeedFetch2(NULL);
+                ok = ThreadHTTPSeedFetch2(nullptr);
         }
         if (!ok && !fShutdown)
             printf("ThreadOnionSeed: all HTTPS seed fetch attempts failed\n");
@@ -1499,10 +1499,10 @@ void ThreadOnionSeed(void* parg)
             else
                 printf("ThreadOnionSeed: low outbound peers (%d), re-seeding...\n", nOutbound);
 
-            ThreadHTTPSeedFetch2(NULL);
+            ThreadHTTPSeedFetch2(nullptr);
 
             // Re-queue hardcoded seeds for direct connection
-            for (unsigned int seed_idx = 0; strOnionSeed[seed_idx][0] != NULL; seed_idx++) {
+            for (unsigned int seed_idx = 0; strOnionSeed[seed_idx][0] != nullptr; seed_idx++) {
                 std::string oneShotAddr = std::string(strOnionSeed[seed_idx][0])
                                         + ":" + std::to_string(GetDefaultPort());
                 AddOneShot(oneShotAddr);
@@ -1587,8 +1587,8 @@ bool ThreadHTTPSeedFetch2(void* parg)
 
     printf("Fetching seed list from https://%s%s (via Tor)...\n", seedHost.c_str(), seedPath.c_str());
 
-    SSL_CTX* ctx = NULL;
-    SSL* ssl = NULL;
+    SSL_CTX* ctx = nullptr;
+    SSL* ssl = nullptr;
     SOCKET hSocket = INVALID_SOCKET;
 
     try {
@@ -1611,7 +1611,7 @@ bool ThreadHTTPSeedFetch2(void* parg)
 
         // Use system default CA certificates for verification
         SSL_CTX_set_default_verify_paths(ctx);
-        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
 
         ssl = SSL_new(ctx);
         if (!ssl) {
@@ -1677,8 +1677,8 @@ bool ThreadHTTPSeedFetch2(void* parg)
         SSL_free(ssl);
         SSL_CTX_free(ctx);
         closesocket(hSocket);
-        ssl = NULL;
-        ctx = NULL;
+        ssl = nullptr;
+        ctx = nullptr;
         hSocket = INVALID_SOCKET;
 
         if (response.empty()) {
@@ -1785,7 +1785,7 @@ void ThreadHTTPSeedFetch(void* parg)
         PrintException(&e, "ThreadHTTPSeedFetch()");
     } catch (...) {
         vnThreadsRunning[THREAD_HTTPSEED]--;
-        PrintException(NULL, "ThreadHTTPSeedFetch()");
+        PrintException(nullptr, "ThreadHTTPSeedFetch()");
     }
     printf("ThreadHTTPSeedFetch exited\n");
 }
@@ -1806,7 +1806,7 @@ void ThreadOpenConnections(void* parg)
         PrintException(&e, "ThreadOpenConnections()");
     } catch (...) {
         vnThreadsRunning[THREAD_OPENCONNECTIONS]--;
-        PrintException(NULL, "ThreadOpenConnections()");
+        PrintException(nullptr, "ThreadOpenConnections()");
     }
     printf("ThreadOpenConnections exited\n");
 }
@@ -1880,7 +1880,7 @@ void ThreadOpenConnections2(void* parg)
             for (string strAddr : mapMultiArgs["-connect"])
             {
                 CAddress addr;
-                OpenNetworkConnection(addr, NULL, strAddr.c_str());
+                OpenNetworkConnection(addr, nullptr, strAddr.c_str());
                 for (int i = 0; i < 10 && i < nLoop; i++)
                 {
                     MilliSleep(500);
@@ -1988,7 +1988,7 @@ void ThreadOpenAddedConnections(void* parg)
         PrintException(&e, "ThreadOpenAddedConnections()");
     } catch (...) {
         vnThreadsRunning[THREAD_ADDEDCONNECTIONS]--;
-        PrintException(NULL, "ThreadOpenAddedConnections()");
+        PrintException(nullptr, "ThreadOpenAddedConnections()");
     }
     printf("ThreadOpenAddedConnections exited\n");
 }
@@ -2120,7 +2120,7 @@ void ThreadMessageHandler(void* parg)
         PrintException(&e, "ThreadMessageHandler()");
     } catch (...) {
         vnThreadsRunning[THREAD_MESSAGEHANDLER]--;
-        PrintException(NULL, "ThreadMessageHandler()");
+        PrintException(nullptr, "ThreadMessageHandler()");
     }
     printf("ThreadMessageHandler exited\n");
 }
@@ -2141,7 +2141,7 @@ void ThreadMessageHandler2(void* parg)
         }
 
         // Poll the connected nodes for messages
-        CNode* pnodeTrickle = NULL;
+        CNode* pnodeTrickle = nullptr;
         if (!vNodesCopy.empty())
             pnodeTrickle = vNodesCopy[GetRand(vNodesCopy.size())];
         for (CNode* pnode : vNodesCopy)
@@ -2386,7 +2386,7 @@ void StartNode(void* parg)
     // Make this thread recognisable as the startup thread
     RenameThread("Triangles-start");
 
-    if (semOutbound == NULL) {
+    if (semOutbound == nullptr) {
         // initialize semaphore — use -maxoutbound if specified, else default
         int nMaxOutbound = (int)GetArg("-maxoutbound", MAX_OUTBOUND_CONNECTIONS);
         nMaxOutbound = min(nMaxOutbound, (int)GetArg("-maxconnections", 125));
@@ -2395,7 +2395,7 @@ void StartNode(void* parg)
         semOutbound = new CSemaphore(nMaxOutbound);
     }
 
-    if (pnodeLocalHost == NULL)
+    if (pnodeLocalHost == nullptr)
         pnodeLocalHost = new CNode(INVALID_SOCKET, CAddress(CService("127.0.0.1", 0), nLocalServices));
 
     printf("StartNode(): pnodeLocalHost addr: %s\n",
@@ -2411,7 +2411,7 @@ void StartNode(void* parg)
     if (!GetBoolArg("-onionseed", true))
         printf(".onion seeding disabled\n");
     else
-        if (!NewThread(ThreadOnionSeed, NULL))
+        if (!NewThread(ThreadOnionSeed, nullptr))
               printf("Error: NewThread(ThreadOnionSeed) failed\n");
 
     // Map ports with UPnP (default)
@@ -2424,34 +2424,34 @@ void StartNode(void* parg)
         printf("HTTP seed fetch handled by onion seed thread\n");
     else if (GetBoolArg("-noseedurl", false))
         printf("HTTP seed fetch disabled\n");
-    else if (!NewThread(ThreadHTTPSeedFetch, NULL))
+    else if (!NewThread(ThreadHTTPSeedFetch, nullptr))
         printf("Error: NewThread(ThreadHTTPSeedFetch) failed\n");
 
     // Send and receive from sockets, accept connections
-    if (!NewThread(ThreadSocketHandler, NULL))
+    if (!NewThread(ThreadSocketHandler, nullptr))
         printf("Error: NewThread(ThreadSocketHandler) failed\n");
 
     // Initiate outbound connections from -addnode
-    if (!NewThread(ThreadOpenAddedConnections, NULL))
+    if (!NewThread(ThreadOpenAddedConnections, nullptr))
         printf("Error: NewThread(ThreadOpenAddedConnections) failed\n");
 
     // Initiate outbound connections
-    if (!NewThread(ThreadOpenConnections, NULL))
+    if (!NewThread(ThreadOpenConnections, nullptr))
         printf("Error: NewThread(ThreadOpenConnections) failed\n");
 
     // Process messages
-    if (!NewThread(ThreadMessageHandler, NULL))
+    if (!NewThread(ThreadMessageHandler, nullptr))
         printf("Error: NewThread(ThreadMessageHandler) failed\n");
 
     // Dump network addresses
-    if (!NewThread(ThreadDumpAddress, NULL))
+    if (!NewThread(ThreadDumpAddress, nullptr))
         printf("Error; NewThread(ThreadDumpAddress) failed\n");
 
     // Mine proof-of-stake blocks in the background
     if (!GetBoolArg("-stake", true))
         printf("Staking disabled at startup (stake=0).\n");
         else
-        if (!NewThread(ThreadStakeMiner, pwalletMain))
+        if (!NewThread(ThreadStakeMiner, pwalletMain.get()))
             printf("Error: NewThread(ThreadStakeMiner) failed\n");
 }
 
@@ -2567,8 +2567,8 @@ void RelayTransaction(const CTransaction& tx, const uint256& hash, const CDataSt
         }
 
         // Save original serialized message so newer versions are preserved
-        mapRelay.insert(std::make_pair(inv, ss));
-        vRelayExpiration.push_back(std::make_pair(GetTime() + 15 * 60, inv));
+        mapRelay.insert({inv, ss});
+        vRelayExpiration.push_back({GetTime() + 15 * 60, inv});
     }
 
     RelayInventory(inv);

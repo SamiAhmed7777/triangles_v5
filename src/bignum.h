@@ -37,20 +37,20 @@ public:
     CAutoBN_CTX()
     {
         pctx = BN_CTX_new();
-        if (pctx == NULL)
+        if (pctx == nullptr)
             throw bignum_error("CAutoBN_CTX : BN_CTX_new() returned NULL");
     }
 
     ~CAutoBN_CTX()
     {
-        if (pctx != NULL)
+        if (pctx != nullptr)
             BN_CTX_free(pctx);
     }
 
     operator BN_CTX*() { return pctx; }
     BN_CTX& operator*() { return *pctx; }
     BN_CTX** operator&() { return &pctx; }
-    bool operator!() { return (pctx == NULL); }
+    bool operator!() { return (pctx == nullptr); }
 };
 
 
@@ -64,14 +64,14 @@ public:
     CBigNum()
     {
         pbn = BN_new();
-        if (pbn == NULL)
+        if (pbn == nullptr)
             throw bignum_error("CBigNum::CBigNum() : BN_new() returned NULL");
     }
 
     CBigNum(const CBigNum& b)
     {
         pbn = BN_new();
-        if (pbn == NULL)
+        if (pbn == nullptr)
             throw bignum_error("CBigNum::CBigNum(const CBigNum&) : BN_new() returned NULL");
         if (!BN_copy(pbn, b.pbn))
         {
@@ -89,7 +89,7 @@ public:
 
     ~CBigNum()
     {
-        if (pbn != NULL)
+        if (pbn != nullptr)
             BN_clear_free(pbn);
     }
 
@@ -220,7 +220,7 @@ public:
 
     uint64_t getuint64()
     {
-        unsigned int nSize = BN_bn2mpi(pbn, NULL);
+        unsigned int nSize = BN_bn2mpi(pbn, nullptr);
         if (nSize < 4)
             return 0;
         std::vector<unsigned char> vch(nSize);
@@ -290,7 +290,7 @@ public:
 
     uint256 getuint256() const
     {
-        unsigned int nSize = BN_bn2mpi(pbn, NULL);
+        unsigned int nSize = BN_bn2mpi(pbn, nullptr);
         if (nSize < 4)
             return 0;
         std::vector<unsigned char> vch(nSize);
@@ -321,7 +321,7 @@ public:
 
     std::vector<unsigned char> getvch() const
     {
-        unsigned int nSize = BN_bn2mpi(pbn, NULL);
+        unsigned int nSize = BN_bn2mpi(pbn, nullptr);
         if (nSize <= 4)
             return std::vector<unsigned char>();
         std::vector<unsigned char> vch(nSize);
@@ -345,7 +345,7 @@ public:
 
     unsigned int GetCompact() const
     {
-        unsigned int nSize = BN_bn2mpi(pbn, NULL);
+        unsigned int nSize = BN_bn2mpi(pbn, nullptr);
         std::vector<unsigned char> vch(nSize);
         nSize -= 4;
         BN_bn2mpi(pbn, &vch[0]);
@@ -374,7 +374,7 @@ public:
             psz++;
 
         // hex string to bignum
-        static const signed char phexdigit[256] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,1,2,3,4,5,6,7,8,9,0,0,0,0,0,0, 0,0xa,0xb,0xc,0xd,0xe,0xf,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0xa,0xb,0xc,0xd,0xe,0xf,0,0,0,0,0,0,0,0,0 };
+        static constexpr signed char phexdigit[256] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,1,2,3,4,5,6,7,8,9,0,0,0,0,0,0, 0,0xa,0xb,0xc,0xd,0xe,0xf,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0xa,0xb,0xc,0xd,0xe,0xf,0,0,0,0,0,0,0,0,0 };
         *this = 0;
         while (isxdigit(*psz))
         {
@@ -515,7 +515,7 @@ public:
      */
     static CBigNum generatePrime(const unsigned int numBits, bool safe = false) {
         CBigNum ret;
-        if(!BN_generate_prime_ex(ret.pbn, numBits, (safe == true), NULL, NULL, NULL))
+        if(!BN_generate_prime_ex(ret.pbn, numBits, (safe == true), nullptr, nullptr, nullptr))
             throw bignum_error("CBigNum::generatePrime*= :BN_generate_prime_ex");
         return ret;
     }
@@ -541,7 +541,7 @@ public:
     */
     bool isPrime(const int checks=BN_prime_checks) const {
         CAutoBN_CTX pctx;
-        int ret = BN_is_prime_ex(pbn, checks, pctx, NULL);
+        int ret = BN_is_prime_ex(pbn, checks, pctx, nullptr);
         if(ret < 0){
             throw bignum_error("CBigNum::isPrime :BN_is_prime_ex");
         }
@@ -706,7 +706,7 @@ inline const CBigNum operator/(const CBigNum& a, const CBigNum& b)
 {
     CAutoBN_CTX pctx;
     CBigNum r;
-    if (!BN_div(r.pbn, NULL, a.pbn, b.pbn, pctx))
+    if (!BN_div(r.pbn, nullptr, a.pbn, b.pbn, pctx))
         throw bignum_error("CBigNum::operator/ : BN_div failed");
     return r;
 }

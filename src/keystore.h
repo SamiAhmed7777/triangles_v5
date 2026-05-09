@@ -70,11 +70,9 @@ public:
         setAddress.clear();
         {
             LOCK(cs_KeyStore);
-            KeyMap::const_iterator mi = mapKeys.begin();
-            while (mi != mapKeys.end())
+            for (const auto& [key, val] : mapKeys)
             {
-                setAddress.insert((*mi).first);
-                mi++;
+                setAddress.insert(key);
             }
         }
     }
@@ -82,11 +80,10 @@ public:
     {
         {
             LOCK(cs_KeyStore);
-            KeyMap::const_iterator mi = mapKeys.find(address);
-            if (mi != mapKeys.end())
+            if (auto mi = mapKeys.find(address); mi != mapKeys.end())
             {
                 keyOut.Reset();
-                keyOut.SetSecret((*mi).second.first, (*mi).second.second);
+                keyOut.SetSecret(mi->second.first, mi->second.second);
                 return true;
             }
         }
@@ -160,17 +157,16 @@ public:
     bool GetPubKey(const CKeyID &address, CPubKey& vchPubKeyOut) const;
     void GetKeys(std::set<CKeyID> &setAddress) const
     {
+        LOCK(cs_KeyStore);
         if (!IsCrypted())
         {
             CBasicKeyStore::GetKeys(setAddress);
             return;
         }
         setAddress.clear();
-        CryptedKeyMap::const_iterator mi = mapCryptedKeys.begin();
-        while (mi != mapCryptedKeys.end())
+        for (const auto& [key, val] : mapCryptedKeys)
         {
-            setAddress.insert((*mi).first);
-            mi++;
+            setAddress.insert(key);
         }
     }
 

@@ -64,7 +64,7 @@ static SOCKET ConnectDirectTCP(const std::string& host, int port, std::string& s
     }
 
     SOCKET hSocket = INVALID_SOCKET;
-    for (rp = result; rp != NULL; rp = rp->ai_next) {
+    for (rp = result; rp != nullptr; rp = rp->ai_next) {
         hSocket = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
         if (hSocket == INVALID_SOCKET)
             continue;

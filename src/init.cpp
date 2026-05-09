@@ -24,6 +24,7 @@
 #endif
 #include "notificationqueue.h"
 #include "addressindex.h"
+#include <memory>
 #include <thread>
 #include <vector>
 #include <filesystem>
@@ -51,20 +52,20 @@ using namespace std;
 using namespace boost;
 namespace fs = std::filesystem;
 
-CWallet* pwalletMain;
+std::unique_ptr<CWallet> pwalletMain;
 CClientUIInterface uiInterface;
 std::string strWalletFileName;
 bool fConfChange;
 bool fEnforceCanonical;
 unsigned int nNodeLifespan;
 unsigned int nDerivationMethodIndex;
-//unsigned int nMinerSleep;
+
 bool fUseFastIndex;
 enum Checkpoints::CPMode CheckpointsMode;
 
 static CCriticalSection cs_DeferredStartup;
 static bool fDeferredStartupRunning = false;
-static std::vector<std::thread>* pScriptCheckThreads = nullptr;
+static std::unique_ptr<std::vector<std::thread>> pScriptCheckThreads;
 
 static void ThreadScriptCheck()
 {
@@ -109,7 +110,7 @@ fRequestShutdown = true;
     uiInterface.QueueShutdown();
 #else
     // Without UI, Shutdown() can simply be started in a new thread
-    NewThread(Shutdown, NULL);
+    NewThread(Shutdown, nullptr);
 #endif
 }
 
@@ -178,7 +179,7 @@ void ThreadDeferredStartup(void* parg)
     }
     catch (...)
     {
-        PrintExceptionContinue(NULL, "ThreadDeferredStartup()");
+        PrintExceptionContinue(nullptr, "ThreadDeferredStartup()");
     }
 
     {
@@ -235,11 +236,9 @@ void Shutdown(void* parg)
             {
                 for (std::thread& t : *pScriptCheckThreads)
                     if (t.joinable()) t.join();
-                delete pScriptCheckThreads;
-                pScriptCheckThreads = nullptr;
+                pScriptCheckThreads.reset();
             }
-            delete pScriptCheckQueue;
-            pScriptCheckQueue = NULL;
+            pScriptCheckQueue.reset();
         }
 
         // NOW safe to destroy Tor state - all threads have stopped
@@ -251,24 +250,24 @@ void Shutdown(void* parg)
         {
             pzmqNotifier->Shutdown();
             delete pzmqNotifier;
-            pzmqNotifier = NULL;
+            pzmqNotifier = nullptr;
         }
 #endif
 
         if (pNotificationQueue)
         {
             delete pNotificationQueue;
-            pNotificationQueue = NULL;
+            pNotificationQueue = nullptr;
         }
 
 //        MakeChainDB()->Close();
         bitdb.Flush(false);
         bitdb.Flush(true);
         fs::remove(GetPidFile());
-        UnregisterWallet(pwalletMain);
-        delete pwalletMain;
+        UnregisterWallet(pwalletMain.get());
+        pwalletMain.reset();
         // DB is flushed and wallet saved - safe to force-exit if something hangs
-        NewThread(ExitTimeout, NULL);
+        NewThread(ExitTimeout, nullptr);
         MilliSleep(50);
         printf("Triangles exited\n\n");
         fExit = true;
@@ -318,7 +317,7 @@ bool AppInit(int argc, char* argv[])
         if (!fs::is_directory(GetDataDir(false)))
         {
             fprintf(stderr, "Error: Specified directory does not exist\n");
-            Shutdown(NULL);
+            Shutdown(nullptr);
         }
         ReadConfigFile(mapArgs, mapMultiArgs);
 
@@ -354,10 +353,10 @@ bool AppInit(int argc, char* argv[])
     catch (std::exception& e) {
         PrintException(&e, "AppInit()");
     } catch (...) {
-        PrintException(NULL, "AppInit()");
+        PrintException(nullptr, "AppInit()");
     }
     if (!fRet)
-        Shutdown(NULL);
+        Shutdown(nullptr);
     return fRet;
 }
 
@@ -542,7 +541,7 @@ bool AppInit2()
 #ifdef _MSC_VER
     // Turn off Microsoft heap dump noise
     _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
-    _CrtSetReportFile(_CRT_WARN, CreateFileA("NUL", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, 0));
+    _CrtSetReportFile(_CRT_WARN, CreateFileA("NUL", GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, 0));
 #endif
 #if _MSC_VER >= 1400
     // Disable confusing "helpful" text message on abort, Ctrl-C
@@ -559,7 +558,7 @@ bool AppInit2()
 #endif
     typedef BOOL (WINAPI *PSETPROCDEPPOL)(DWORD);
     PSETPROCDEPPOL setProcDEPPol = (PSETPROCDEPPOL)GetProcAddress(GetModuleHandleA("Kernel32.dll"), "SetProcessDEPPolicy");
-    if (setProcDEPPol != NULL) setProcDEPPol(PROCESS_DEP_ENABLE);
+    if (setProcDEPPol != nullptr) setProcDEPPol(PROCESS_DEP_ENABLE);
 #endif
 #ifndef WIN32
     umask(077);
@@ -569,15 +568,15 @@ bool AppInit2()
     sa.sa_handler = HandleSIGTERM;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
-    sigaction(SIGTERM, &sa, NULL);
-    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, nullptr);
+    sigaction(SIGINT, &sa, nullptr);
 
     // Reopen debug.log on SIGHUP
     struct sigaction sa_hup;
     sa_hup.sa_handler = HandleSIGHUP;
     sigemptyset(&sa_hup.sa_mask);
     sa_hup.sa_flags = 0;
-    sigaction(SIGHUP, &sa_hup, NULL);
+    sigaction(SIGHUP, &sa_hup, nullptr);
 #endif
 
     // ********************************************************* Step 2: parameter interactions
@@ -706,8 +705,8 @@ bool AppInit2()
         nScriptCheckThreads = 16;
     if (nScriptCheckThreads > 1)
     {
-        pScriptCheckQueue = new CCheckQueue<CScriptCheck>(32);
-        pScriptCheckThreads = new std::vector<std::thread>();
+        pScriptCheckQueue = std::make_unique<CCheckQueue<CScriptCheck>>(32);
+        pScriptCheckThreads = std::make_unique<std::vector<std::thread>>();
         for (int i = 0; i < nScriptCheckThreads - 1; ++i)
             pScriptCheckThreads->emplace_back(&ThreadScriptCheck);
         printf("Script verification threads: %d workers + main thread\n", nScriptCheckThreads - 1);
@@ -1142,7 +1141,7 @@ bool AppInit2()
     printf("Loading wallet...\n");
     nStart = GetTimeMillis();
     bool fFirstRun = true;
-    pwalletMain = new CWallet(strWalletFileName);
+    pwalletMain = std::make_unique<CWallet>(strWalletFileName);
 
     // Auto-backup wallet.dat before loading (protects against corruption during load/flush)
     {
@@ -1186,9 +1185,9 @@ bool AppInit2()
         int nMaxVersion = GetArg("-upgradewallet", 0);
         if (nMaxVersion == 0) // the -upgradewallet without argument case
         {
-            printf("Performing wallet upgrade to %i\n", FEATURE_LATEST);
+            printf("Performing wallet upgrade to %i\n", static_cast<int>(WalletFeature::Latest));
             nMaxVersion = CLIENT_VERSION;
-            pwalletMain->SetMinVersion(FEATURE_LATEST); // permanently upgrade the wallet immediately
+            pwalletMain->SetMinVersion(WalletFeature::Latest); // permanently upgrade the wallet immediately
         }
         else
             printf("Allowing wallet upgrade up to %i\n", nMaxVersion);
@@ -1214,7 +1213,7 @@ bool AppInit2()
     printf(" wallet      %15" PRId64 "ms\n", GetTimeMillis() - nStart);
     StartupPerfLog("wallet_load", GetTimeMillis() - nStart, strprintf("firstrun=%d", fFirstRun));
 
-    RegisterWallet(pwalletMain);
+    RegisterWallet(pwalletMain.get());
 
     CBlockIndex *pindexRescan = pindexBest;
     if (GetBoolArg("-rescan"))
@@ -1404,7 +1403,7 @@ bool AppInit2()
 
         // Launch background thread for Tor health monitoring and seeder maintenance
         if (torStarted) {
-            if (!NewThread(ThreadTorMaintenance, NULL))
+            if (!NewThread(ThreadTorMaintenance, nullptr))
                 printf("Warning: ThreadTorMaintenance could not be started\n");
         }
     }
@@ -1472,11 +1471,11 @@ bool AppInit2()
     printf("mapWallet.size() = %" PRIszu "\n",       pwalletMain->mapWallet.size());
     printf("mapAddressBook.size() = %" PRIszu "\n",  pwalletMain->mapAddressBook.size());
 
-    if (!NewThread(StartNode, NULL))
+    if (!NewThread(StartNode, nullptr))
         InitError(_("Error: could not start node"));
 
     if (fServer)
-        NewThread(ThreadRPCServer, NULL);
+        NewThread(ThreadRPCServer, nullptr);
 
     // ********************************************************* Step 11.6: P2P UTXO snapshot fetch
     // If the chain is empty and snapshot mode is enabled (default), spawn a
@@ -1492,7 +1491,7 @@ bool AppInit2()
         if (snapshotMode && needsSnapshot && !haveSnapshotFile &&
             Checkpoints::GetBestSnapshotHeight() > 0)
         {
-            NewThread(ThreadSnapshotFetch, NULL);
+            NewThread(ThreadSnapshotFetch, nullptr);
         }
     }
 
@@ -1500,10 +1499,10 @@ bool AppInit2()
         LOCK(cs_DeferredStartup);
         fDeferredStartupRunning = true;
     }
-    if (!NewThread(ThreadDeferredStartup, NULL))
+    if (!NewThread(ThreadDeferredStartup, nullptr))
     {
         printf("Warning: deferred startup thread could not be started, running inline\n");
-        ThreadDeferredStartup(NULL);
+        ThreadDeferredStartup(nullptr);
     }
     StartupPerfLog("start_services", GetTimeMillis() - nStart);
 
@@ -1522,7 +1521,7 @@ bool AppInit2()
             {
                 printf("ZMQ: Failed to initialize publisher on %s\n", zmqAddr.c_str());
                 delete pzmqNotifier;
-                pzmqNotifier = NULL;
+                pzmqNotifier = nullptr;
             }
         }
     }

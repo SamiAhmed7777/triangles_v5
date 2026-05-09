@@ -32,14 +32,12 @@ class CCoinControl;
 typedef std::map<std::string, std::string> mapValue_t;
 
 /** (client) version numbers for particular wallet features */
-enum WalletFeature
+enum class WalletFeature : int
 {
-    FEATURE_BASE = 10500, // the earliest version new wallets supports (only useful for getinfo's clientversion output)
-
-    FEATURE_WALLETCRYPT = 40000, // wallet encryption
-    FEATURE_COMPRPUBKEY = 60000, // compressed public keys
-
-    FEATURE_LATEST = 60000
+    Base = 10500,
+    WalletCrypt = 40000,
+    ComprPubKey = 60000,
+    Latest = 60000
 };
 
 /** A key pool entry */
@@ -76,7 +74,7 @@ class CWallet : public CCryptoKeyStore
 {
 private:
     bool SelectCoinsSimple(int64_t nTargetValue, unsigned int nSpendTime, int nMinConf, std::set<std::pair<const CWalletTx*,unsigned int> >& setCoinsRet, int64_t& nValueRet) const;
-    bool SelectCoins(int64_t nTargetValue, unsigned int nSpendTime, std::set<std::pair<const CWalletTx*,unsigned int> >& setCoinsRet, int64_t& nValueRet, const CCoinControl *coinControl=NULL) const;
+    bool SelectCoins(int64_t nTargetValue, unsigned int nSpendTime, std::set<std::pair<const CWalletTx*,unsigned int> >& setCoinsRet, int64_t& nValueRet, const CCoinControl *coinControl=nullptr) const;
 
     CWalletDB *pwalletdbEncryption;
 
@@ -102,26 +100,19 @@ public:
 
     CWallet()
     {
-        nWalletVersion = FEATURE_BASE;
-        nWalletMaxVersion = FEATURE_BASE;
+        nWalletVersion = WalletFeature::Base;
+        nWalletMaxVersion = WalletFeature::Base;
         fFileBacked = false;
         nMasterKeyMaxID = 0;
-        pwalletdbEncryption = NULL;
+        pwalletdbEncryption = nullptr;
         nOrderPosNext = 0;
         nCachedStakeWeight = 0;
         nCachedStakeWeightTime = 0;
     }
-    CWallet(std::string strWalletFileIn)
+    CWallet(std::string strWalletFileIn) : CWallet()
     {
-        nWalletVersion = FEATURE_BASE;
-        nWalletMaxVersion = FEATURE_BASE;
         strWalletFile = strWalletFileIn;
         fFileBacked = true;
-        nMasterKeyMaxID = 0;
-        pwalletdbEncryption = NULL;
-        nOrderPosNext = 0;
-        nCachedStakeWeight = 0;
-        nCachedStakeWeightTime = 0;
     }
 
     std::map<uint256, CWalletTx> mapWallet;
@@ -134,10 +125,10 @@ public:
     int64_t nTimeFirstKey;
 
     // check whether we are allowed to upgrade (or already support) to the named feature
-    bool CanSupportFeature(enum WalletFeature wf) { return nWalletMaxVersion >= wf; }
+    bool CanSupportFeature(WalletFeature wf) { return nWalletMaxVersion >= static_cast<int>(wf); }
 
     void AvailableCoinsMinConf(std::vector<COutput>& vCoins, int nConf) const;
-    void AvailableCoins(std::vector<COutput>& vCoins, bool fOnlyConfirmed=true, const CCoinControl *coinControl=NULL) const;
+    void AvailableCoins(std::vector<COutput>& vCoins, bool fOnlyConfirmed=true, const CCoinControl *coinControl=nullptr) const;
     bool SelectCoinsMinConf(int64_t nTargetValue, unsigned int nSpendTime, int nConfMine, int nConfTheirs, std::vector<COutput> vCoins, std::set<std::pair<const CWalletTx*,unsigned int> >& setCoinsRet, int64_t& nValueRet) const;
     // keystore implementation
     // Generate a new key
@@ -169,7 +160,7 @@ public:
     /** Increment the next transaction order id
         @return next transaction order id
      */
-    int64_t IncOrderPosNext(CWalletDB *pwalletdb = NULL);
+    int64_t IncOrderPosNext(CWalletDB *pwalletdb = nullptr);
 
     typedef std::pair<CWalletTx*, CAccountingEntry*> TxPair;
     typedef std::multimap<int64_t, TxPair > TxItems;
@@ -186,7 +177,7 @@ public:
     bool EraseFromWallet(uint256 hash);
     void WalletUpdateSpent(const CTransaction& prevout, bool fBlock = false);
     int ScanForWalletTransactions(CBlockIndex* pindexStart, bool fUpdate = false);
-    bool ScanForWalletTransactionsFromIndex(CBlockIndex* pindexStart, bool fUpdate, int* pnFound = NULL);
+    bool ScanForWalletTransactionsFromIndex(CBlockIndex* pindexStart, bool fUpdate, int* pnFound = nullptr);
     int ScanForWalletTransaction(const uint256& hashTx);
     void ReacceptWalletTransactions();
     void ResendWalletTransactions(bool fForce = false);
@@ -197,8 +188,8 @@ public:
     int64_t GetNewMint() const;
     // Get all balances in a single lock acquisition + single pass (avoids 4x lock + 4x iteration)
     bool GetAllBalances(int64_t& nBalance, int64_t& nStake, int64_t& nUnconfirmed, int64_t& nImmature) const;
-    bool CreateTransaction(const std::vector<std::pair<CScript, int64_t> >& vecSend, CWalletTx& wtxNew, CReserveKey& reservekey, int64_t& nFeeRet, const CCoinControl *coinControl=NULL);
-    bool CreateTransaction(CScript scriptPubKey, int64_t nValue, std::string& sNarr, CWalletTx& wtxNew, CReserveKey& reservekey, int64_t& nFeeRet, const CCoinControl *coinControl=NULL);
+    bool CreateTransaction(const std::vector<std::pair<CScript, int64_t> >& vecSend, CWalletTx& wtxNew, CReserveKey& reservekey, int64_t& nFeeRet, const CCoinControl *coinControl=nullptr);
+    bool CreateTransaction(CScript scriptPubKey, int64_t nValue, std::string& sNarr, CWalletTx& wtxNew, CReserveKey& reservekey, int64_t& nFeeRet, const CCoinControl *coinControl=nullptr);
     bool CommitTransaction(CWalletTx& wtxNew, CReserveKey& reservekey);
 
     bool GetStakeWeight(const CKeyStore& keystore, uint64_t& nMinWeight, uint64_t& nMaxWeight, uint64_t& nWeight);
@@ -320,7 +311,7 @@ public:
     bool SetDefaultKey(const CPubKey &vchPubKey);
 
     // signify that a particular wallet feature is now used. this may change nWalletVersion and nWalletMaxVersion if those are lower
-    bool SetMinVersion(enum WalletFeature, CWalletDB* pwalletdbIn = NULL, bool fExplicit = false);
+    bool SetMinVersion(WalletFeature, CWalletDB* pwalletdbIn = nullptr, bool fExplicit = false);
 
     // change which version we're allowed to upgrade to (note that this does not immediately imply upgrading to that format)
     bool SetMaxVersion(int nVersion);
@@ -422,7 +413,7 @@ public:
 
     CWalletTx()
     {
-        Init(NULL);
+        Init(nullptr);
     }
 
     CWalletTx(const CWallet* pwalletIn)
@@ -467,7 +458,7 @@ public:
     (
         CWalletTx* pthis = const_cast<CWalletTx*>(this);
         if (fRead)
-            pthis->Init(NULL);
+            pthis->Init(nullptr);
         char fSpent = false;
 
         if (!fRead)
@@ -592,6 +583,7 @@ public:
     {
         if (vin.empty())
             return 0;
+        LOCK(pwallet->cs_wallet);
         if (fDebitCached)
             return nDebitCached;
         nDebitCached = pwallet->GetDebit(*this);
@@ -601,11 +593,10 @@ public:
 
     int64_t GetCredit(bool fUseCache=true) const
     {
-        // Must wait until coinbase is safely deep enough in the chain before valuing it
         if ((IsCoinBase() || IsCoinStake()) && GetBlocksToMaturity() > 0)
             return 0;
 
-        // GetBalance can assume transactions in mapWallet won't change
+        LOCK(pwallet->cs_wallet);
         if (fUseCache && fCreditCached)
             return nCreditCached;
         nCreditCached = pwallet->GetCredit(*this);
@@ -615,10 +606,10 @@ public:
 
     int64_t GetAvailableCredit(bool fUseCache=true) const
     {
-        // Must wait until coinbase is safely deep enough in the chain before valuing it
         if ((IsCoinBase() || IsCoinStake()) && GetBlocksToMaturity() > 0)
             return 0;
 
+        LOCK(pwallet->cs_wallet);
         if (fUseCache && fAvailableCreditCached)
             return nAvailableCreditCached;
 
@@ -642,6 +633,7 @@ public:
 
     int64_t GetChange() const
     {
+        LOCK(pwallet->cs_wallet);
         if (fChangeCached)
             return nChangeCached;
         nChangeCached = pwallet->GetChange(*this);

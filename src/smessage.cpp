@@ -99,7 +99,7 @@ uint32_t nPeerIdCounter = 1;
 CCriticalSection cs_smsg;
 CCriticalSection cs_smsgDB;
 
-rocksdb::DB *smsgDB = NULL;
+rocksdb::DB *smsgDB = nullptr;
 
 
 namespace fs = std::filesystem;
@@ -366,7 +366,7 @@ void SecureMsgGetBucketFiles(const fs::path& pathSmsgDir, int64_t bucket, bool f
             || fFileWalletLocked != fWalletLocked)
             continue;
 
-        bucketFiles.push_back(std::make_pair(fileIndex, (*itd).path()));
+        bucketFiles.push_back({fileIndex, (*itd).path()});
     };
 
     std::sort(bucketFiles.begin(), bucketFiles.end(),
@@ -471,7 +471,7 @@ bool SecMsgCrypter::Encrypt(unsigned char* chPlaintext, uint32_t nPlain, std::ve
 
     bool fOk = true;
 
-    if (fOk) fOk = EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, &chKey[0], &chIV[0]);
+    if (fOk) fOk = EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr, &chKey[0], &chIV[0]);
     if (fOk) fOk = EVP_EncryptUpdate(ctx, &vchCiphertext[0], &nCLen, chPlaintext, nLen);
     if (fOk) fOk = EVP_EncryptFinal_ex(ctx, (&vchCiphertext[0])+nCLen, &nFLen);
     EVP_CIPHER_CTX_free(ctx);
@@ -500,7 +500,7 @@ bool SecMsgCrypter::Decrypt(unsigned char* chCiphertext, uint32_t nCipher, std::
 
     bool fOk = true;
 
-    if (fOk) fOk = EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, &chKey[0], &chIV[0]);
+    if (fOk) fOk = EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr, &chKey[0], &chIV[0]);
     if (fOk) fOk = EVP_DecryptUpdate(ctx, &vchPlaintext[0], &nPLen, &chCiphertext[0], nCipher);
     if (fOk) fOk = EVP_DecryptFinal_ex(ctx, (&vchPlaintext[0])+nPLen, &nFLen);
     EVP_CIPHER_CTX_free(ctx);
@@ -626,7 +626,7 @@ bool SecMsgDB::TxnCommit()
     writeOptions.sync = true;
     rocksdb::Status status = pdb->Write(writeOptions, activeBatch);
     delete activeBatch;
-    activeBatch = NULL;
+    activeBatch = nullptr;
     pendingBatch.clear();
     
     if (!status.ok())
@@ -641,7 +641,7 @@ bool SecMsgDB::TxnCommit()
 bool SecMsgDB::TxnAbort()
 {
     delete activeBatch;
-    activeBatch = NULL;
+    activeBatch = nullptr;
     pendingBatch.clear();
     return true;
 };
@@ -1344,7 +1344,7 @@ int SecureMsgReadIni()
             continue;
         
         if (!(pName = strtok(cLine, "="))
-            || !(pValue = strtok(NULL, "=")))
+            || !(pValue = strtok(nullptr, "=")))
             continue;
         
         if (strcmp(pName, "newAddressRecv") == 0)
@@ -1478,8 +1478,8 @@ bool SecureMsgStart(bool fDontStart, bool fScanChain)
     };
     
     // -- start threads
-    if (!NewThread(ThreadSecureMsg, NULL)
-        || !NewThread(ThreadSecureMsgPow, NULL))
+    if (!NewThread(ThreadSecureMsg, nullptr)
+        || !NewThread(ThreadSecureMsgPow, nullptr))
     {
         printf("SecureMsg could not start threads, secure messaging disabled.\n");
         fSecMsgEnabled = false;
@@ -1509,7 +1509,7 @@ bool SecureMsgShutdown()
     {
         LOCK(cs_smsgDB);
         delete smsgDB;
-        smsgDB = NULL;
+        smsgDB = nullptr;
     };
     
     // -- main program will wait 5 seconds for threads to terminate.
@@ -1553,8 +1553,8 @@ bool SecureMsgEnable()
     }; // LOCK(cs_smsg);
     
     // -- start threads
-    if (!NewThread(ThreadSecureMsg, NULL)
-        || !NewThread(ThreadSecureMsgPow, NULL))
+    if (!NewThread(ThreadSecureMsg, nullptr)
+        || !NewThread(ThreadSecureMsgPow, nullptr))
     {
         printf("SecureMsgEnable could not start threads, secure messaging disabled.\n");
         fSecMsgEnabled = false;
@@ -1624,7 +1624,7 @@ bool SecureMsgDisable()
     {
         LOCK(cs_smsgDB);
         delete smsgDB;
-        smsgDB = NULL;
+        smsgDB = nullptr;
     };
     
     
@@ -2455,7 +2455,7 @@ bool SecureMsgScanBlockChain()
     if (lockMain)
     {
         CBlockIndex *pindexScan = pindexGenesisBlock;
-        if (pindexScan == NULL)
+        if (pindexScan == nullptr)
         {
             printf("Error: pindexGenesisBlock not set.\n");
             return false;
@@ -3521,7 +3521,7 @@ int SecureMsgValidate(unsigned char *pHeader, unsigned char *pPayload, uint32_t 
     HMAC_CTX *ctx = HMAC_CTX_new();
 
     unsigned int nBytes;
-    if (!HMAC_Init_ex(ctx, &civ[0], 32, EVP_sha256(), NULL)
+    if (!HMAC_Init_ex(ctx, &civ[0], 32, EVP_sha256(), nullptr)
         || !HMAC_Update(ctx, (unsigned char*) pHeader+4, SMSG_HDR_LEN-4)
         || !HMAC_Update(ctx, (unsigned char*) pPayload, nPayload)
         || !HMAC_Update(ctx, pPayload, nPayload)
@@ -3598,7 +3598,7 @@ int SecureMsgSetHash(unsigned char *pHeader, unsigned char *pPayload, uint32_t n
             memcpy(civ+i, &nonse, 4);
 
         unsigned int nBytes;
-        if (!HMAC_Init_ex(ctx, &civ[0], 32, EVP_sha256(), NULL)
+        if (!HMAC_Init_ex(ctx, &civ[0], 32, EVP_sha256(), nullptr)
             || !HMAC_Update(ctx, (unsigned char*) pHeader+4, SMSG_HDR_LEN-4)
             || !HMAC_Update(ctx, (unsigned char*) pPayload, nPayload)
             || !HMAC_Update(ctx, pPayload, nPayload)
@@ -3923,7 +3923,7 @@ int SecureMsgEncrypt(SecureMessage& smsg, std::string& addressFrom, std::string&
     unsigned int nBytes = 32;
     HMAC_CTX *ctx = HMAC_CTX_new();
 
-    if (!HMAC_Init_ex(ctx, &key_m[0], 32, EVP_sha256(), NULL)
+    if (!HMAC_Init_ex(ctx, &key_m[0], 32, EVP_sha256(), nullptr)
         || !HMAC_Update(ctx, (unsigned char*) &smsg.timestamp, sizeof(smsg.timestamp))
         || !HMAC_Update(ctx, &vchCiphertext[0], vchCiphertext.size())
         || !HMAC_Final(ctx, smsg.mac, &nBytes)
@@ -4233,7 +4233,7 @@ int SecureMsgDecrypt(bool fTestOnly, std::string& address, unsigned char *pHeade
     unsigned int nBytes = 32;
     HMAC_CTX *ctx = HMAC_CTX_new();
 
-    if (!HMAC_Init_ex(ctx, &key_m[0], 32, EVP_sha256(), NULL)
+    if (!HMAC_Init_ex(ctx, &key_m[0], 32, EVP_sha256(), nullptr)
         || !HMAC_Update(ctx, (unsigned char*) &psmsg->timestamp, sizeof(psmsg->timestamp))
         || !HMAC_Update(ctx, pPayload, nPayload)
         || !HMAC_Final(ctx, MAC, &nBytes)

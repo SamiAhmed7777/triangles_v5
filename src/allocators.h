@@ -66,7 +66,7 @@ public:
             if(it == histogram.end()) // Newly locked page
             {
                 locker.Lock(reinterpret_cast<void*>(page), page_size);
-                histogram.insert(std::make_pair(page, 1));
+                histogram.insert({page, 1});
             }
             else // Page was already locked; increase counter
             {
@@ -204,14 +204,14 @@ struct secure_allocator : public std::allocator<T>
     T* allocate(std::size_t n)
     {
         T* p = std::allocator<T>::allocate(n);
-        if (p != NULL)
+        if (p != nullptr)
             LockedPageManager::instance.LockRange(p, sizeof(T) * n);
         return p;
     }
 
     void deallocate(T* p, std::size_t n)
     {
-        if (p != NULL)
+        if (p != nullptr)
         {
             memset(p, 0, sizeof(T) * n);
             LockedPageManager::instance.UnlockRange(p, sizeof(T) * n);
@@ -247,7 +247,7 @@ struct zero_after_free_allocator : public std::allocator<T>
 
     void deallocate(T* p, std::size_t n)
     {
-        if (p != NULL)
+        if (p != nullptr)
             memset(p, 0, sizeof(T) * n);
         std::allocator<T>::deallocate(p, n);
     }

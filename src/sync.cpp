@@ -80,18 +80,18 @@ static void push_lock(void* c, const CLockLocation& locklocation, bool fTry)
     if (fDebug) printf("Locking: %s\n", locklocation.ToString().c_str());
     dd_mutex.lock();
 
-    (*lockstack).push_back(std::make_pair(c, locklocation));
+    (*lockstack).push_back({c, locklocation});
 
     if (!fTry) {
         for (const auto& i : (*lockstack)) {
             if (i.first == c) break;
 
-            std::pair<void*, void*> p1 = std::make_pair(i.first, c);
+            std::pair<void*, void*> p1 = {i.first, c};
             if (lockorders.count(p1))
                 continue;
             lockorders[p1] = (*lockstack);
 
-            std::pair<void*, void*> p2 = std::make_pair(c, i.first);
+            std::pair<void*, void*> p2 = {c, i.first};
             if (lockorders.count(p2))
             {
                 potential_deadlock_detected(p1, lockorders[p2], lockorders[p1]);

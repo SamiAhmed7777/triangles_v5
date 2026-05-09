@@ -44,7 +44,7 @@ bool DumpSnapshot(const fs::path& destPath,
         unsigned int nCollected = 0;
         while (pindex && nCollected < nHeaders) {
             CDiskBlockIndex diskindex(pindex);
-            vHeaders.push_back(std::make_pair(*pindex->phashBlock, diskindex));
+            vHeaders.push_back({*pindex->phashBlock, diskindex});
             pindex = pindex->pprev;
             nCollected++;
         }
@@ -123,7 +123,7 @@ bool DumpSnapshot(const fs::path& destPath,
     // documented on CTxDBIteratorBase guarantees a stable view of committed state.
     {
         CDataStream ssKeyPrefix(SER_DISK, CLIENT_VERSION);
-        ssKeyPrefix << std::make_pair(std::string("u"), std::make_pair(uint256(0), (unsigned int)0));
+        ssKeyPrefix << std::pair{std::string("u"), std::pair{uint256(0), (unsigned int)0}};
         std::string strPrefixBegin = ssKeyPrefix.str();
 
         auto it = txdbRead.NewIterator();

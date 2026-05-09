@@ -70,7 +70,7 @@ void init_blockindex(leveldb::Options& options, bool fRemoveOld = false) {
 CTxDB::CTxDB(const char* pszMode)
 {
     assert(pszMode);
-    activeBatch = NULL;
+    activeBatch = nullptr;
     fReadOnly = (!strchr(pszMode, '+') && !strchr(pszMode, 'w'));
 
     if (txdb) {
@@ -97,9 +97,9 @@ CTxDB::CTxDB(const char* pszMode)
             printf("Required index version is %d, removing old database\n", DATABASE_VERSION);
 
             delete txdb;
-            txdb = pdb = NULL;
+            txdb = pdb = nullptr;
             delete activeBatch;
-            activeBatch = NULL;
+            activeBatch = nullptr;
 
             init_blockindex(options, true);
             pdb = txdb;
@@ -124,13 +124,13 @@ CTxDB::CTxDB(const char* pszMode)
 void CTxDB::Close()
 {
     delete txdb;
-    txdb = pdb = NULL;
+    txdb = pdb = nullptr;
     delete options.filter_policy;
-    options.filter_policy = NULL;
+    options.filter_policy = nullptr;
     delete options.block_cache;
-    options.block_cache = NULL;
+    options.block_cache = nullptr;
     delete activeBatch;
-    activeBatch = NULL;
+    activeBatch = nullptr;
 }
 
 bool CTxDB::TxnBegin()
@@ -149,7 +149,7 @@ bool CTxDB::TxnCommit()
     assert(activeBatch);
     leveldb::Status status = pdb->Write(leveldb::WriteOptions(), activeBatch);
     delete activeBatch;
-    activeBatch = NULL;
+    activeBatch = nullptr;
     if (!status.ok()) {
         printf("ERROR: LevelDB batch commit failure: %s\n", status.ToString().c_str());
         printf("ERROR: This may indicate disk full, corruption, or permissions issue.\n");
@@ -291,7 +291,7 @@ std::unique_ptr<CTxDBIteratorBase> CTxDB::NewIterator() const
 static CBlockIndex *InsertBlockIndex(uint256 hash)
 {
     if (hash == 0)
-        return NULL;
+        return nullptr;
 
     map<uint256, CBlockIndex*>::iterator mi = mapBlockIndex.find(hash);
     if (mi != mapBlockIndex.end())
@@ -372,7 +372,7 @@ bool CTxDB::LoadBlockIndex()
         pindexNew->nNonce         = diskindex.nNonce;
         pindexNew->nChainTrust    = diskindex.nChainTrust;
 
-        if (pindexGenesisBlock == NULL && blockHash == (!fTestNet ? hashGenesisBlockOfficial : hashGenesisBlockTestNet))
+        if (pindexGenesisBlock == nullptr && blockHash == (!fTestNet ? hashGenesisBlockOfficial : hashGenesisBlockTestNet))
             pindexGenesisBlock = pindexNew;
 
         if (!pindexNew->CheckIndex()) {
@@ -504,7 +504,7 @@ bool CTxDB::LoadBlockIndex()
     nPhaseStart = GetTimeMillis();
     if (!ReadHashBestChain(hashBestChain))
     {
-        if (pindexGenesisBlock == NULL)
+        if (pindexGenesisBlock == nullptr)
             return true;
         return error("CTxDB::LoadBlockIndex() : hashBestChain not loaded");
     }
@@ -539,7 +539,7 @@ bool CTxDB::LoadBlockIndex()
 
     // Re-evaluate best chain: scan for competing tips with equal or greater trust.
     {
-        CBlockIndex* pindexBetter = NULL;
+        CBlockIndex* pindexBetter = nullptr;
         for (const auto& item : mapBlockIndex)
         {
             CBlockIndex* pindex = item.second;
@@ -602,7 +602,7 @@ bool CTxDB::LoadBlockIndex()
     if (nCheckDepth > nBestHeight)
         nCheckDepth = nBestHeight;
     printf("Verifying last %i blocks at level %i\n", nCheckDepth, nCheckLevel);
-    CBlockIndex* pindexFork = NULL;
+    CBlockIndex* pindexFork = nullptr;
     map<pair<unsigned int, unsigned int>, CBlockIndex*> mapBlockPos;
     for (CBlockIndex* pindex = pindexBest; pindex && pindex->pprev; pindex = pindex->pprev)
     {

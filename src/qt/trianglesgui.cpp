@@ -89,7 +89,8 @@
 
 #include <iostream>
 
-extern CWallet* pwalletMain;
+#include <memory>
+extern std::unique_ptr<CWallet> pwalletMain;
 extern int64_t nLastCoinStakeSearchInterval;
 extern unsigned int nTargetSpacing;
 double GetPoSKernelPS();

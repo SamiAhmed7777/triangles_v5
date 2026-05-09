@@ -74,14 +74,14 @@ public:
     SecureMessage()
     {
         nPayload = 0;
-        pPayload = NULL;
+        pPayload = nullptr;
     };
     
     ~SecureMessage()
     {
         if (pPayload)
             delete[] pPayload;
-        pPayload = NULL;
+        pPayload = nullptr;
     };
     
     unsigned char   hash[4];
@@ -294,7 +294,7 @@ class SecMsgDB
 public:
     SecMsgDB()
     {
-        activeBatch = NULL;
+        activeBatch = nullptr;
     };
     
     ~SecMsgDB()

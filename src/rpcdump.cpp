@@ -94,9 +94,9 @@ public:
     bool fSpent;
     CWalletTx* ptx;
     int nOut;
-    CTxDump(CWalletTx* ptx = NULL, int nOut = -1)
+    CTxDump(CWalletTx* ptx = nullptr, int nOut = -1)
     {
-        pindex = NULL;
+        pindex = nullptr;
         nValue = 0;
         fSpent = false;
         this->ptx = ptx;
@@ -281,7 +281,7 @@ Value dumpwallet(const Array& params, bool fHelp)
     // sort time/key pairs
     std::vector<std::pair<int64_t, CKeyID> > vKeyBirth;
     for (std::map<CKeyID, int64_t>::const_iterator it = mapKeyBirth.begin(); it != mapKeyBirth.end(); it++) {
-        vKeyBirth.push_back(std::make_pair(it->second, it->first));
+        vKeyBirth.push_back({it->second, it->first});
     }
     mapKeyBirth.clear();
     std::sort(vKeyBirth.begin(), vKeyBirth.end());

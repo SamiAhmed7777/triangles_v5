@@ -132,7 +132,7 @@ namespace Checkpoints
             if (t != mapBlockIndex.end())
                 return t->second;
         }
-        return NULL;
+        return nullptr;
     }
 
     // triangles: synchronized checkpoint (centrally broadcasted)
@@ -151,7 +151,7 @@ namespace Checkpoints
             error("GetSyncCheckpoint: block index missing for current sync-checkpoint %s", hashSyncCheckpoint.ToString().c_str());
         else
             return mapBlockIndex[hashSyncCheckpoint];
-        return NULL;
+        return nullptr;
     }
 
     // triangles: only descendant of current sync-checkpoint is allowed
@@ -281,8 +281,8 @@ namespace Checkpoints
             return false;
         if (hashBlock == hashPendingCheckpoint)
             return true;
-        if (mapOrphanBlocks.count(hashPendingCheckpoint) 
-            && hashBlock == WantedByOrphan(mapOrphanBlocks[hashPendingCheckpoint]))
+        if (mapOrphanBlocks.count(hashPendingCheckpoint)
+            && hashBlock == WantedByOrphan(mapOrphanBlocks[hashPendingCheckpoint].get()))
             return true;
         return false;
     }
@@ -371,7 +371,7 @@ namespace Checkpoints
         if (!key.Sign(Hash(checkpoint.vchMsg.begin(), checkpoint.vchMsg.end()), checkpoint.vchSig))
             return error("SendSyncCheckpoint: Unable to sign checkpoint, check private key?");
 
-        if(!checkpoint.ProcessSyncCheckpoint(NULL))
+        if(!checkpoint.ProcessSyncCheckpoint(nullptr))
         {
             printf("WARNING: SendSyncCheckpoint: Failed to process checkpoint.\n");
             return false;
@@ -432,7 +432,7 @@ bool CSyncCheckpoint::ProcessSyncCheckpoint(CNode* pfrom)
             pfrom->PushGetBlocks(pindexBest, hashCheckpoint);
             // ask directly as well in case rejected earlier by duplicate
             // proof-of-stake because getblocks may not get it this time
-            pfrom->AskFor(CInv(MSG_BLOCK, mapOrphanBlocks.count(hashCheckpoint)? WantedByOrphan(mapOrphanBlocks[hashCheckpoint]) : hashCheckpoint));
+            pfrom->AskFor(CInv(MSG_BLOCK, mapOrphanBlocks.count(hashCheckpoint)? WantedByOrphan(mapOrphanBlocks[hashCheckpoint].get()) : hashCheckpoint));
         }
         return false;
     }

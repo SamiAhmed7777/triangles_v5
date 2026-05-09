@@ -16,7 +16,7 @@ using namespace std;
 #include "sync.h"
 #include "util.h"
 
-bool CheckSig(vector<unsigned char> vchSig, vector<unsigned char> vchPubKey, CScript scriptCode, const CTransaction& txTo, unsigned int nIn, int nHashType);
+bool CheckSig(const vector<unsigned char>& vchSig, const vector<unsigned char>& vchPubKey, const CScript& scriptCode, const CTransaction& txTo, unsigned int nIn, int nHashType);
 
 static const valtype vchFalse(0);
 static const valtype vchZero(0);
@@ -103,7 +103,7 @@ const char* GetTxnOutputType(txnouttype t)
     case TX_SCRIPTHASH: return "scripthash";
     case TX_MULTISIG: return "multisig";
     }
-    return NULL;
+    return nullptr;
 }
 
 
@@ -893,7 +893,7 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, co
                         break;
 
                     case OP_DIV:
-                        if (!BN_div(bn.get(), NULL, bn1.get(), bn2.get(), pctx))
+                        if (!BN_div(bn.get(), nullptr, bn1.get(), bn2.get(), pctx))
                             return false;
                         break;
 
@@ -1271,7 +1271,7 @@ public:
     }
 };
 
-bool CheckSig(vector<unsigned char> vchSig, vector<unsigned char> vchPubKey, CScript scriptCode,
+bool CheckSig(const vector<unsigned char>& vchSig, const vector<unsigned char>& vchPubKey, const CScript& scriptCode,
               const CTransaction& txTo, unsigned int nIn, int nHashType)
 {
     static CSignatureCache signatureCache;

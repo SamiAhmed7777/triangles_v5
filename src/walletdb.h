@@ -98,22 +98,22 @@ public:
     bool WriteTx(uint256 hash, const CWalletTx& wtx)
     {
         nWalletDBUpdated++;
-        return Write(std::make_pair(std::string("tx"), hash), wtx);
+        return Write({std::string("tx"), hash}, wtx);
     }
 
     bool EraseTx(uint256 hash)
     {
         nWalletDBUpdated++;
-        return Erase(std::make_pair(std::string("tx"), hash));
+        return Erase({std::string("tx"), hash});
     }
     bool WriteKey(const CPubKey& vchPubKey, const CPrivKey& vchPrivKey, const CKeyMetadata &keyMeta)
     {
         nWalletDBUpdated++;
 
-        if(!Write(std::make_pair(std::string("keymeta"), vchPubKey), keyMeta))
+        if(!Write({std::string("keymeta"), vchPubKey}, keyMeta))
             return false;
 
-        return Write(std::make_pair(std::string("key"), vchPubKey.Raw()), vchPrivKey, false);
+        return Write({std::string("key"), vchPubKey.Raw()}, vchPrivKey, false);
     }
 
     bool WriteCryptedKey(const CPubKey& vchPubKey, const std::vector<unsigned char>& vchCryptedSecret, const CKeyMetadata &keyMeta)
@@ -121,15 +121,15 @@ public:
         nWalletDBUpdated++;
         bool fEraseUnencryptedKey = true;
 
-        if(!Write(std::make_pair(std::string("keymeta"), vchPubKey), keyMeta))
+        if(!Write({std::string("keymeta"), vchPubKey}, keyMeta))
             return false;
 
-        if (!Write(std::make_pair(std::string("ckey"), vchPubKey.Raw()), vchCryptedSecret, false))
+        if (!Write({std::string("ckey"), vchPubKey.Raw()}, vchCryptedSecret, false))
             return false;
         if (fEraseUnencryptedKey)
         {
-            Erase(std::make_pair(std::string("key"), vchPubKey.Raw()));
-            Erase(std::make_pair(std::string("wkey"), vchPubKey.Raw()));
+            Erase({std::string("key"), vchPubKey.Raw()});
+            Erase({std::string("wkey"), vchPubKey.Raw()});
         }
         return true;
     }
@@ -137,13 +137,13 @@ public:
     bool WriteMasterKey(unsigned int nID, const CMasterKey& kMasterKey)
     {
         nWalletDBUpdated++;
-        return Write(std::make_pair(std::string("mkey"), nID), kMasterKey, true);
+        return Write({std::string("mkey"), nID}, kMasterKey, true);
     }
 
     bool WriteCScript(const uint160& hash, const CScript& redeemScript)
     {
         nWalletDBUpdated++;
-        return Write(std::make_pair(std::string("cscript"), hash), redeemScript, false);
+        return Write({std::string("cscript"), hash}, redeemScript, false);
     }
 
     bool WriteBestBlock(const CBlockLocator& locator)
@@ -171,19 +171,19 @@ public:
 
     bool ReadPool(int64_t nPool, CKeyPool& keypool)
     {
-        return Read(std::make_pair(std::string("pool"), nPool), keypool);
+        return Read({std::string("pool"), nPool}, keypool);
     }
 
     bool WritePool(int64_t nPool, const CKeyPool& keypool)
     {
         nWalletDBUpdated++;
-        return Write(std::make_pair(std::string("pool"), nPool), keypool);
+        return Write({std::string("pool"), nPool}, keypool);
     }
 
     bool ErasePool(int64_t nPool)
     {
         nWalletDBUpdated++;
-        return Erase(std::make_pair(std::string("pool"), nPool));
+        return Erase({std::string("pool"), nPool});
     }
 
     // Settings are no longer stored in wallet.dat; these are
@@ -191,18 +191,18 @@ public:
     template<typename T>
     bool ReadSetting(const std::string& strKey, T& value)
     {
-        return Read(std::make_pair(std::string("setting"), strKey), value);
+        return Read({std::string("setting"), strKey}, value);
     }
     template<typename T>
     bool WriteSetting(const std::string& strKey, const T& value)
     {
         nWalletDBUpdated++;
-        return Write(std::make_pair(std::string("setting"), strKey), value);
+        return Write({std::string("setting"), strKey}, value);
     }
     bool EraseSetting(const std::string& strKey)
     {
         nWalletDBUpdated++;
-        return Erase(std::make_pair(std::string("setting"), strKey));
+        return Erase({std::string("setting"), strKey});
     }
 
     bool WriteMinVersion(int nVersion)

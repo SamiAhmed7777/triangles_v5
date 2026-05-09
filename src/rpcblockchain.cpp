@@ -34,15 +34,15 @@ double GetDifficulty(const CBlockIndex* blockindex)
 {
     // Floating point number that is a multiple of the minimum difficulty,
     // minimum difficulty = 1.0.
-    if (blockindex == NULL)
+    if (blockindex == nullptr)
     {
-        if (pindexBest == NULL)
+        if (pindexBest == nullptr)
             return 1.0;
         else
             blockindex = GetLastBlockIndex(pindexBest, false);
     }
 
-    if (blockindex == NULL)
+    if (blockindex == nullptr)
         return 1.0;
 
     int nShift = (blockindex->nBits >> 24) & 0xff;
@@ -98,7 +98,7 @@ double GetPoSKernelPS()
     int nStakesHandled = 0, nStakesTime = 0;
 
     CBlockIndex* pindex = pindexBest;;
-    CBlockIndex* pindexPrevStake = NULL;
+    CBlockIndex* pindexPrevStake = nullptr;
 
     while (pindex && nStakesHandled < nPoSInterval)
     {
@@ -1042,7 +1042,7 @@ Value invalidateblock(const Array& params, bool fHelp)
                 setStakeSeen.erase(make_pair(pindexWalk->prevoutStake, pindexWalk->nStakeTime));
             }
 
-            pindexWalk->pprev->pnext = NULL;
+            pindexWalk->pprev->pnext = nullptr;
             pindexWalk = pindexWalk->pprev;
         }
 
