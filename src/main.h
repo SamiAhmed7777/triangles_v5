@@ -695,10 +695,10 @@ public:
             vin.size(),
             vout.size(),
             nLockTime);
-        for (unsigned int i = 0; i < vin.size(); i++)
-            str += "    " + vin[i].ToString() + "\n";
-        for (unsigned int i = 0; i < vout.size(); i++)
-            str += "    " + vout[i].ToString() + "\n";
+        for (const CTxIn& txin : vin)
+            str += "    " + txin.ToString() + "\n";
+        for (const CTxOut& txout : vout)
+            str += "    " + txout.ToString() + "\n";
         return str;
     }
 
@@ -1124,14 +1124,14 @@ public:
             nTime, nBits, nNonce,
             vtx.size(),
             HexStr(vchBlockSig.begin(), vchBlockSig.end()).c_str());
-        for (unsigned int i = 0; i < vtx.size(); i++)
+        for (const CTransaction& tx : vtx)
         {
             printf("  ");
-            vtx[i].print();
+            tx.print();
         }
         printf("  vMerkleTree: ");
-        for (unsigned int i = 0; i < vMerkleTree.size(); i++)
-            printf("%s ", vMerkleTree[i].ToString().substr(0,10).c_str());
+        for (const uint256& merkle : vMerkleTree)
+            printf("%s ", merkle.ToString().substr(0,10).c_str());
         printf("\n");
     }
 

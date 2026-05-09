@@ -1107,9 +1107,8 @@ bool CTransaction::CheckTransaction() const
 
     // Check for negative or overflow output values
     int64_t nValueOut = 0;
-    for (unsigned int i = 0; i < vout.size(); i++)
+    for (const CTxOut& txout : vout)
     {
-        const CTxOut& txout = vout[i];
         if (txout.IsEmpty() && !IsCoinBase() && !IsCoinStake())
             return DoS(100, error("CTransaction::CheckTransaction() : txout empty for user transaction"));
         if (txout.nValue < 0)
@@ -1917,9 +1916,9 @@ bool CTransaction::FetchInputs(CTxDBBase& txdb, const MapPrevTx& mapPendingUtxos
     if (IsCoinBase())
         return true; // Coinbase transactions have no inputs to fetch.
 
-    for (unsigned int i = 0; i < vin.size(); i++)
+    for (const CTxIn& txin : vin)
     {
-        COutPoint prevout = vin[i].prevout;
+        COutPoint prevout = txin.prevout;
         if (inputsRet.count(prevout))
             continue; // Got it already
 
@@ -2033,9 +2032,9 @@ int64_t CTransaction::GetValueIn(const MapPrevTx& inputs) const
         return 0;
 
     int64_t nResult = 0;
-    for (unsigned int i = 0; i < vin.size(); i++)
+    for (const CTxIn& txin : vin)
     {
-        auto mi = inputs.find(vin[i].prevout);
+        auto mi = inputs.find(txin.prevout);
         if (mi == inputs.end())
             throw std::runtime_error("CTransaction::GetValueIn() : input not found");
         nResult += mi->second.nValue;
@@ -2049,14 +2048,14 @@ unsigned int CTransaction::GetP2SHSigOpCount(const MapPrevTx& inputs) const
         return 0;
 
     unsigned int nSigOps = 0;
-    for (unsigned int i = 0; i < vin.size(); i++)
+    for (const CTxIn& txin : vin)
     {
-        auto mi = inputs.find(vin[i].prevout);
+        auto mi = inputs.find(txin.prevout);
         if (mi == inputs.end())
             continue;
         const CScript& scriptPubKey = mi->second.scriptPubKey;
         if (scriptPubKey.IsPayToScriptHash())
-            nSigOps += scriptPubKey.GetSigOpCount(vin[i].scriptSig);
+            nSigOps += scriptPubKey.GetSigOpCount(txin.scriptSig);
     }
     return nSigOps;
 }
@@ -2072,26 +2071,23 @@ bool CTransaction::ConnectInputs(CTxDBBase& txdb, const MapPrevTx& inputs,
     {
         int64_t nValueIn = 0;
         int64_t nFees = 0;
-        for (unsigned int i = 0; i < vin.size(); i++)
+        for (const CTxIn& txin : vin)
         {
-            COutPoint prevout = vin[i].prevout;
+            COutPoint prevout = txin.prevout;
             auto mi = inputs.find(prevout);
             if (mi == inputs.end())
                 return DoS(100, error("ConnectInputs() : %s input %s:%d not found", GetHash().ToString().substr(0,10).c_str(), prevout.hash.ToString().substr(0,10).c_str(), prevout.n));
             const CUtxoEntry& entry = mi->second;
 
-            // If prev is coinbase or coinstake, check that it's matured
             if (entry.fCoinBase || entry.fCoinStake)
             {
                 if (pindexBlock->nHeight - entry.nHeight < nCoinbaseMaturity)
                     return error("ConnectInputs() : tried to spend %s at depth %d", entry.fCoinBase ? "coinbase" : "coinstake", pindexBlock->nHeight - entry.nHeight);
             }
 
-            // triangles: check transaction timestamp
             if (entry.nTxTime > nTime)
                 return DoS(100, error("ConnectInputs() : transaction timestamp earlier than input transaction"));
 
-            // Check for negative or overflow input values
             nValueIn += entry.nValue;
             if (!MoneyRange(entry.nValue) || !MoneyRange(nValueIn))
                 return DoS(100, error("ConnectInputs() : txin values out of range"));
@@ -2569,12 +2565,10 @@ bool CBlock::ConnectBlock(CTxDBBase& txdb, CBlockIndex* pindex, bool fJustCheck)
 
     // Write UTXO database entries: add new outputs, erase spent inputs.
     // Runs for both fAssumeValid (fast) and full validation paths.
-    for (unsigned int i = 0; i < vtx.size(); i++)
+    for (const CTransaction& tx : vtx)
     {
-        const CTransaction& tx = vtx[i];
         uint256 hashTx = tx.GetHash();
 
-        // Add new outputs to UTXO set
         for (unsigned int k = 0; k < tx.vout.size(); k++)
         {
             const CTxOut& txout = tx.vout[k];
@@ -2592,7 +2586,6 @@ bool CBlock::ConnectBlock(CTxDBBase& txdb, CBlockIndex* pindex, bool fJustCheck)
                 return error("ConnectBlock() : WriteUtxo failed");
         }
 
-        // Erase spent inputs from UTXO set
         if (!tx.IsCoinBase())
         {
             for (const CTxIn& txin : tx.vin)
@@ -2797,9 +2790,8 @@ bool static Reorganize(CTxDBBase& txdb, CBlockIndex* pindexNew)
 
     // Connect longer branch
     vector<CTransaction> vDelete;
-    for (unsigned int i = 0; i < vConnect.size(); i++)
+    for (CBlockIndex* pindex : vConnect)
     {
-        CBlockIndex* pindex = vConnect[i];
         CBlock block;
         if (!block.ReadFromDisk(pindex))
             return error("Reorganize() : ReadFromDisk for connect failed");
@@ -4289,9 +4281,8 @@ bool FastImportBlockFile()
             int64_t nFees = 0;
             unsigned int nTxPos = nBlockPos + ::GetSerializeSize(CBlock(), SER_DISK, CLIENT_VERSION)
                                 - (2 * GetSizeOfCompactSize(0)) + GetSizeOfCompactSize(block.vtx.size());
-            for (unsigned int i = 0; i < block.vtx.size(); i++)
+            for (const CTransaction& tx : block.vtx)
             {
-                const CTransaction& tx = block.vtx[i];
                 uint256 hashTx = tx.GetHash();
                 CDiskTxPos posThisTx(1, nBlockPos, nTxPos);
                 txdb.UpdateTxIndex(hashTx, CTxIndex(posThisTx, tx.vout.size()));
