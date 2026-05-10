@@ -166,7 +166,6 @@ Value importwallet(const Array& params, bool fHelp)
         if (line.empty() || line[0] == '#')
             continue;
 
-        std::vector<std::string> vstr;
         auto vstr = SplitString(line, ' ');
         if (vstr.size() < 2)
             continue;

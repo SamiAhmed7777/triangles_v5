@@ -459,7 +459,6 @@ int ReadHTTPStatus(std::basic_istream<char>& stream, int &proto,
     // Trim trailing \r
     if (!str.empty() && str[str.size()-1] == '\r')
         str.resize(str.size()-1);
-    vector<string> vWords;
     auto vWords = SplitString(str, ' ');
     if (vWords.size() < 2)
         return HTTP_INTERNAL_SERVER_ERROR;
