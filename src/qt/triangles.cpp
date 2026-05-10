@@ -229,7 +229,7 @@ int main(int argc, char *argv[])
                 // calling Shutdown().
 
                 ClientModel clientModel(&optionsModel);
-                WalletModel walletModel(pwalletMain, &optionsModel);
+                WalletModel walletModel(pwalletMain.get(), &optionsModel);
 
                 window.setClientModel(&clientModel);
                 window.setWalletModel(&walletModel);

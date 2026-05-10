@@ -656,7 +656,7 @@ void TrianglesGUI::ensureMessageModel()
     if(messageModel || !walletModel)
         return;
 
-    setMessageModel(new MessageModel(pwalletMain, walletModel, this));
+    setMessageModel(new MessageModel(pwalletMain.get(), walletModel, this));
 }
 
 void TrianglesGUI::ensureSendCoinsPage()
