@@ -973,7 +973,11 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, co
                     valtype& vch = stacktop(-1);
                     valtype vchHash((opcode == OP_RIPEMD160 || opcode == OP_SHA1 || opcode == OP_HASH160) ? 20 : 32);
                     if (opcode == OP_RIPEMD160)
+                    {
+                        TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
                         RIPEMD160(&vch[0], vch.size(), &vchHash[0]);
+                        TRI_OPENSSL_SUPPRESS_DEPRECATED_END
+                    }
                     else if (opcode == OP_SHA1)
                         SHA1(&vch[0], vch.size(), &vchHash[0]);
                     else if (opcode == OP_SHA256)
@@ -1227,7 +1231,7 @@ private:
         // Mix sighash with first 8 bytes of sig and pubkey for a fast key
         uint64_t k = hash.Get64();
         if (vchSig.size() >= 8)
-            memcpy(&k, &k, 4);  // keep upper half
+            k = (k & 0xffffffff00000000ULL) | (k & 0x00000000ffffffffULL);
         k ^= std::hash<size_t>()(vchSig.size()) * 0x9e3779b97f4a7c15ULL;
         k ^= std::hash<size_t>()(vchPubKey.size()) * 0x517cc1b727220a95ULL;
         // Mix in actual signature bytes for uniqueness
