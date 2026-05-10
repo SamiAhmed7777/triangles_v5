@@ -93,7 +93,7 @@ bool CheckRESTRateLimit(const string& strIP)
 
 string HTTPReplyREST(int nStatus, const string& strMsg, const string& contentType)
 {
-    string strCorsOrigin = GetArg("-restcorsorigin", "*");
+    string strCorsOrigin = GetArg(std::string_view{"-restcorsorigin"}, std::string_view{"*"});
 
     const char *cStatus;
          if (nStatus == 200) cStatus = "OK";
@@ -173,7 +173,7 @@ bool IsRESTPath(const string& strURI)
 static bool RESTAuthorized(map<string, string>& mapHeaders)
 {
     // Check Bearer token first (if -restapikey is set)
-    string strApiKey = GetArg("-restapikey", "");
+    string strApiKey = GetArg(std::string_view{"-restapikey"}, std::string_view{""});
     if (!strApiKey.empty()) {
         string strAuth = mapHeaders.count("authorization") ? mapHeaders["authorization"] : "";
         if (strAuth.substr(0, 7) == "Bearer ") {

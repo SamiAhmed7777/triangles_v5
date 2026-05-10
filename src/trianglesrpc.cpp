@@ -864,17 +864,17 @@ void ThreadRPCServer2(void* parg)
     {
         context.set_options(ssl::context::no_sslv2);
 
-        fs::path pathCertFile(GetArg("-rpcsslcertificatechainfile", "server.cert"));
+        fs::path pathCertFile(GetArg(std::string_view{"-rpcsslcertificatechainfile"}, std::string_view{"server.cert"}));
         if (!pathCertFile.is_absolute()) pathCertFile = fs::path(GetDataDir()) / pathCertFile;
         if (fs::exists(pathCertFile)) context.use_certificate_chain_file(pathCertFile.string());
         else printf("ThreadRPCServer ERROR: missing server certificate file %s\n", pathCertFile.string().c_str());
 
-        fs::path pathPKFile(GetArg("-rpcsslprivatekeyfile", "server.pem"));
+        fs::path pathPKFile(GetArg(std::string_view{"-rpcsslprivatekeyfile"}, std::string_view{"server.pem"}));
         if (!pathPKFile.is_absolute()) pathPKFile = fs::path(GetDataDir()) / pathPKFile;
         if (fs::exists(pathPKFile)) context.use_private_key_file(pathPKFile.string(), ssl::context::pem);
         else printf("ThreadRPCServer ERROR: missing server private key file %s\n", pathPKFile.string().c_str());
 
-        string strCiphers = GetArg("-rpcsslciphers", "TLSv1+HIGH:!SSLv2:!aNULL:!eNULL:!AH:!3DES:@STRENGTH");
+        string strCiphers = GetArg(std::string_view{"-rpcsslciphers"}, std::string_view{"TLSv1+HIGH:!SSLv2:!aNULL:!eNULL:!AH:!3DES:@STRENGTH"});
         SSL_CTX_set_cipher_list(context.native_handle(), strCiphers.c_str());
     }
 
@@ -1305,7 +1305,7 @@ Object CallRPC(const string& strMethod, const Array& params)
     asio::ssl::stream<asio::ip::tcp::socket> sslStream(io_service, context);
     SSLIOStreamDevice<asio::ip::tcp> d(sslStream, fUseSSL);
     iostreams::stream< SSLIOStreamDevice<asio::ip::tcp> > stream(d);
-    if (!d.connect(GetArg("-rpcconnect", "127.0.0.1"), GetArg("-rpcport", itostr(GetDefaultRPCPort()))))
+    if (!d.connect(GetArg(std::string_view{"-rpcconnect"}, std::string_view{"127.0.0.1"}), GetArg(std::string_view{"-rpcport"}, itostr(GetDefaultRPCPort()))))
         throw runtime_error("couldn't connect to server");
 
     // HTTP basic authentication

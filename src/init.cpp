@@ -585,7 +585,7 @@ bool AppInit2()
     //nMinerSleep = GetArg("-minersleep", 500);
 
     CheckpointsMode = Checkpoints::STRICT;
-    std::string strCpMode = GetArg("-cppolicy", "strict");
+    std::string strCpMode = GetArg(std::string_view{"-cppolicy"}, std::string_view{"strict"});
 
     if(strCpMode == "strict")
         CheckpointsMode = Checkpoints::STRICT;
@@ -727,7 +727,7 @@ bool AppInit2()
         return InitError(_("Initialization sanity check failed. Triangles is shutting down."));
 
     std::string strDataDir = GetDataDir().string();
-    std::string strWalletFileName = GetArg("-wallet", "wallet.dat");
+    std::string strWalletFileName = GetArg(std::string_view{"-wallet"}, std::string_view{"wallet.dat"});
 
     // strWalletFileName must be a plain filename without a directory
     if (strWalletFileName != fs::path(strWalletFileName).stem().string() + fs::path(strWalletFileName).extension().string())
@@ -911,7 +911,7 @@ bool AppInit2()
 
    if (mapArgs.count("-checkpointkey")) // triangles: checkpoint master priv key
     {
-        if (!Checkpoints::SetCheckpointPrivKey(GetArg("-checkpointkey", "")))
+        if (!Checkpoints::SetCheckpointPrivKey(GetArg(std::string_view{"-checkpointkey"}, std::string_view{""})))
             InitError(_("Unable to sign checkpoint, wrong checkpointkey?\n"));
     }
 
@@ -1508,11 +1508,11 @@ bool AppInit2()
     // ********************************************************* Step 11.5: ZMQ notifications
 #ifdef ENABLE_ZMQ
     {
-        std::string zmqAddr = GetArg("-zmqpubhashblock", "");
+        std::string zmqAddr = GetArg(std::string_view{"-zmqpubhashblock"}, std::string_view{""});
         if (zmqAddr.empty())
-            zmqAddr = GetArg("-zmqpubhashtx", "");
+            zmqAddr = GetArg(std::string_view{"-zmqpubhashtx"}, std::string_view{""});
         if (zmqAddr.empty())
-            zmqAddr = GetArg("-zmqpub", "");
+            zmqAddr = GetArg(std::string_view{"-zmqpub"}, std::string_view{""});
         if (!zmqAddr.empty())
         {
             pzmqNotifier = new CZMQPublishNotifier();

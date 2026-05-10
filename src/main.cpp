@@ -3029,7 +3029,7 @@ bool CBlock::SetBestChain(CTxDBBase& txdb, CBlockIndex* pindexNew)
             strMiscWarning = _("Warning: This version is obsolete, upgrade required!");
     }
 
-    std::string strCmd = GetArg("-blocknotify", "");
+    std::string strCmd = GetArg(std::string_view{"-blocknotify"}, std::string_view{""});
 
     if (!fIsInitialDownload && !strCmd.empty())
     {

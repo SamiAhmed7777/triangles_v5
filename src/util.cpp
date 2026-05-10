@@ -1083,7 +1083,7 @@ const std::filesystem::path &GetDataDir(bool fNetSpecific)
 
 std::filesystem::path GetConfigFile()
 {
-    std::filesystem::path pathConfigFile(GetArg("-conf", "triangles.conf"));
+    std::filesystem::path pathConfigFile(GetArg(std::string_view{"-conf"}, std::string_view{"triangles.conf"}));
     if (!pathConfigFile.is_absolute()) pathConfigFile = GetDataDir(false) / pathConfigFile;
     return pathConfigFile;
 }
