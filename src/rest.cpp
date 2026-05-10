@@ -147,11 +147,10 @@ static void ParseRESTPath(const string& strURI, vector<string>& parts, map<strin
     }
 
     // Split path into parts
-    auto parts = SplitString(path, '/');
+    parts = SplitString(path, '/');
 
     // Parse query parameters
     if (!queryString.empty()) {
-        vector<string> pairs;
         auto pairs = SplitString(queryString, '&');
         for (size_t i = 0; i < pairs.size(); i++) {
             size_t eq = pairs[i].find('=');
