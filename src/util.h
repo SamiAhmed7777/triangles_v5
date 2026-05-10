@@ -27,6 +27,18 @@
 
 #include <openssl/sha.h>
 #include <openssl/ripemd.h>
+#include <openssl/opensslv.h>
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#define TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN \
+    _Pragma("GCC diagnostic push") \
+    _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
+#define TRI_OPENSSL_SUPPRESS_DEPRECATED_END \
+    _Pragma("GCC diagnostic pop")
+#else
+#define TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
+#define TRI_OPENSSL_SUPPRESS_DEPRECATED_END
+#endif
 
 #include "netbase.h" // for AddTimeData
 
@@ -502,7 +514,9 @@ public:
     int nVersion;
 
     void Init() {
+        TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
         SHA256_Init(&ctx);
+        TRI_OPENSSL_SUPPRESS_DEPRECATED_END
     }
 
     CHashWriter(int nTypeIn, int nVersionIn) : nType(nTypeIn), nVersion(nVersionIn) {
@@ -510,14 +524,18 @@ public:
     }
 
     CHashWriter& write(const char *pch, size_t size) {
+        TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
         SHA256_Update(&ctx, pch, size);
+        TRI_OPENSSL_SUPPRESS_DEPRECATED_END
         return (*this);
     }
 
     // invalidates the object
     uint256 GetHash() {
         uint256 hash1;
+        TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
         SHA256_Final((unsigned char*)&hash1, &ctx);
+        TRI_OPENSSL_SUPPRESS_DEPRECATED_END
         uint256 hash2;
         SHA256((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
         return hash2;
@@ -539,10 +557,12 @@ inline uint256 Hash(const T1 p1begin, const T1 p1end,
     static unsigned char pblank[1];
     uint256 hash1;
     SHA256_CTX ctx;
+    TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
     SHA256_Init(&ctx);
     SHA256_Update(&ctx, (p1begin == p1end ? pblank : (unsigned char*)&p1begin[0]), (p1end - p1begin) * sizeof(p1begin[0]));
     SHA256_Update(&ctx, (p2begin == p2end ? pblank : (unsigned char*)&p2begin[0]), (p2end - p2begin) * sizeof(p2begin[0]));
     SHA256_Final((unsigned char*)&hash1, &ctx);
+    TRI_OPENSSL_SUPPRESS_DEPRECATED_END
     uint256 hash2;
     SHA256((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
     return hash2;
@@ -556,11 +576,13 @@ inline uint256 Hash(const T1 p1begin, const T1 p1end,
     static unsigned char pblank[1];
     uint256 hash1;
     SHA256_CTX ctx;
+    TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
     SHA256_Init(&ctx);
     SHA256_Update(&ctx, (p1begin == p1end ? pblank : (unsigned char*)&p1begin[0]), (p1end - p1begin) * sizeof(p1begin[0]));
     SHA256_Update(&ctx, (p2begin == p2end ? pblank : (unsigned char*)&p2begin[0]), (p2end - p2begin) * sizeof(p2begin[0]));
     SHA256_Update(&ctx, (p3begin == p3end ? pblank : (unsigned char*)&p3begin[0]), (p3end - p3begin) * sizeof(p3begin[0]));
     SHA256_Final((unsigned char*)&hash1, &ctx);
+    TRI_OPENSSL_SUPPRESS_DEPRECATED_END
     uint256 hash2;
     SHA256((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
     return hash2;
