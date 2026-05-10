@@ -100,8 +100,8 @@ public:
 
     CWallet()
     {
-        nWalletVersion = WalletFeature::Base;
-        nWalletMaxVersion = WalletFeature::Base;
+        nWalletVersion = static_cast<int>(WalletFeature::Base);
+        nWalletMaxVersion = static_cast<int>(WalletFeature::Base);
         fFileBacked = false;
         nMasterKeyMaxID = 0;
         pwalletdbEncryption = nullptr;

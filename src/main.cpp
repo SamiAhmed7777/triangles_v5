@@ -1692,7 +1692,7 @@ int64_t GetProofOfStakeReward(int64_t nCoinAge, int64_t nFees)
     bnSubsidy /= 365;
     bnSubsidy /= COIN;
 
-    int64_t nSubsidy = bnSubsidy.getint64();
+    int64_t nSubsidy = bnSubsidy.getuint64();
 
 
     if (fDebug && GetBoolArg("-printcreation"))
