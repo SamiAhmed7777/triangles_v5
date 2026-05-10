@@ -406,7 +406,7 @@ unsigned int GetSerializeSize_impl(const std::vector<T, A>& v, int nType, int nV
 template<typename T, typename A>
 inline unsigned int GetSerializeSize(const std::vector<T, A>& v, int nType, int nVersion)
 {
-    return GetSerializeSize_impl(v, nType, nVersion, std::is_fundamental_v<T>);
+    return GetSerializeSize_impl(v, nType, nVersion, std::is_fundamental<T>{});
 }
 
 
@@ -429,7 +429,7 @@ void Serialize_impl(Stream& os, const std::vector<T, A>& v, int nType, int nVers
 template<typename Stream, typename T, typename A>
 inline void Serialize(Stream& os, const std::vector<T, A>& v, int nType, int nVersion)
 {
-    Serialize_impl(os, v, nType, nVersion, std::is_fundamental_v<T>);
+    Serialize_impl(os, v, nType, nVersion, std::is_fundamental<T>{});
 }
 
 
@@ -470,7 +470,7 @@ void Unserialize_impl(Stream& is, std::vector<T, A>& v, int nType, int nVersion,
 template<typename Stream, typename T, typename A>
 inline void Unserialize(Stream& is, std::vector<T, A>& v, int nType, int nVersion)
 {
-    Unserialize_impl(is, v, nType, nVersion, std::is_fundamental_v<T>);
+    Unserialize_impl(is, v, nType, nVersion, std::is_fundamental<T>{});
 }
 
 
