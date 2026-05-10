@@ -601,7 +601,9 @@ inline uint160 Hash160(const std::vector<unsigned char>& vch)
     uint256 hash1;
     SHA256(&vch[0], vch.size(), (unsigned char*)&hash1);
     uint160 hash2;
+    TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
     RIPEMD160((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
+    TRI_OPENSSL_SUPPRESS_DEPRECATED_END
     return hash2;
 }
 

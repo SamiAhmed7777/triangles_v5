@@ -530,7 +530,8 @@ public:
         {
             BeginMessage(pszCommand);
             ssSend << a1;
-            (ssSend << ... << args);
+            using swallow = int[];
+            (void)swallow{0, ((void)(ssSend << args), 0)...};
             EndMessage();
         }
         catch (...)

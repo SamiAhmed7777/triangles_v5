@@ -11,6 +11,7 @@
 #include "version.h"
 
 #include <openssl/bn.h>
+#include <openssl/opensslv.h>
 
 #include <algorithm>
 #include <stdexcept>
@@ -541,7 +542,14 @@ public:
     */
     bool isPrime(const int checks=BN_prime_checks) const {
         CAutoBN_CTX pctx;
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
         int ret = BN_is_prime_ex(pbn, checks, pctx, nullptr);
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#pragma GCC diagnostic pop
+#endif
         if(ret < 0){
             throw bignum_error("CBigNum::isPrime :BN_is_prime_ex");
         }
