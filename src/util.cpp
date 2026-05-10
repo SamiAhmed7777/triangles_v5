@@ -1114,7 +1114,7 @@ void ReadConfigFile(map<string, string>& mapSettingsRet,
 
 std::filesystem::path GetPidFile()
 {
-    std::filesystem::path pathPidFile(GetArg("-pid", "trianglesd.pid"));
+    std::filesystem::path pathPidFile(GetArg(std::string_view{"-pid"}, std::string_view{"trianglesd.pid"}));
     if (!pathPidFile.is_absolute()) pathPidFile = GetDataDir() / pathPidFile;
     return pathPidFile;
 }
