@@ -98,13 +98,13 @@ public:
     bool WriteTx(uint256 hash, const CWalletTx& wtx)
     {
         nWalletDBUpdated++;
-        return Write({std::string("tx"), hash}, wtx);
+        return Write(std::make_pair(std::string("tx"), hash), wtx);
     }
 
     bool EraseTx(uint256 hash)
     {
         nWalletDBUpdated++;
-        return Erase({std::string("tx"), hash});
+        return Erase(std::make_pair(std::string("tx"), hash));
     }
     bool WriteKey(const CPubKey& vchPubKey, const CPrivKey& vchPrivKey, const CKeyMetadata &keyMeta)
     {

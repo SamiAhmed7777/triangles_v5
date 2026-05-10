@@ -93,7 +93,7 @@ bool CCryptoKeyStore::Unlock(const CKeyingMaterial& vMasterKeyIn)
         if (!SetCrypted())
             return false;
 
-        for (const auto& [key, val] : mapCryptedKeys)
+        for (const auto& [pubKeyHash, val] : mapCryptedKeys)
         {
             const CPubKey &vchPubKey = val.first;
             const std::vector<unsigned char> &vchCryptedSecret = val.second;
@@ -102,10 +102,10 @@ bool CCryptoKeyStore::Unlock(const CKeyingMaterial& vMasterKeyIn)
                 return false;
             if (vchSecret.size() != 32)
                 return false;
-            CKey key;
-            key.SetPubKey(vchPubKey);
-            key.SetSecret(vchSecret);
-            if (key.GetPubKey() == vchPubKey)
+            CKey decryptedKey;
+            decryptedKey.SetPubKey(vchPubKey);
+            decryptedKey.SetSecret(vchSecret);
+            if (decryptedKey.GetPubKey() == vchPubKey)
                 break;
             return false;
         }
