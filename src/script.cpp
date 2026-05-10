@@ -1283,18 +1283,20 @@ bool CheckSig(const vector<unsigned char>& vchSig, const vector<unsigned char>& 
         nHashType = vchSig.back();
     else if (nHashType != vchSig.back())
         return false;
-    vchSig.pop_back();
+
+    vector<unsigned char> vchSigCopy(vchSig);
+    vchSigCopy.pop_back();
 
     uint256 sighash = SignatureHash(scriptCode, txTo, nIn, nHashType);
 
-    if (signatureCache.Get(sighash, vchSig, vchPubKey))
+    if (signatureCache.Get(sighash, vchSigCopy, vchPubKey))
         return true;
 
     CKey key;
     if (!key.SetPubKey(vchPubKey))
         return false;
 
-    if (!key.Verify(sighash, vchSig))
+    if (!key.Verify(sighash, vchSigCopy))
         return false;
 
     signatureCache.Set(sighash, vchSig, vchPubKey);
