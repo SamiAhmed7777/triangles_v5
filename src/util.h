@@ -20,6 +20,7 @@
 #include <string_view>
 #include <sstream>
 #include <algorithm>
+#include <cstdio>
 
 #include <chrono>
 #include <thread>
@@ -190,6 +191,9 @@ bool ATTR_WARN_PRINTF(1,2) error(const char *format, ...);
 #define printf OutputDebugStringF
 
 void LogException(std::exception* pex, const char* pszThread);
+
+// LogPrintf - variadic macro for logging to stderr (C++20 modernization: restored from removed definition)
+#define LogPrintf(...) fprintf(stderr, __VA_ARGS__)
 void PrintException(std::exception* pex, const char* pszThread);
 void PrintExceptionContinue(std::exception* pex, const char* pszThread);
 void ParseString(std::string_view str, char c, std::vector<std::string>& v);
