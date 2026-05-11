@@ -56,6 +56,8 @@ jobs:
       SAN_FLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -fno-sanitize=alignment,signed-integer-overflow,vptr"
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install dependencies
         run: |
