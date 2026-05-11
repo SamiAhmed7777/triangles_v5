@@ -12,6 +12,7 @@
 #include "kernel.h"
 #include "coincontrol.h"
 #include "addressindex.h"
+#include "util.h"
 #include <memory>
 #include <algorithm>
 #include <random>
@@ -483,7 +484,7 @@ void CWallet::WalletUpdateSpent(const CTransaction &tx, bool fBlock)
                     if (!IsInitialBlockDownload())
                     {
                         try { NotifyTransactionChanged(this, txin.prevout.hash, CT_UPDATED); }
-                        catch (...) { LogPrintf("WARNING: NotifyTransactionChanged exception in WalletUpdateSpent\n"); }
+                        catch (...) { printf("WARNING: NotifyTransactionChanged exception in WalletUpdateSpent\n"); }
                     }
                 }
             }
@@ -504,7 +505,7 @@ void CWallet::WalletUpdateSpent(const CTransaction &tx, bool fBlock)
                     if (!IsInitialBlockDownload())
                     {
                         try { NotifyTransactionChanged(this, hash, CT_UPDATED); }
-                        catch (...) { LogPrintf("WARNING: NotifyTransactionChanged exception in WalletUpdateSpent\n"); }
+                        catch (...) { printf("WARNING: NotifyTransactionChanged exception in WalletUpdateSpent\n"); }
                     }
                 }
             }
@@ -2162,7 +2163,7 @@ bool CWallet::CommitTransaction(CWalletTx& wtxNew, CReserveKey& reservekey)
                 coin.MarkSpent(txin.prevout.n);
                 coin.WriteToDisk();
                 try { NotifyTransactionChanged(this, coin.GetHash(), CT_UPDATED); }
-                catch (...) { LogPrintf("WARNING: NotifyTransactionChanged exception in CommitTransaction\n"); }
+                catch (...) { printf("WARNING: NotifyTransactionChanged exception in CommitTransaction\n"); }
             }
 
             if (fFileBacked)
@@ -2292,7 +2293,7 @@ bool CWallet::SetAddressBookName(const CTxDestination& address, const string& st
         SecureMsgWalletKeyChanged(caddress.ToString(), strName, nMode);
     }
     try { NotifyAddressBookChanged(this, address, strName, fOwned, nMode); }
-    catch (...) { LogPrintf("WARNING: NotifyAddressBookChanged exception in SetAddressBookName\n"); }
+    catch (...) { printf("WARNING: NotifyAddressBookChanged exception in SetAddressBookName\n"); }
 
     if (!fFileBacked)
         return false;
@@ -2315,7 +2316,7 @@ bool CWallet::DelAddressBookName(const CTxDestination& address)
         SecureMsgWalletKeyChanged(caddress.ToString(), sName, CT_DELETED);
     }
     try { NotifyAddressBookChanged(this, address, "", fOwned, CT_DELETED); }
-    catch (...) { LogPrintf("WARNING: NotifyAddressBookChanged exception in DelAddressBookName\n"); }
+    catch (...) { printf("WARNING: NotifyAddressBookChanged exception in DelAddressBookName\n"); }
 
     if (!fFileBacked)
         return false;
@@ -2794,7 +2795,7 @@ void CWallet::UpdatedTransaction(const uint256 &hashTx)
         if (auto mi = mapWallet.find(hashTx); mi != mapWallet.end() && !IsInitialBlockDownload())
         {
             try { NotifyTransactionChanged(this, hashTx, CT_UPDATED); }
-            catch (...) { LogPrintf("WARNING: NotifyTransactionChanged exception in UpdatedTransaction\n"); }
+            catch (...) { printf("WARNING: NotifyTransactionChanged exception in UpdatedTransaction\n"); }
         }
     }
 }
