@@ -600,6 +600,37 @@ bool SoftSetBoolArg(const std::string& strArg, bool fValue)
         return SoftSetArg(strArg, std::string("0"));
 }
 
+// C++20 modernization: std::string_view overloads delegating to std::string implementations
+std::string GetArg(std::string_view strArg, std::string_view strDefault)
+{
+    return GetArg(std::string(strArg), std::string(strDefault));
+}
+
+int64_t GetArg(std::string_view strArg, int64_t nDefault)
+{
+    return GetArg(std::string(strArg), nDefault);
+}
+
+bool GetBoolArg(std::string_view strArg, bool fDefault)
+{
+    return GetBoolArg(std::string(strArg), fDefault);
+}
+
+bool SoftSetArg(std::string_view strArg, std::string_view strValue)
+{
+    return SoftSetArg(std::string(strArg), std::string(strValue));
+}
+
+bool SoftSetBoolArg(std::string_view strArg, bool fValue)
+{
+    return SoftSetBoolArg(std::string(strArg), fValue);
+}
+
+bool WildcardMatch(std::string_view str, std::string_view mask)
+{
+    return WildcardMatch(std::string(str), std::string(mask));
+}
+
 
 string EncodeBase64(const unsigned char* pch, size_t len)
 {
