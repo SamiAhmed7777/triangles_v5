@@ -24,6 +24,7 @@
 #endif
 #include "notificationqueue.h"
 #include "addressindex.h"
+#include "chaindb_migrate.h"
 #include <memory>
 #include <thread>
 #include <vector>
@@ -1020,6 +1021,16 @@ bool AppInit2()
                 printf("Will proceed with normal sync.\n");
             }
         }
+    }
+
+    // ********************************************************* Step 6d: optional LevelDB -> RocksDB chain DB migration
+    if (GetBoolArg("-migratechaindb", false) || GetBoolArg("-migratechaindbforce", false))
+    {
+        uiInterface.InitMessage(_("Migrating chain database to RocksDB..."));
+        std::string strMigrateError;
+        bool fForce = GetBoolArg("-migratechaindbforce", false);
+        if (!MaybeMigrateLevelDbToRocksDb(fForce, strMigrateError))
+            return InitError(strprintf(_("Chain DB migration failed: %s"), strMigrateError.c_str()));
     }
 
     // ********************************************************* Step 7: load blockchain
