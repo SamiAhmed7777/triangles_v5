@@ -47,12 +47,13 @@ public:
         return WriteRaw(key, value);
     }
 
+    std::unique_ptr<CTxDBIteratorBase> NewIterator() const override;
+
 protected:
     bool ReadRaw(const std::string& key, std::string& value) const override;
     bool WriteRaw(const std::string& key, const std::string& value) override;
     bool EraseRaw(const std::string& key) override;
     bool ExistsRaw(const std::string& key) const override;
-    std::unique_ptr<CTxDBIteratorBase> NewIterator() const override;
 
 private:
     rocksdb::DB* pdb;                   // Points to the global instance.
