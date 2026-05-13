@@ -68,7 +68,7 @@ public:
     CPubKey() { }
     CPubKey(const std::vector<unsigned char> &vchPubKeyIn) : vchPubKey(vchPubKeyIn) { }
     friend bool operator==(const CPubKey &a, const CPubKey &b) { return a.vchPubKey == b.vchPubKey; }
-    friend bool operator!=(const CPubKey &a, const CPubKey &b) { return a.vchPubKey != b.vchPubKey; }
+    friend bool operator!=(const CPubKey &a, const CPubKey &b) = default;
     friend bool operator<(const CPubKey &a, const CPubKey &b) { return a.vchPubKey < b.vchPubKey; }
 
     IMPLEMENT_SERIALIZE(
@@ -99,9 +99,8 @@ public:
 
 // secure_allocator is defined in allocators.h
 // CPrivKey is a serialized private key, with all parameters included (279 bytes)
-typedef std::vector<unsigned char, secure_allocator<unsigned char> > CPrivKey;
-// CSecret is a serialization of just the secret parameter (32 bytes)
-typedef std::vector<unsigned char, secure_allocator<unsigned char> > CSecret;
+using CPrivKey = std::vector<unsigned char, secure_allocator<unsigned char>>;
+using CSecret = std::vector<unsigned char, secure_allocator<unsigned char>>;
 
 /** An encapsulated secp256k1 elliptic-curve key (public and/or private). */
 class CKey

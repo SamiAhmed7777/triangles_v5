@@ -50,7 +50,7 @@ uint64_t nLastBlockSize = 0;
 int64_t nLastCoinStakeSearchInterval = 0;
  
 // We want to sort transactions by priority and fee, so:
-typedef std::tuple<double, double, CTransaction*> TxPriority;
+using TxPriority = std::tuple<double, double, CTransaction*>;
 class TxPriorityCompare
 {
     bool byFee;
@@ -79,7 +79,7 @@ CBlock* CreateNewBlock(CWallet* pwallet, bool fProofOfStake, int64_t* pFees)
     // Create new block
     unique_ptr<CBlock> pblock(new CBlock());
     if (!pblock.get())
-        return NULL;
+        return nullptr;
 
     CBlockIndex* pindexPrev = pindexBest;
 
@@ -145,13 +145,12 @@ CBlock* CreateNewBlock(CWallet* pwallet, bool fProofOfStake, int64_t* pFees)
         // This vector will be sorted into a priority queue:
         vector<TxPriority> vecPriority;
         vecPriority.reserve(mempool.mapTx.size());
-        for (map<uint256, CTransaction>::iterator mi = mempool.mapTx.begin(); mi != mempool.mapTx.end(); ++mi)
+        for (auto& [hash, tx] : mempool.mapTx)
         {
-            CTransaction& tx = (*mi).second;
             if (tx.IsCoinBase() || tx.IsCoinStake() || !tx.IsFinal())
                 continue;
 
-            COrphan* porphan = NULL;
+            COrphan* porphan = nullptr;
             double dPriority = 0;
             int64_t nTotalIn = 0;
             bool fMissingInputs = false;
@@ -210,7 +209,7 @@ CBlock* CreateNewBlock(CWallet* pwallet, bool fProofOfStake, int64_t* pFees)
                 porphan->dFeePerKb = dFeePerKb;
             }
             else
-                vecPriority.push_back(TxPriority(dPriority, dFeePerKb, &(*mi).second));
+                vecPriority.push_back(TxPriority(dPriority, dFeePerKb, &tx));
         }
 
         // Collect transactions into block
@@ -247,7 +246,7 @@ CBlock* CreateNewBlock(CWallet* pwallet, bool fProofOfStake, int64_t* pFees)
                 continue;
 
             // Transaction fee
-            int64_t nMinFee = tx.GetMinFee(nBlockSize, GMF_BLOCK);
+            int64_t nMinFee = tx.GetMinFee(nBlockSize, GetMinFeeMode::Block);
 
             // Skip free transactions if we're past the minimum block size:
             if (fSortedByFee && (dFeePerKb < nMinTxFee) && (nBlockSize + nTxSize >= nBlockMinSize))
@@ -372,7 +371,7 @@ bool CheckStake(CBlock* pblock, CWallet& wallet)
         }
 
         // Process this block the same as if we had received it from another node
-        if (!ProcessBlock(NULL, pblock))
+        if (!ProcessBlock(nullptr, pblock))
             return error("CheckStake() : ProcessBlock, block not accepted");
     }
 

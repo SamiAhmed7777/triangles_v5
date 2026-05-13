@@ -81,15 +81,14 @@ double CAddrInfo::GetChance(int64_t nNow) const
 
 CAddrInfo* CAddrMan::Find(const CNetAddr& addr, int *pnId)
 {
-    std::map<CNetAddr, int>::iterator it = mapAddr.find(addr);
+    auto it = mapAddr.find(addr);
     if (it == mapAddr.end())
-        return NULL;
+        return nullptr;
     if (pnId)
-        *pnId = (*it).second;
-    std::map<int, CAddrInfo>::iterator it2 = mapInfo.find((*it).second);
-    if (it2 != mapInfo.end())
-        return &(*it2).second;
-    return NULL;
+        *pnId = it->second;
+    if (auto it2 = mapInfo.find(it->second); it2 != mapInfo.end())
+        return &it2->second;
+    return nullptr;
 }
 
 CAddrInfo* CAddrMan::Create(const CAddress &addr, const CNetAddr &addrSource, int *pnId)
@@ -177,13 +176,13 @@ int CAddrMan::ShrinkNew(int nUBucket)
     int n[4] = {GetRandInt(vNew.size()), GetRandInt(vNew.size()), GetRandInt(vNew.size()), GetRandInt(vNew.size())};
     int nI = 0;
     int nOldest = -1;
-    for (std::set<int>::iterator it = vNew.begin(); it != vNew.end(); it++)
+    for (const auto& elem : vNew)
     {
         if (nI == n[0] || nI == n[1] || nI == n[2] || nI == n[3])
         {
-            assert(nOldest == -1 || mapInfo.count(*it) == 1);
-            if (nOldest == -1 || mapInfo[*it].nTime < mapInfo[nOldest].nTime)
-                nOldest = *it;
+            assert(nOldest == -1 || mapInfo.count(elem) == 1);
+            if (nOldest == -1 || mapInfo[elem].nTime < mapInfo[nOldest].nTime)
+                nOldest = elem;
         }
         nI++;
     }
@@ -440,10 +439,8 @@ int CAddrMan::Check_()
 
     if (vRandom.size() != nTried + nNew) return -7;
 
-    for (std::map<int, CAddrInfo>::iterator it = mapInfo.begin(); it != mapInfo.end(); it++)
+    for (auto& [n, info] : mapInfo)
     {
-        int n = (*it).first;
-        CAddrInfo &info = (*it).second;
         if (info.fInTried)
         {
 
@@ -467,10 +464,10 @@ int CAddrMan::Check_()
     for (int n=0; n<vvTried.size(); n++)
     {
         std::vector<int> &vTried = vvTried[n];
-        for (std::vector<int>::iterator it = vTried.begin(); it != vTried.end(); it++)
+        for (const auto& elem : vTried)
         {
-            if (!setTried.count(*it)) return -11;
-            setTried.erase(*it);
+            if (!setTried.count(elem)) return -11;
+            setTried.erase(elem);
         }
     }
 

@@ -12,8 +12,6 @@
 #include "wallet.h"
 #include "init.h"
 
-#include <boost/algorithm/string.hpp>
-
 using namespace std;
 using namespace json_spirit;
 
@@ -95,7 +93,7 @@ bool CheckRESTRateLimit(const string& strIP)
 
 string HTTPReplyREST(int nStatus, const string& strMsg, const string& contentType)
 {
-    string strCorsOrigin = GetArg("-restcorsorigin", "*");
+    string strCorsOrigin = GetArg(std::string_view{"-restcorsorigin"}, std::string_view{"*"});
 
     const char *cStatus;
          if (nStatus == 200) cStatus = "OK";
@@ -149,12 +147,11 @@ static void ParseRESTPath(const string& strURI, vector<string>& parts, map<strin
     }
 
     // Split path into parts
-    boost::split(parts, path, boost::is_any_of("/"));
+    parts = SplitString(path, '/');
 
     // Parse query parameters
     if (!queryString.empty()) {
-        vector<string> pairs;
-        boost::split(pairs, queryString, boost::is_any_of("&"));
+        auto pairs = SplitString(queryString, '&');
         for (size_t i = 0; i < pairs.size(); i++) {
             size_t eq = pairs[i].find('=');
             if (eq != string::npos)
@@ -175,12 +172,12 @@ bool IsRESTPath(const string& strURI)
 static bool RESTAuthorized(map<string, string>& mapHeaders)
 {
     // Check Bearer token first (if -restapikey is set)
-    string strApiKey = GetArg("-restapikey", "");
+    string strApiKey = GetArg(std::string_view{"-restapikey"}, std::string_view{""});
     if (!strApiKey.empty()) {
         string strAuth = mapHeaders.count("authorization") ? mapHeaders["authorization"] : "";
         if (strAuth.substr(0, 7) == "Bearer ") {
             string strToken = strAuth.substr(7);
-            boost::trim(strToken);
+            strToken = TrimString(strToken);
             if (TimingResistantEqual(strToken, strApiKey))
                 return true;
         }
@@ -300,8 +297,8 @@ static bool HandleBlockHeader(const string& param, string& strReply, int& nStatu
     result.push_back(Pair("height", pblockindex->nHeight));
     result.push_back(Pair("version", pblockindex->nVersion));
     result.push_back(Pair("merkleroot", pblockindex->hashMerkleRoot.GetHex()));
-    result.push_back(Pair("time", (boost::int64_t)pblockindex->GetBlockTime()));
-    result.push_back(Pair("nonce", (boost::uint64_t)pblockindex->nNonce));
+    result.push_back(Pair("time", (int64_t)pblockindex->GetBlockTime()));
+    result.push_back(Pair("nonce", (uint64_t)pblockindex->nNonce));
     result.push_back(Pair("bits", HexBits(pblockindex->nBits)));
     result.push_back(Pair("difficulty", GetDifficulty(pblockindex)));
     result.push_back(Pair("flags", strprintf("%s%s",

@@ -2,7 +2,7 @@ name: Build All Platforms
 
 on:
   push:
-    branches: [master]
+    branches: [master, cpp20-modernization]
     tags: ['v*']
   pull_request:
     branches: [master]

@@ -26,7 +26,7 @@ secp256k1_context* GetECDHContext()
 }
 
 // Hash function callback that returns the raw X coordinate of the shared
-// point. Mirrors OpenSSL's ECDH_compute_key behaviour when the KDF is NULL.
+// point. Mirrors OpenSSL's ECDH_compute_key behaviour when the KDF is nullptr.
 int hash_xonly(unsigned char* output,
                const unsigned char* x32,
                const unsigned char* /*y32*/,

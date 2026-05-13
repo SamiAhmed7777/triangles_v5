@@ -7,8 +7,9 @@
 
 #include "wallet.h"
 #include "tor_embed_hooks.h"
+#include <memory>
 
-extern CWallet* pwalletMain;
+extern std::unique_ptr<CWallet> pwalletMain;
 extern std::string strWalletFileName;
 void StartShutdown();
 bool ShutdownRequested();

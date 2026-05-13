@@ -22,7 +22,6 @@
 #include <filesystem>
 #include <boost/iostreams/concepts.hpp>
 #include <boost/iostreams/stream.hpp>
-#include <boost/algorithm/string.hpp>
 #include <boost/asio/ssl.hpp>
 #include <fstream>
 #include <boost/shared_ptr.hpp>
@@ -44,7 +43,7 @@ static std::string strRPCUserColonPass;
 
 const Object emptyobj;
 
-CNotificationQueue* pNotificationQueue = NULL;
+CNotificationQueue* pNotificationQueue = nullptr;
 
 void ThreadRPCServer3(void* parg);
 
@@ -367,7 +366,7 @@ const CRPCCommand *CRPCTable::operator[](string name) const
 {
     map<string, const CRPCCommand*>::const_iterator it = mapCommands.find(name);
     if (it == mapCommands.end())
-        return NULL;
+        return nullptr;
     return (*it).second;
 }
 
@@ -401,7 +400,7 @@ string rfc1123Time()
     time_t now;
     time(&now);
     struct tm* now_gmt = gmtime(&now);
-    string locale(setlocale(LC_TIME, NULL));
+    string locale(setlocale(LC_TIME, nullptr));
     setlocale(LC_TIME, "C"); // we want POSIX (aka "C") weekday/month strings
     strftime(buffer, sizeof(buffer), "%a, %d %b %Y %H:%M:%S +0000", now_gmt);
     setlocale(LC_TIME, locale.c_str());
@@ -460,13 +459,12 @@ int ReadHTTPStatus(std::basic_istream<char>& stream, int &proto,
     // Trim trailing \r
     if (!str.empty() && str[str.size()-1] == '\r')
         str.resize(str.size()-1);
-    vector<string> vWords;
-    boost::split(vWords, str, boost::is_any_of(" "));
+    auto vWords = SplitString(str, ' ');
     if (vWords.size() < 2)
         return HTTP_INTERNAL_SERVER_ERROR;
     proto = 0;
     const char *ver = strstr(str.c_str(), "HTTP/1.");
-    if (ver != NULL)
+    if (ver != nullptr)
         proto = atoi(ver+7);
 
     // Detect request line (GET/POST/...) vs response line (HTTP/1.x ...)
@@ -493,10 +491,10 @@ int ReadHTTPHeader(std::basic_istream<char>& stream, map<string, string>& mapHea
         if (nColon != string::npos)
         {
             string strHeader = str.substr(0, nColon);
-            boost::trim(strHeader);
-            boost::to_lower(strHeader);
+            strHeader = TrimString(strHeader);
+            strHeader = ToLower(strHeader);
             string strValue = str.substr(nColon+1);
-            boost::trim(strValue);
+            strValue = TrimString(strValue);
             mapHeadersRet[strHeader] = strValue;
             if (strHeader == "content-length")
                 nLen = atoi(strValue.c_str());
@@ -550,7 +548,7 @@ bool HTTPAuthorized(map<string, string>& mapHeaders)
     string strAuth = mapHeaders["authorization"];
     if (strAuth.size() < 6 || strAuth.substr(0,6) != "Basic ")
         return false;
-    string strUserPass64 = strAuth.substr(6); boost::trim(strUserPass64);
+    string strUserPass64 = strAuth.substr(6); strUserPass64 = TrimString(strUserPass64);
     if (strUserPass64.empty())
         return false;
     string strUserPass;
@@ -748,7 +746,7 @@ void ThreadRPCServer(void* parg)
         PrintException(&e, "ThreadRPCServer()");
     } catch (...) {
         vnThreadsRunning[THREAD_RPCLISTENER]--;
-        PrintException(NULL, "ThreadRPCServer()");
+        PrintException(nullptr, "ThreadRPCServer()");
     }
     printf("ThreadRPCServer exited\n");
 }
@@ -775,12 +773,9 @@ static void RPCListen(boost::shared_ptr< basic_socket_acceptor<Protocol, SocketA
     acceptor->async_accept(
             conn->sslStream.lowest_layer(),
             conn->peer,
-            boost::bind(&RPCAcceptHandler<Protocol, SocketAcceptorService>,
-                acceptor,
-                boost::ref(context),
-                fUseSSL,
-                conn,
-                boost::asio::placeholders::error));
+            [acceptor, &context, fUseSSL, conn](const boost::system::error_code& error) {
+                RPCAcceptHandler(acceptor, context, fUseSSL, conn, error);
+            });
 }
 
 /**
@@ -892,17 +887,17 @@ void ThreadRPCServer2(void* parg)
     {
         context.set_options(ssl::context::no_sslv2);
 
-        fs::path pathCertFile(GetArg("-rpcsslcertificatechainfile", "server.cert"));
+        fs::path pathCertFile(GetArg(std::string_view{"-rpcsslcertificatechainfile"}, std::string_view{"server.cert"}));
         if (!pathCertFile.is_absolute()) pathCertFile = fs::path(GetDataDir()) / pathCertFile;
         if (fs::exists(pathCertFile)) context.use_certificate_chain_file(pathCertFile.string());
         else printf("ThreadRPCServer ERROR: missing server certificate file %s\n", pathCertFile.string().c_str());
 
-        fs::path pathPKFile(GetArg("-rpcsslprivatekeyfile", "server.pem"));
+        fs::path pathPKFile(GetArg(std::string_view{"-rpcsslprivatekeyfile"}, std::string_view{"server.pem"}));
         if (!pathPKFile.is_absolute()) pathPKFile = fs::path(GetDataDir()) / pathPKFile;
         if (fs::exists(pathPKFile)) context.use_private_key_file(pathPKFile.string(), ssl::context::pem);
         else printf("ThreadRPCServer ERROR: missing server private key file %s\n", pathPKFile.string().c_str());
 
-        string strCiphers = GetArg("-rpcsslciphers", "TLSv1+HIGH:!SSLv2:!aNULL:!eNULL:!AH:!3DES:@STRENGTH");
+        string strCiphers = GetArg(std::string_view{"-rpcsslciphers"}, std::string_view{"TLSv1+HIGH:!SSLv2:!aNULL:!eNULL:!AH:!3DES:@STRENGTH"});
         SSL_CTX_set_cipher_list(context.native_handle(), strCiphers.c_str());
     }
 
@@ -1341,7 +1336,7 @@ Object CallRPC(const string& strMethod, const Array& params)
     asio::ssl::stream<asio::ip::tcp::socket> sslStream(io_service, context);
     SSLIOStreamDevice<asio::ip::tcp> d(sslStream, fUseSSL);
     iostreams::stream< SSLIOStreamDevice<asio::ip::tcp> > stream(d);
-    if (!d.connect(GetArg("-rpcconnect", "127.0.0.1"), GetArg("-rpcport", itostr(GetDefaultRPCPort()))))
+    if (!d.connect(GetArg(std::string_view{"-rpcconnect"}, std::string_view{"127.0.0.1"}), GetArg(std::string_view{"-rpcport"}, itostr(GetDefaultRPCPort()))))
         throw runtime_error("couldn't connect to server");
 
     // HTTP basic authentication
@@ -1415,45 +1410,45 @@ Array RPCConvertValues(const std::string &strMethod, const std::vector<std::stri
     if (strMethod == "stop"                   && n > 0) ConvertTo<bool>(params[0]);
     if (strMethod == "sendtoaddress"          && n > 1) ConvertTo<double>(params[1]);
     if (strMethod == "settxfee"               && n > 0) ConvertTo<double>(params[0]);
-    if (strMethod == "getreceivedbyaddress"   && n > 1) ConvertTo<boost::int64_t>(params[1]);
-    if (strMethod == "getreceivedbyaccount"   && n > 1) ConvertTo<boost::int64_t>(params[1]);
-    if (strMethod == "listreceivedbyaddress"  && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "getreceivedbyaddress"   && n > 1) ConvertTo<int64_t>(params[1]);
+    if (strMethod == "getreceivedbyaccount"   && n > 1) ConvertTo<int64_t>(params[1]);
+    if (strMethod == "listreceivedbyaddress"  && n > 0) ConvertTo<int64_t>(params[0]);
     if (strMethod == "listreceivedbyaddress"  && n > 1) ConvertTo<bool>(params[1]);
-    if (strMethod == "listreceivedbyaccount"  && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "listreceivedbyaccount"  && n > 0) ConvertTo<int64_t>(params[0]);
     if (strMethod == "listreceivedbyaccount"  && n > 1) ConvertTo<bool>(params[1]);
-    if (strMethod == "getbalance"             && n > 1) ConvertTo<boost::int64_t>(params[1]);
+    if (strMethod == "getbalance"             && n > 1) ConvertTo<int64_t>(params[1]);
     if (strMethod == "getblock"               && n > 1) ConvertTo<bool>(params[1]);
-    if (strMethod == "getblockbynumber"       && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "getblockbynumber"       && n > 0) ConvertTo<int64_t>(params[0]);
     if (strMethod == "getblockbynumber"       && n > 1) ConvertTo<bool>(params[1]);
-    if (strMethod == "getblockhash"           && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "getblockhash"           && n > 0) ConvertTo<int64_t>(params[0]);
     if (strMethod == "move"                   && n > 2) ConvertTo<double>(params[2]);
-    if (strMethod == "move"                   && n > 3) ConvertTo<boost::int64_t>(params[3]);
+    if (strMethod == "move"                   && n > 3) ConvertTo<int64_t>(params[3]);
     if (strMethod == "sendfrom"               && n > 2) ConvertTo<double>(params[2]);
-    if (strMethod == "sendfrom"               && n > 3) ConvertTo<boost::int64_t>(params[3]);
-    if (strMethod == "listtransactions"       && n > 1) ConvertTo<boost::int64_t>(params[1]);
-    if (strMethod == "listtransactions"       && n > 2) ConvertTo<boost::int64_t>(params[2]);
-    if (strMethod == "listaccounts"           && n > 0) ConvertTo<boost::int64_t>(params[0]);
-    if (strMethod == "walletpassphrase"       && n > 1) ConvertTo<boost::int64_t>(params[1]);
+    if (strMethod == "sendfrom"               && n > 3) ConvertTo<int64_t>(params[3]);
+    if (strMethod == "listtransactions"       && n > 1) ConvertTo<int64_t>(params[1]);
+    if (strMethod == "listtransactions"       && n > 2) ConvertTo<int64_t>(params[2]);
+    if (strMethod == "listaccounts"           && n > 0) ConvertTo<int64_t>(params[0]);
+    if (strMethod == "walletpassphrase"       && n > 1) ConvertTo<int64_t>(params[1]);
     if (strMethod == "walletpassphrase"       && n > 2) ConvertTo<bool>(params[2]);
-    if (strMethod == "listsinceblock"         && n > 1) ConvertTo<boost::int64_t>(params[1]);
+    if (strMethod == "listsinceblock"         && n > 1) ConvertTo<int64_t>(params[1]);
 
     if (strMethod == "sendmany"               && n > 1) ConvertTo<Object>(params[1]);
-    if (strMethod == "sendmany"               && n > 2) ConvertTo<boost::int64_t>(params[2]);
+    if (strMethod == "sendmany"               && n > 2) ConvertTo<int64_t>(params[2]);
     if (strMethod == "reservebalance"         && n > 0) ConvertTo<bool>(params[0]);
     if (strMethod == "reservebalance"         && n > 1) ConvertTo<double>(params[1]);
-    if (strMethod == "addmultisigaddress"     && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "addmultisigaddress"     && n > 0) ConvertTo<int64_t>(params[0]);
     if (strMethod == "addmultisigaddress"     && n > 1) ConvertTo<Array>(params[1]);
-    if (strMethod == "listunspent"            && n > 0) ConvertTo<boost::int64_t>(params[0]);
-    if (strMethod == "listunspent"            && n > 1) ConvertTo<boost::int64_t>(params[1]);
+    if (strMethod == "listunspent"            && n > 0) ConvertTo<int64_t>(params[0]);
+    if (strMethod == "listunspent"            && n > 1) ConvertTo<int64_t>(params[1]);
     if (strMethod == "listunspent"            && n > 2) ConvertTo<Array>(params[2]);
-    if (strMethod == "getrawtransaction"      && n > 1) ConvertTo<boost::int64_t>(params[1]);
+    if (strMethod == "getrawtransaction"      && n > 1) ConvertTo<int64_t>(params[1]);
     if (strMethod == "createrawtransaction"   && n > 0) ConvertTo<Array>(params[0]);
     if (strMethod == "createrawtransaction"   && n > 1) ConvertTo<Object>(params[1]);
     if (strMethod == "signrawtransaction"     && n > 1) ConvertTo<Array>(params[1], true);
     if (strMethod == "signrawtransaction"     && n > 2) ConvertTo<Array>(params[2], true);
-    if (strMethod == "keypoolrefill"          && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "keypoolrefill"          && n > 0) ConvertTo<int64_t>(params[0]);
     if (strMethod == "getblockheader"         && n > 1) ConvertTo<bool>(params[1]);
-    if (strMethod == "estimatefee"            && n > 0) ConvertTo<boost::int64_t>(params[0]);
+    if (strMethod == "estimatefee"            && n > 0) ConvertTo<int64_t>(params[0]);
     if (strMethod == "getaddressbalance"     && n > 0) ConvertTo<Object>(params[0]);
     if (strMethod == "getaddressutxos"       && n > 0) ConvertTo<Object>(params[0]);
     if (strMethod == "getaddresstxids"       && n > 0) ConvertTo<Object>(params[0]);
@@ -1515,7 +1510,7 @@ int CommandLineRPC(int argc, char *argv[])
     }
     catch (...)
     {
-        PrintException(NULL, "CommandLineRPC()");
+        PrintException(nullptr, "CommandLineRPC()");
     }
 
     if (strPrint != "")
@@ -1534,18 +1529,18 @@ int main(int argc, char *argv[])
 #ifdef _MSC_VER
     // Turn off Microsoft heap dump noise
     _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
-    _CrtSetReportFile(_CRT_WARN, CreateFile("NUL", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, 0));
+    _CrtSetReportFile(_CRT_WARN, CreateFile("NUL", GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, 0));
 #endif
-    setbuf(stdin, NULL);
-    setbuf(stdout, NULL);
-    setbuf(stderr, NULL);
+    setbuf(stdin, nullptr);
+    setbuf(stdout, nullptr);
+    setbuf(stderr, nullptr);
 
     try
     {
         if (argc >= 2 && string(argv[1]) == "-server")
         {
             printf("server ready\n");
-            ThreadRPCServer(NULL);
+            ThreadRPCServer(nullptr);
         }
         else
         {
@@ -1555,7 +1550,7 @@ int main(int argc, char *argv[])
     catch (std::exception& e) {
         PrintException(&e, "main()");
     } catch (...) {
-        PrintException(NULL, "main()");
+        PrintException(nullptr, "main()");
     }
     return 0;
 }

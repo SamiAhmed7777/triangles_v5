@@ -72,10 +72,10 @@ private:
             nIdle--;
             lock.unlock();
 
-            for (unsigned int i = 0; i < vChecks.size(); i++)
+            for (auto& check : vChecks)
             {
                 if (fOk)
-                    fOk = vChecks[i]();
+                    fOk = check();
             }
             vChecks.clear();
 

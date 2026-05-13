@@ -14,7 +14,7 @@ extern unsigned int nTargetSpacing;
 // Set to 20-minute for production network
 //unsigned int nModifierInterval = MODIFIER_INTERVAL;
 
-typedef std::map<int, unsigned int> MapModifierCheckpoints;
+using MapModifierCheckpoints = std::map<int, unsigned int>;
 
 // Hard checkpoints of stake modifiers to ensure they are deterministic
 static std::map<int, unsigned int> mapStakeModifierCheckpoints = {

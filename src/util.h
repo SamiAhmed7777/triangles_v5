@@ -17,6 +17,10 @@
 #include <map>
 #include <vector>
 #include <string>
+#include <string_view>
+#include <sstream>
+#include <algorithm>
+#include <cstdio>
 
 #include <chrono>
 #include <thread>
@@ -24,6 +28,18 @@
 
 #include <openssl/sha.h>
 #include <openssl/ripemd.h>
+#include <openssl/opensslv.h>
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#define TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN \
+    _Pragma("GCC diagnostic push") \
+    _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
+#define TRI_OPENSSL_SUPPRESS_DEPRECATED_END \
+    _Pragma("GCC diagnostic pop")
+#else
+#define TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
+#define TRI_OPENSSL_SUPPRESS_DEPRECATED_END
+#endif
 
 #include "netbase.h" // for AddTimeData
 
@@ -33,8 +49,8 @@
 #include <stdint.h>
 #include <inttypes.h>
 
-static const int64_t COIN = 1000000;
-static const int64_t CENT = 10000;
+constexpr int64_t COIN = 1000000;
+constexpr int64_t CENT = 10000;
 
 #define BEGIN(a)            ((char*)&(a))
 #define END(a)              ((char*)&((&(a))[1]))
@@ -175,26 +191,29 @@ bool ATTR_WARN_PRINTF(1,2) error(const char *format, ...);
 #define printf OutputDebugStringF
 
 void LogException(std::exception* pex, const char* pszThread);
+
+// LogPrintf - variadic macro for logging to stderr (C++20 modernization: restored from removed definition)
+#define LogPrintf(...) fprintf(stderr, __VA_ARGS__)
 void PrintException(std::exception* pex, const char* pszThread);
 void PrintExceptionContinue(std::exception* pex, const char* pszThread);
-void ParseString(const std::string& str, char c, std::vector<std::string>& v);
+void ParseString(std::string_view str, char c, std::vector<std::string>& v);
 std::string FormatMoney(int64_t n, bool fPlus=false);
 bool ParseMoney(const std::string& str, int64_t& nRet);
 bool ParseMoney(const char* pszIn, int64_t& nRet);
 std::vector<unsigned char> ParseHex(const char* psz);
 std::vector<unsigned char> ParseHex(const std::string& str);
-bool IsHex(const std::string& str);
-std::vector<unsigned char> DecodeBase64(const char* p, bool* pfInvalid = NULL);
+bool IsHex(std::string_view str);
+std::vector<unsigned char> DecodeBase64(const char* p, bool* pfInvalid = nullptr);
 std::string DecodeBase64(const std::string& str);
 std::string EncodeBase64(const unsigned char* pch, size_t len);
 std::string EncodeBase64(const std::string& str);
-std::vector<unsigned char> DecodeBase32(const char* p, bool* pfInvalid = NULL);
+std::vector<unsigned char> DecodeBase32(const char* p, bool* pfInvalid = nullptr);
 std::string DecodeBase32(const std::string& str);
 std::string EncodeBase32(const unsigned char* pch, size_t len);
 std::string EncodeBase32(const std::string& str);
 void ParseParameters(int argc, const char*const argv[]);
 bool WildcardMatch(const char* psz, const char* mask);
-bool WildcardMatch(const std::string& str, const std::string& mask);
+bool WildcardMatch(std::string_view str, std::string_view mask);
 void FileCommit(FILE *fileout);
 bool RenameOver(std::filesystem::path src, std::filesystem::path dest);
 std::filesystem::path GetDefaultDataDir();
@@ -244,7 +263,7 @@ inline int64_t atoi64(const char* psz)
 #ifdef _MSC_VER
     return _atoi64(psz);
 #else
-    return strtoll(psz, NULL, 10);
+    return strtoll(psz, nullptr, 10);
 #endif
 }
 
@@ -253,7 +272,7 @@ inline int64_t atoi64(const std::string& str)
 #ifdef _MSC_VER
     return _atoi64(str.c_str());
 #else
-    return strtoll(str.c_str(), NULL, 10);
+    return strtoll(str.c_str(), nullptr, 10);
 #endif
 }
 
@@ -287,11 +306,57 @@ inline std::string leftTrim(std::string src, char chr)
     return src;
 }
 
+inline std::string TrimString(std::string str)
+{
+    auto start = str.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return {};
+    auto end = str.find_last_not_of(" \t\r\n");
+    return str.substr(start, end - start + 1);
+}
+
+inline std::string ToLower(std::string str)
+{
+    std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) { return std::tolower(c); });
+    return str;
+}
+
+inline void ReplaceAll(std::string& str, const std::string& from, const std::string& to)
+{
+    if (from.empty()) return;
+    size_t pos = 0;
+    while ((pos = str.find(from, pos)) != std::string::npos)
+    {
+        str.replace(pos, from.length(), to);
+        pos += to.length();
+    }
+}
+
+inline std::vector<std::string> SplitString(const std::string& str, char delim)
+{
+    std::vector<std::string> tokens;
+    std::istringstream iss(str);
+    std::string token;
+    while (std::getline(iss, token, delim))
+        tokens.push_back(token);
+    return tokens;
+}
+
+inline std::string JoinStrings(const std::vector<std::string>& parts, const std::string& sep)
+{
+    std::string result;
+    for (size_t i = 0; i < parts.size(); ++i)
+    {
+        if (i > 0) result += sep;
+        result += parts[i];
+    }
+    return result;
+}
+
 template<typename T>
 std::string HexStr(const T itbegin, const T itend, bool fSpaces=false)
 {
     std::string rv;
-    static const char hexmap[16] = { '0', '1', '2', '3', '4', '5', '6', '7',
+    static constexpr char hexmap[16] = { '0', '1', '2', '3', '4', '5', '6', '7',
                                      '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
     rv.reserve((itend-itbegin)*3);
     for(T it = itbegin; it < itend; ++it)
@@ -329,7 +394,7 @@ inline int64_t GetPerformanceCounter()
     QueryPerformanceCounter((LARGE_INTEGER*)&nCounter);
 #else
     timeval t;
-    gettimeofday(&t, NULL);
+    gettimeofday(&t, nullptr);
     nCounter = (int64_t) t.tv_sec * 1000000 + t.tv_usec;
 #endif
     return nCounter;
@@ -356,10 +421,10 @@ inline std::string DateTimeStrFormat(const char* pszFormat, int64_t nTime)
     return pszTime;
 }
 
-static const std::string strTimestampFormat = "%Y-%m-%d %H:%M:%S UTC";
+constexpr const char strTimestampFormat[] = "%Y-%m-%d %H:%M:%S UTC";
 inline std::string DateTimeStrFormat(int64_t nTime)
 {
-    return DateTimeStrFormat(strTimestampFormat.c_str(), nTime);
+    return DateTimeStrFormat(strTimestampFormat, nTime);
 }
 
 
@@ -386,7 +451,7 @@ inline bool IsSwitchChar(char c)
  * @param default (e.g. "1")
  * @return command-line argument or default value
  */
-std::string GetArg(const std::string& strArg, const std::string& strDefault);
+std::string GetArg(std::string_view strArg, std::string_view strDefault);
 
 /**
  * Return integer argument or default value
@@ -395,7 +460,7 @@ std::string GetArg(const std::string& strArg, const std::string& strDefault);
  * @param default (e.g. 1)
  * @return command-line argument (0 if invalid number) or default value
  */
-int64_t GetArg(const std::string& strArg, int64_t nDefault);
+int64_t GetArg(std::string_view strArg, int64_t nDefault);
 
 /**
  * Return boolean argument or default value
@@ -404,7 +469,7 @@ int64_t GetArg(const std::string& strArg, int64_t nDefault);
  * @param default (true or false)
  * @return command-line argument or default value
  */
-bool GetBoolArg(const std::string& strArg, bool fDefault=false);
+bool GetBoolArg(std::string_view strArg, bool fDefault=false);
 
 /**
  * Set an argument if it doesn't already have a value
@@ -413,7 +478,7 @@ bool GetBoolArg(const std::string& strArg, bool fDefault=false);
  * @param strValue Value (e.g. "1")
  * @return true if argument gets set, false if it already had a value
  */
-bool SoftSetArg(const std::string& strArg, const std::string& strValue);
+bool SoftSetArg(std::string_view strArg, std::string_view strValue);
 
 /**
  * Set a boolean argument if it doesn't already have a value
@@ -422,7 +487,7 @@ bool SoftSetArg(const std::string& strArg, const std::string& strValue);
  * @param fValue Value (e.g. false)
  * @return true if argument gets set, false if it already had a value
  */
-bool SoftSetBoolArg(const std::string& strArg, bool fValue);
+bool SoftSetBoolArg(std::string_view strArg, bool fValue);
 
 
 
@@ -453,7 +518,9 @@ public:
     int nVersion;
 
     void Init() {
+        TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
         SHA256_Init(&ctx);
+        TRI_OPENSSL_SUPPRESS_DEPRECATED_END
     }
 
     CHashWriter(int nTypeIn, int nVersionIn) : nType(nTypeIn), nVersion(nVersionIn) {
@@ -461,14 +528,18 @@ public:
     }
 
     CHashWriter& write(const char *pch, size_t size) {
+        TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
         SHA256_Update(&ctx, pch, size);
+        TRI_OPENSSL_SUPPRESS_DEPRECATED_END
         return (*this);
     }
 
     // invalidates the object
     uint256 GetHash() {
         uint256 hash1;
+        TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
         SHA256_Final((unsigned char*)&hash1, &ctx);
+        TRI_OPENSSL_SUPPRESS_DEPRECATED_END
         uint256 hash2;
         SHA256((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
         return hash2;
@@ -490,10 +561,12 @@ inline uint256 Hash(const T1 p1begin, const T1 p1end,
     static unsigned char pblank[1];
     uint256 hash1;
     SHA256_CTX ctx;
+    TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
     SHA256_Init(&ctx);
     SHA256_Update(&ctx, (p1begin == p1end ? pblank : (unsigned char*)&p1begin[0]), (p1end - p1begin) * sizeof(p1begin[0]));
     SHA256_Update(&ctx, (p2begin == p2end ? pblank : (unsigned char*)&p2begin[0]), (p2end - p2begin) * sizeof(p2begin[0]));
     SHA256_Final((unsigned char*)&hash1, &ctx);
+    TRI_OPENSSL_SUPPRESS_DEPRECATED_END
     uint256 hash2;
     SHA256((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
     return hash2;
@@ -507,11 +580,13 @@ inline uint256 Hash(const T1 p1begin, const T1 p1end,
     static unsigned char pblank[1];
     uint256 hash1;
     SHA256_CTX ctx;
+    TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
     SHA256_Init(&ctx);
     SHA256_Update(&ctx, (p1begin == p1end ? pblank : (unsigned char*)&p1begin[0]), (p1end - p1begin) * sizeof(p1begin[0]));
     SHA256_Update(&ctx, (p2begin == p2end ? pblank : (unsigned char*)&p2begin[0]), (p2end - p2begin) * sizeof(p2begin[0]));
     SHA256_Update(&ctx, (p3begin == p3end ? pblank : (unsigned char*)&p3begin[0]), (p3end - p3begin) * sizeof(p3begin[0]));
     SHA256_Final((unsigned char*)&hash1, &ctx);
+    TRI_OPENSSL_SUPPRESS_DEPRECATED_END
     uint256 hash2;
     SHA256((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
     return hash2;
@@ -530,7 +605,9 @@ inline uint160 Hash160(const std::vector<unsigned char>& vch)
     uint256 hash1;
     SHA256(&vch[0], vch.size(), (unsigned char*)&hash1);
     uint160 hash2;
+    TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
     RIPEMD160((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
+    TRI_OPENSSL_SUPPRESS_DEPRECATED_END
     return hash2;
 }
 
@@ -606,6 +683,9 @@ public:
 };
 
 bool NewThread(void(*pfn)(void*), void* parg);
+
+template<typename Callable, typename... Args>
+bool NewThreadT(Callable&& fn, Args&&... args);
 
 #ifdef WIN32
 inline void SetThreadPriority(int nPriority)

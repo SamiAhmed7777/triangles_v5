@@ -11,7 +11,6 @@
 #include "base58.h"
 
 #include <boost/date_time/posix_time/posix_time.hpp>
-#include <boost/algorithm/string.hpp>
 
 #define printf OutputDebugStringF
 
@@ -94,9 +93,9 @@ public:
     bool fSpent;
     CWalletTx* ptx;
     int nOut;
-    CTxDump(CWalletTx* ptx = NULL, int nOut = -1)
+    CTxDump(CWalletTx* ptx = nullptr, int nOut = -1)
     {
-        pindex = NULL;
+        pindex = nullptr;
         nValue = 0;
         fSpent = false;
         this->ptx = ptx;
@@ -167,8 +166,7 @@ Value importwallet(const Array& params, bool fHelp)
         if (line.empty() || line[0] == '#')
             continue;
 
-        std::vector<std::string> vstr;
-        boost::split(vstr, line, boost::is_any_of(" "));
+        auto vstr = SplitString(line, ' ');
         if (vstr.size() < 2)
             continue;
         CTrianglesSecret vchSecret;
@@ -189,13 +187,13 @@ Value importwallet(const Array& params, bool fHelp)
         std::string strLabel;
         bool fLabel = true;
         for (unsigned int nStr = 2; nStr < vstr.size(); nStr++) {
-            if (boost::algorithm::starts_with(vstr[nStr], "#"))
+            if (vstr[nStr].starts_with("#"))
                 break;
             if (vstr[nStr] == "change=1")
                 fLabel = false;
             if (vstr[nStr] == "reserve=1")
                 fLabel = false;
-            if (boost::algorithm::starts_with(vstr[nStr], "label=")) {
+            if (vstr[nStr].starts_with("label=")) {
                 strLabel = DecodeDumpString(vstr[nStr].substr(6));
                 fLabel = true;
             }
@@ -281,7 +279,7 @@ Value dumpwallet(const Array& params, bool fHelp)
     // sort time/key pairs
     std::vector<std::pair<int64_t, CKeyID> > vKeyBirth;
     for (std::map<CKeyID, int64_t>::const_iterator it = mapKeyBirth.begin(); it != mapKeyBirth.end(); it++) {
-        vKeyBirth.push_back(std::make_pair(it->second, it->first));
+        vKeyBirth.push_back({it->second, it->first});
     }
     mapKeyBirth.clear();
     std::sort(vKeyBirth.begin(), vKeyBirth.end());

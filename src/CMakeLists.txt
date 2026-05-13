@@ -62,6 +62,8 @@ set(CORE_SOURCES
     pbkdf2.cpp
     scrypt.cpp
     smessage.cpp
+    syncmanager.cpp
+    chaindb_migrate.cpp
     tor_embed_hooks.cpp
     rest.cpp
     trianglesrpc.cpp

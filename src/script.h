@@ -16,7 +16,7 @@
 #include "keystore.h"
 #include "bignum.h"
 
-typedef std::vector<unsigned char> valtype;
+using valtype = std::vector<unsigned char>;
 
 class CTransaction;
 
@@ -30,14 +30,13 @@ enum
 };
 
 
-enum txnouttype
+enum class TxnOutType
 {
-    TX_NONSTANDARD,
-    // 'standard' transaction types:
-    TX_PUBKEY,
-    TX_PUBKEYHASH,
-    TX_SCRIPTHASH,
-    TX_MULTISIG,
+    NonStandard,
+    PubKey,
+    PubKeyHash,
+    ScriptHash,
+    MultiSig,
 };
 
 class CNoDestination {
@@ -52,9 +51,9 @@ public:
  *  * CScriptID: TX_SCRIPTHASH destination
  *  A CTxDestination is the internal data type encoded in a CTrianglesAddress
  */
-typedef std::variant<CNoDestination, CKeyID, CScriptID> CTxDestination;
+using CTxDestination = std::variant<CNoDestination, CKeyID, CScriptID>;
 
-const char* GetTxnOutputType(txnouttype t);
+const char* GetTxnOutputType(TxnOutType t);
 
 /** Script opcodes */
 enum opcodetype
@@ -267,7 +266,7 @@ protected:
 
 public:
     CScript() { }
-    CScript(const CScript& b) : std::vector<unsigned char>(b.begin(), b.end()) { }
+    CScript(const CScript& b) = default;
     CScript(const_iterator pbegin, const_iterator pend) : std::vector<unsigned char>(pbegin, pend) { }
 #ifndef _MSC_VER
     CScript(const unsigned char* pbegin, const unsigned char* pend) : std::vector<unsigned char>(pbegin, pend) { }
@@ -590,19 +589,19 @@ public:
 
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, const CTransaction& txTo, unsigned int nIn, int nHashType);
-bool Solver(const CScript& scriptPubKey, txnouttype& typeRet, std::vector<std::vector<unsigned char> >& vSolutionsRet);
-int ScriptSigArgsExpected(txnouttype t, const std::vector<std::vector<unsigned char> >& vSolutions);
-bool IsStandard(const CScript& scriptPubKey);
-bool IsMine(const CKeyStore& keystore, const CScript& scriptPubKey);
-bool IsMine(const CKeyStore& keystore, const CTxDestination &dest);
+bool Solver(const CScript& scriptPubKey, TxnOutType& typeRet, std::vector<std::vector<unsigned char> >& vSolutionsRet);
+int ScriptSigArgsExpected(TxnOutType t, const std::vector<std::vector<unsigned char> >& vSolutions);
+[[nodiscard]] bool IsStandard(const CScript& scriptPubKey);
+[[nodiscard]] bool IsMine(const CKeyStore& keystore, const CScript& scriptPubKey);
+[[nodiscard]] bool IsMine(const CKeyStore& keystore, const CTxDestination &dest);
 void ExtractAffectedKeys(const CKeyStore &keystore, const CScript& scriptPubKey, std::vector<CKeyID> &vKeys);
 bool ExtractDestination(const CScript& scriptPubKey, CTxDestination& addressRet);
-bool ExtractDestinations(const CScript& scriptPubKey, txnouttype& typeRet, std::vector<CTxDestination>& addressRet, int& nRequiredRet);
-bool SignSignature(const CKeyStore& keystore, const CScript& fromPubKey, CTransaction& txTo, unsigned int nIn, int nHashType=SIGHASH_ALL);
-bool SignSignature(const CKeyStore& keystore, const CTransaction& txFrom, CTransaction& txTo, unsigned int nIn, int nHashType=SIGHASH_ALL);
-bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CTransaction& txTo, unsigned int nIn,
+bool ExtractDestinations(const CScript& scriptPubKey, TxnOutType& typeRet, std::vector<CTxDestination>& addressRet, int& nRequiredRet);
+[[nodiscard]] bool SignSignature(const CKeyStore& keystore, const CScript& fromPubKey, CTransaction& txTo, unsigned int nIn, int nHashType=SIGHASH_ALL);
+[[nodiscard]] bool SignSignature(const CKeyStore& keystore, const CTransaction& txFrom, CTransaction& txTo, unsigned int nIn, int nHashType=SIGHASH_ALL);
+[[nodiscard]] bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CTransaction& txTo, unsigned int nIn,
                   int nHashType);
-bool VerifySignature(const CTransaction& txFrom, const CTransaction& txTo, unsigned int nIn, int nHashType);
+[[nodiscard]] bool VerifySignature(const CTransaction& txFrom, const CTransaction& txTo, unsigned int nIn, int nHashType);
 
 // Given two sets of signatures for scriptPubKey, possibly with OP_0 placeholders,
 // combine them intelligently and return the result.

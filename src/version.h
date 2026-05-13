@@ -11,7 +11,7 @@
 // client versioning
 //
 
-static const int CLIENT_VERSION =
+constexpr int CLIENT_VERSION =
                            1000000 * CLIENT_VERSION_MAJOR
                          +   10000 * CLIENT_VERSION_MINOR
                          +     100 * CLIENT_VERSION_REVISION
@@ -24,35 +24,35 @@ extern const std::string CLIENT_DATE;
 //
 // database format versioning
 //
-static const int DATABASE_VERSION = 70509;
+constexpr int DATABASE_VERSION = 70509;
 
 //
 // network protocol versioning
 //
 
-static const int PROTOCOL_VERSION = 70206;
+constexpr int PROTOCOL_VERSION = 70206;
 
 // v5 hard fork: require new protocol version (disconnects old nodes)
-static const int MIN_PROTO_VERSION = 70205;
+constexpr int MIN_PROTO_VERSION = 70205;
 
 // Peers >= this version support the P2P UTXO snapshot protocol
 // (getsnap/snap/getsnapchunk/snapchunk and the NODE_SNAPSHOT service flag).
-static const int SNAPSHOT_PROTO_VERSION = 70206;
+constexpr int SNAPSHOT_PROTO_VERSION = 70206;
 
-static const int INIT_PROTO_VERSION = 209;
+constexpr int INIT_PROTO_VERSION = 209;
 
 // nTime field added to CAddress, starting with this version;
 // if possible, avoid requesting addresses nodes older than this
-static const int CADDR_TIME_VERSION = 70200;
+constexpr int CADDR_TIME_VERSION = 70200;
 
 // only request blocks from nodes outside this range of versions
-static const int NOBLKS_VERSION_START = 0;
-static const int NOBLKS_VERSION_END = 70203;
+constexpr int NOBLKS_VERSION_START = 0;
+constexpr int NOBLKS_VERSION_END = 70203;
 
 // BIP 0031, pong message, is enabled for all versions AFTER this one
-static const int BIP0031_VERSION = 60000;
+constexpr int BIP0031_VERSION = 60000;
 
 // "mempool" command, enhanced "getdata" behavior starts with this version:
-static const int MEMPOOL_GD_VERSION = 60002;
+constexpr int MEMPOOL_GD_VERSION = 60002;
 
 #endif

@@ -13,10 +13,10 @@
 #include <zmq.h>
 #include <string.h>
 
-CZMQPublishNotifier* pzmqNotifier = NULL;
+CZMQPublishNotifier* pzmqNotifier = nullptr;
 
 CZMQPublishNotifier::CZMQPublishNotifier()
-    : pcontext(NULL), psocket(NULL), fInitialized(false)
+    : pcontext(nullptr), psocket(nullptr), fInitialized(false)
 {
 }
 
@@ -40,7 +40,7 @@ bool CZMQPublishNotifier::Initialize(const std::string& addr)
     {
         printf("ZMQ: Failed to create socket\n");
         zmq_ctx_destroy(pcontext);
-        pcontext = NULL;
+        pcontext = nullptr;
         return false;
     }
 
@@ -50,8 +50,8 @@ bool CZMQPublishNotifier::Initialize(const std::string& addr)
         printf("ZMQ: Failed to bind to %s: %s\n", address.c_str(), zmq_strerror(errno));
         zmq_close(psocket);
         zmq_ctx_destroy(pcontext);
-        psocket = NULL;
-        pcontext = NULL;
+        psocket = nullptr;
+        pcontext = nullptr;
         return false;
     }
 
@@ -65,12 +65,12 @@ void CZMQPublishNotifier::Shutdown()
     if (psocket)
     {
         zmq_close(psocket);
-        psocket = NULL;
+        psocket = nullptr;
     }
     if (pcontext)
     {
         zmq_ctx_destroy(pcontext);
-        pcontext = NULL;
+        pcontext = nullptr;
     }
     fInitialized = false;
 }

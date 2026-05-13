@@ -54,7 +54,8 @@
 #endif
 
 // Ensure we have the global wallet pointer
-extern CWallet* pwalletMain;
+#include <memory>
+extern std::unique_ptr<CWallet> pwalletMain;
 
 // Static instance
 CTorV3Manager* CTorV3Manager::instance = nullptr;
@@ -997,7 +998,7 @@ bool CTorV3Service::ValidateOnionAddress(const std::string& address)
 bool CTorV3Service::ExtractKeysFromHex(const std::string& privKeyHex, unsigned char* privKey, unsigned char* pubKey)
 {
     if (!privKey || !pubKey) {
-        printf("ERROR: NULL pointers passed to ExtractKeysFromHex\n");
+        printf("ERROR: nullptr pointers passed to ExtractKeysFromHex\n");
         return false;
     }
     
@@ -1063,7 +1064,7 @@ bool CTorV3Service::ExtractKeysFromHex(const std::string& privKeyHex, unsigned c
 bool CTorV3Service::DerivePublicKeyFromPrivate(const unsigned char* privateKey, unsigned char* publicKey)
 {
     if (!privateKey || !publicKey) {
-        printf("ERROR: NULL pointer passed to DerivePublicKeyFromPrivate\n");
+        printf("ERROR: nullptr pointer passed to DerivePublicKeyFromPrivate\n");
         return false;
     }
     

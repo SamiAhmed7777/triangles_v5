@@ -40,7 +40,6 @@
 #include "strlcpy.h"
 #include "version.h"
 #include "ui_interface.h"
-#include <boost/algorithm/string/join.hpp>
 
 // Work around clang compilation problem in Boost 1.46:
 // /usr/include/boost/program_options/detail/config_file.hpp:163:17: error: call to function 'to_internal' that is neither visible in the template definition nor found by argument-dependent lookup
@@ -127,7 +126,7 @@ public:
     {
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
         // Shutdown OpenSSL library multithreading support (pre-1.1.0 only)
-        CRYPTO_set_locking_callback(NULL);
+        CRYPTO_set_locking_callback(nullptr);
         for (int i = 0; i < CRYPTO_num_locks(); i++)
             delete ppmutexOpenSSL[i];
         OPENSSL_free(ppmutexOpenSSL);
@@ -148,7 +147,7 @@ void RandAddSeed()
     // Seed with CPU performance counter
     int64_t nCounter = GetPerformanceCounter();
     RAND_add(&nCounter, sizeof(nCounter), 1.5);
-    memset(&nCounter, 0, sizeof(nCounter));
+    OPENSSL_cleanse(&nCounter, sizeof(nCounter));
 }
 
 void RandAddSeedPerfmon()
@@ -167,12 +166,12 @@ void RandAddSeedPerfmon()
     unsigned char pdata[250000];
     memset(pdata, 0, sizeof(pdata));
     unsigned long nSize = sizeof(pdata);
-    long ret = RegQueryValueExA(HKEY_PERFORMANCE_DATA, "Global", NULL, NULL, pdata, &nSize);
+    long ret = RegQueryValueExA(HKEY_PERFORMANCE_DATA, "Global", nullptr, nullptr, pdata, &nSize);
     RegCloseKey(HKEY_PERFORMANCE_DATA);
     if (ret == ERROR_SUCCESS)
     {
         RAND_add(pdata, nSize, nSize/100.0);
-        memset(pdata, 0, nSize);
+        OPENSSL_cleanse(pdata, nSize);
         printf("RandAddSeed() %lu bytes\n", nSize);
     }
 #endif
@@ -210,7 +209,7 @@ uint256 GetRandHash()
 
 
 
-static FILE* fileout = NULL;
+static FILE* fileout = nullptr;
 
 inline int OutputDebugStringF(const char* pszFormat, ...)
 {
@@ -231,7 +230,7 @@ inline int OutputDebugStringF(const char* pszFormat, ...)
         {
             std::filesystem::path pathDebug = GetDataDir() / "debug.log";
             fileout = fopen(pathDebug.string().c_str(), "a");
-            if (fileout) setbuf(fileout, NULL); // unbuffered
+            if (fileout) setbuf(fileout, nullptr); // unbuffered
         }
         if (fileout)
         {
@@ -241,22 +240,22 @@ inline int OutputDebugStringF(const char* pszFormat, ...)
             // Since the order of destruction of static/global objects is undefined,
             // allocate mutexDebugLog on the heap the first time this routine
             // is called to avoid crashes during shutdown.
-            static std::mutex* mutexDebugLog = NULL;
-            if (mutexDebugLog == NULL) mutexDebugLog = new std::mutex();
+            static std::mutex* mutexDebugLog = nullptr;
+            if (mutexDebugLog == nullptr) mutexDebugLog = new std::mutex();
             std::lock_guard<std::mutex> scoped_lock(*mutexDebugLog);
 
             // reopen the log file, if requested
             if (fReopenDebugLog) {
                 fReopenDebugLog = false;
                 std::filesystem::path pathDebug = GetDataDir() / "debug.log";
-                if (freopen(pathDebug.string().c_str(),"a",fileout) != NULL)
-                    setbuf(fileout, NULL); // unbuffered
+                if (freopen(pathDebug.string().c_str(),"a",fileout) != nullptr)
+                    setbuf(fileout, nullptr); // unbuffered
             }
 
             // Debug print useful for profiling
             if (fLogTimestamps && fStartedNewLine)
                 fprintf(fileout, "%s ", DateTimeStrFormat("%x %H:%M:%S", GetTime()).c_str());
-            if (pszFormat[strlen(pszFormat) - 1] == '\n')
+            if (pszFormat[0] != '\0' && pszFormat[strlen(pszFormat) - 1] == '\n')
                 fStartedNewLine = true;
             else
                 fStartedNewLine = false;
@@ -318,7 +317,7 @@ string vstrprintf(const char *format, va_list ap)
             delete[] p;
         limit *= 2;
         p = new char[limit];
-        if (p == NULL)
+        if (p == nullptr)
             throw std::bad_alloc();
     }
     string str(p, p+ret);
@@ -464,7 +463,7 @@ static const signed char phexdigit[256] =
   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1, };
 
-bool IsHex(const string& str)
+bool IsHex(std::string_view str)
 {
     for (unsigned char c : str)
     {
@@ -599,6 +598,37 @@ bool SoftSetBoolArg(const std::string& strArg, bool fValue)
         return SoftSetArg(strArg, std::string("1"));
     else
         return SoftSetArg(strArg, std::string("0"));
+}
+
+// C++20 modernization: std::string_view overloads delegating to std::string implementations
+std::string GetArg(std::string_view strArg, std::string_view strDefault)
+{
+    return GetArg(std::string(strArg), std::string(strDefault));
+}
+
+int64_t GetArg(std::string_view strArg, int64_t nDefault)
+{
+    return GetArg(std::string(strArg), nDefault);
+}
+
+bool GetBoolArg(std::string_view strArg, bool fDefault)
+{
+    return GetBoolArg(std::string(strArg), fDefault);
+}
+
+bool SoftSetArg(std::string_view strArg, std::string_view strValue)
+{
+    return SoftSetArg(std::string(strArg), std::string(strValue));
+}
+
+bool SoftSetBoolArg(std::string_view strArg, bool fValue)
+{
+    return SoftSetBoolArg(std::string(strArg), fValue);
+}
+
+bool WildcardMatch(std::string_view str, std::string_view mask)
+{
+    return WildcardMatch(std::string(str), std::string(mask));
 }
 
 
@@ -970,7 +1000,7 @@ static std::string FormatException(std::exception* pex, const char* pszThread)
 {
 #ifdef WIN32
     char pszModule[MAX_PATH] = "";
-    GetModuleFileNameA(NULL, pszModule, sizeof(pszModule));
+    GetModuleFileNameA(nullptr, pszModule, sizeof(pszModule));
 #else
     const char* pszModule = "Triangles";
 #endif
@@ -1031,7 +1061,7 @@ std::filesystem::path GetDefaultDataDir()
 #else
     fs::path pathRet;
     char* pszHome = getenv("HOME");
-    if (pszHome == NULL || strlen(pszHome) == 0)
+    if (pszHome == nullptr || strlen(pszHome) == 0)
         pathRet = fs::path("/");
     else
         pathRet = fs::path(pszHome);
@@ -1084,7 +1114,7 @@ const std::filesystem::path &GetDataDir(bool fNetSpecific)
 
 std::filesystem::path GetConfigFile()
 {
-    std::filesystem::path pathConfigFile(GetArg("-conf", "triangles.conf"));
+    std::filesystem::path pathConfigFile(GetArg(std::string_view{"-conf"}, std::string_view{"triangles.conf"}));
     if (!pathConfigFile.is_absolute()) pathConfigFile = GetDataDir(false) / pathConfigFile;
     return pathConfigFile;
 }
@@ -1115,7 +1145,7 @@ void ReadConfigFile(map<string, string>& mapSettingsRet,
 
 std::filesystem::path GetPidFile()
 {
-    std::filesystem::path pathPidFile(GetArg("-pid", "trianglesd.pid"));
+    std::filesystem::path pathPidFile(GetArg(std::string_view{"-pid"}, std::string_view{"trianglesd.pid"}));
     if (!pathPidFile.is_absolute()) pathPidFile = GetDataDir() / pathPidFile;
     return pathPidFile;
 }
@@ -1188,7 +1218,7 @@ int64_t GetTime()
 {
     if (nMockTime) return nMockTime;
 
-    return time(NULL);
+    return time(nullptr);
 }
 
 void SetMockTime(int64_t nMockTimeIn)
@@ -1288,7 +1318,7 @@ std::string FormatSubVersion(const std::string& name, int nClientVersion, const 
     ss << "/";
     ss << name << ":" << FormatVersion(nClientVersion);
     if (!comments.empty())
-        ss << "(" << boost::algorithm::join(comments, "; ") << ")";
+        ss << "(" << JoinStrings(comments, "; ") << ")";
     ss << "/";
     return ss.str();
 }
@@ -1300,7 +1330,7 @@ std::filesystem::path GetSpecialFolderPath(int nFolder, bool fCreate)
 
     char pszPath[MAX_PATH] = "";
 
-    if(SHGetSpecialFolderPathA(NULL, pszPath, nFolder, fCreate))
+    if(SHGetSpecialFolderPathA(nullptr, pszPath, nFolder, fCreate))
     {
         return fs::path(pszPath);
     }
@@ -1343,6 +1373,19 @@ bool NewThread(void(*pfn)(void*), void* parg)
     try
     {
         std::thread(pfn, parg).detach();
+    } catch(const std::system_error& e) {
+        printf("Error creating thread: %s\n", e.what());
+        return false;
+    }
+    return true;
+}
+
+template<typename Callable, typename... Args>
+bool NewThreadT(Callable&& fn, Args&&... args)
+{
+    try
+    {
+        std::thread(std::forward<Callable>(fn), std::forward<Args>(args)...).detach();
     } catch(const std::system_error& e) {
         printf("Error creating thread: %s\n", e.what());
         return false;

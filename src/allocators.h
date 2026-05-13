@@ -66,7 +66,7 @@ public:
             if(it == histogram.end()) // Newly locked page
             {
                 locker.Lock(reinterpret_cast<void*>(page), page_size);
-                histogram.insert(std::make_pair(page, 1));
+                histogram.insert({page, 1});
             }
             else // Page was already locked; increase counter
             {
@@ -193,25 +193,25 @@ struct secure_allocator : public std::allocator<T>
     typedef const T&       const_reference;
     typedef std::size_t    size_type;
     typedef std::ptrdiff_t difference_type;
-    secure_allocator() throw() {}
-    secure_allocator(const secure_allocator& a) throw() : base(a) {}
+    secure_allocator() noexcept {}
+    secure_allocator(const secure_allocator& a) noexcept : base(a) {}
     template <typename U>
-    secure_allocator(const secure_allocator<U>& a) throw() : base(a) {}
-    ~secure_allocator() throw() {}
+    secure_allocator(const secure_allocator<U>& a) noexcept : base(a) {}
+    ~secure_allocator() noexcept {}
     template<typename _Other> struct rebind
     { typedef secure_allocator<_Other> other; };
 
     T* allocate(std::size_t n)
     {
         T* p = std::allocator<T>::allocate(n);
-        if (p != NULL)
+        if (p != nullptr)
             LockedPageManager::instance.LockRange(p, sizeof(T) * n);
         return p;
     }
 
     void deallocate(T* p, std::size_t n)
     {
-        if (p != NULL)
+        if (p != nullptr)
         {
             memset(p, 0, sizeof(T) * n);
             LockedPageManager::instance.UnlockRange(p, sizeof(T) * n);
@@ -237,24 +237,24 @@ struct zero_after_free_allocator : public std::allocator<T>
     typedef const T&       const_reference;
     typedef std::size_t    size_type;
     typedef std::ptrdiff_t difference_type;
-    zero_after_free_allocator() throw() {}
-    zero_after_free_allocator(const zero_after_free_allocator& a) throw() : base(a) {}
+    zero_after_free_allocator() noexcept {}
+    zero_after_free_allocator(const zero_after_free_allocator& a) noexcept : base(a) {}
     template <typename U>
-    zero_after_free_allocator(const zero_after_free_allocator<U>& a) throw() : base(a) {}
-    ~zero_after_free_allocator() throw() {}
+    zero_after_free_allocator(const zero_after_free_allocator<U>& a) noexcept : base(a) {}
+    ~zero_after_free_allocator() noexcept {}
     template<typename _Other> struct rebind
     { typedef zero_after_free_allocator<_Other> other; };
 
     void deallocate(T* p, std::size_t n)
     {
-        if (p != NULL)
+        if (p != nullptr)
             memset(p, 0, sizeof(T) * n);
         std::allocator<T>::deallocate(p, n);
     }
 };
 
 // This is exactly like std::string, but with a custom allocator.
-typedef std::basic_string<char, std::char_traits<char>, secure_allocator<char> > SecureString;
+using SecureString = std::basic_string<char, std::char_traits<char>, secure_allocator<char>>;
 
 static inline SecureString MakeSecureString(const std::string& value)
 {

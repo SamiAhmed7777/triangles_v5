@@ -89,7 +89,8 @@
 
 #include <iostream>
 
-extern CWallet* pwalletMain;
+#include <memory>
+extern std::unique_ptr<CWallet> pwalletMain;
 extern int64_t nLastCoinStakeSearchInterval;
 extern unsigned int nTargetSpacing;
 double GetPoSKernelPS();
@@ -655,7 +656,7 @@ void TrianglesGUI::ensureMessageModel()
     if(messageModel || !walletModel)
         return;
 
-    setMessageModel(new MessageModel(pwalletMain, walletModel, this));
+    setMessageModel(new MessageModel(pwalletMain.get(), walletModel, this));
 }
 
 void TrianglesGUI::ensureSendCoinsPage()

@@ -18,11 +18,11 @@ static const char *strMainNetOnionSeed[][1] = {
     {"on4noksywc7b6cdbbxsp535l7j4cugunvlyz3iyhf6sfcg2qzaoy3eqd.onion"},
     // Contabo seed 4
     {"3uyzltm5cy7xzunncp3d7ariw75erabdnj4l3cxwvsxb6h4orc7eiqad.onion"},
-    {NULL}
+    {nullptr}
 };
 
 static const char *strTestNetOnionSeed[][1] = {
-    {NULL}
+    {nullptr}
 };
 
 #endif

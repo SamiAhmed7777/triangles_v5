@@ -46,7 +46,7 @@ struct {
 // NOTE: These tests rely on CreateNewBlock doing its own self-validation!
 BOOST_AUTO_TEST_CASE(CreateNewBlock_validity)
 {
-    CReserveKey reservekey(pwalletMain);
+    CReserveKey reservekey(pwalletMain.get());
     CBlock *pblock;
     CTransaction tx;
     CScript script;

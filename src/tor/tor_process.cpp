@@ -75,8 +75,8 @@ CTorProcess::CTorProcess()
     , hiddenServiceEnabled(true)
     , running(false)
 #ifdef WIN32
-    , hProcess(NULL)
-    , hJob(NULL)
+    , hProcess(nullptr)
+    , hJob(nullptr)
     , processId(0)
 #else
     , processId(0)
@@ -97,7 +97,7 @@ std::string CTorProcess::FindTorBinary()
 #ifdef WIN32
     // Same directory as the wallet executable
     char exePath[MAX_PATH];
-    if (GetModuleFileNameA(NULL, exePath, MAX_PATH)) {
+    if (GetModuleFileNameA(nullptr, exePath, MAX_PATH)) {
         fs::path exeDir = fs::path(exePath).parent_path();
         candidates.push_back((exeDir / "tor.exe").string());
         candidates.push_back((exeDir / "tor" / "tor.exe").string());
@@ -405,12 +405,12 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
     std::string cmdLine = "\"" + torBinaryPath + "\" -f \"" + torrcPath + "\"";
 
     if (!CreateProcessA(
-            NULL,
+            nullptr,
             (LPSTR)cmdLine.c_str(),
-            NULL, NULL,
+            nullptr, nullptr,
             FALSE,
             CREATE_NO_WINDOW,
-            NULL, NULL,
+            nullptr, nullptr,
             &si, &pi))
     {
         DWORD err = ::GetLastError();
@@ -427,7 +427,7 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
     // killed via Task Manager.  JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE means
     // all processes in the job die when the last handle to the job closes
     // (i.e. when our process exits for any reason).
-    hJob = CreateJobObject(NULL, NULL);
+    hJob = CreateJobObject(nullptr, nullptr);
     if (hJob) {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobInfo = {};
         jobInfo.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -452,7 +452,7 @@ bool CTorProcess::Start(const std::string& dataDir, int socks, int hsPort, bool 
         freopen("/dev/null", "w", stdout);
         freopen("/dev/null", "w", stderr);
         execl(torBinaryPath.c_str(), torBinaryPath.c_str(),
-              "-f", torrcPath.c_str(), (char*)NULL);
+              "-f", torrcPath.c_str(), (char*)nullptr);
         // If exec fails, exit child
         _exit(1);
     }
@@ -514,16 +514,16 @@ void CTorProcess::Stop()
     if (!running) return;
 
 #ifdef WIN32
-    if (hProcess != NULL) {
+    if (hProcess != nullptr) {
         printf("Stopping Tor process (PID %lu)...\n", processId);
         TerminateProcess(hProcess, 0);
         WaitForSingleObject(hProcess, 5000);
         CloseHandle(hProcess);
-        hProcess = NULL;
+        hProcess = nullptr;
     }
-    if (hJob != NULL) {
+    if (hJob != nullptr) {
         CloseHandle(hJob);
-        hJob = NULL;
+        hJob = nullptr;
     }
 #else
     if (processId > 0) {
@@ -538,7 +538,7 @@ void CTorProcess::Stop()
         }
         // Force kill if still running
         kill(processId, SIGKILL);
-        waitpid(processId, NULL, 0);
+        waitpid(processId, nullptr, 0);
     }
 #endif
 
@@ -552,7 +552,7 @@ bool CTorProcess::IsRunning()
     if (!running) return false;
 
 #ifdef WIN32
-    if (hProcess == NULL) return false;
+    if (hProcess == nullptr) return false;
     DWORD exitCode;
     if (GetExitCodeProcess(hProcess, &exitCode)) {
         return (exitCode == STILL_ACTIVE);
