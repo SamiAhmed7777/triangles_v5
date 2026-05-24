@@ -1324,10 +1324,12 @@ bool IsInitialBlockDownload()
         pindexLastBest = pindexBest;
         nLastUpdate = GetTime();
     }
-    // IBD is complete once we've passed the checkpoint height estimate.
-    // The previous >24h block-time check incorrectly kept IBD true when the
-    // chain was synced but simply stalled (no new blocks arriving), which
-    // prevented the stake miner from ever proceeding.
+    // IBD is complete once we've passed the checkpoint AND the chain tip is
+    // recent (within 24h). This prevents a stall AFTER checkpoint from
+    // permanently disabling header fetching. The forcestaking path above
+    // handles the specific staking-broker scenario.
+    if (GetTime() - nLastUpdate > 24 * 60 * 60)
+        return true;
     return false;
 }
 
@@ -4043,14 +4045,23 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         // parallelism. Multiple peers sending overlapping inv ranges is harmless
         // (AlreadyHave filters duplicates) but ensures we discover and download
         // blocks from the fastest available source.
+        // NOTE: nStartingHeight from version messages is unverified. Peers can
+        // claim any height. During IBD we always ask all eligible peers rather
+        // than filtering on a claim that may be wrong (a stunted node could be
+        // reporting the full chain height while only serving the tail of its
+        // own fork). Use nBestKnownHeight (updated from actual block responses)
+        // for peer capability assessment instead.
         static int nAskedForBlocks = 0;
         bool fIBD = IsInitialBlockDownload();
-        bool fBehindPeer = (pfrom->nStartingHeight > nBestHeight);
+        // During IBD: ask every non-client peer unconditionally to maximise
+        // download sources. Post-IBD: use traditional height-check logic.
         bool fShouldAsk = !pfrom->fClient && !pfrom->fOneShot &&
-            (pfrom->nStartingHeight > (nBestHeight - 144)) &&
+            (fIBD ||
+             pfrom->nStartingHeight > (nBestHeight - 144) ||
+             pfrom->nStartingHeight > nBestHeight) &&
             (pfrom->nVersion < NOBLKS_VERSION_START ||
              pfrom->nVersion >= NOBLKS_VERSION_END) &&
-             (fIBD || nAskedForBlocks < 1 || vNodes.size() <= 1 || fBehindPeer);
+             (fIBD || nAskedForBlocks < 1 || vNodes.size() <= 1 || pfrom->nStartingHeight > nBestHeight);
         printf("IBD-DIAG: version handler: peer=%s height=%d ourHeight=%d fClient=%d fOneShot=%d shouldAsk=%d nAskedForBlocks=%d IBD=%d\n",
             pfrom->addr.ToString().c_str(), pfrom->nStartingHeight, nBestHeight,
             pfrom->fClient, pfrom->fOneShot, fShouldAsk, nAskedForBlocks, fIBD);
