@@ -4372,19 +4372,25 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         // GetBlockIndex() fell through to genesis (no locator hash matched
         // our main chain). If the peer's tip isn't our genesis,
         // they're on a completely different fork.
+        //
+        // triangles fix: instead of banning or disconnecting, always respond
+        // with our main chain blocks so a fork node can learn the canonical
+        // chain and reorganize. The fork node's client will automatically
+        // reorg when it receives blocks that form a longer or higher-work chain.
         if (!locator.IsNull() && pindex == pindexGenesisBlock &&
             pindexGenesisBlock && locator.GetTipHash() != pindexGenesisBlock->GetBlockHash())
         {
             pfrom->nIncompatibleGetblocks++;
-            if (pfrom->nIncompatibleGetblocks >= 3)
-            {
-                printf("WARNING: peer %s sent %d getblocks with no common blocks — disconnecting (incompatible fork)\n",
-                    pfrom->addr.ToString().c_str(), pfrom->nIncompatibleGetblocks);
-                pfrom->Misbehaving(100);
-                return true;
-            }
-            printf("WARNING: peer %s getblocks locator has no common blocks (%d/3 before ban)\n",
+            // triangles: after many failed attempts, reset — the peer may now be
+            // on the correct chain and we don't want to ban a node that's just
+            // learning about the main chain from us.
+            if (pfrom->nIncompatibleGetblocks > 10)
+                pfrom->nIncompatibleGetblocks = 0;
+            // triangles: NO return/ban here — fall through and serve main chain
+            // blocks so the forking peer can reorg to our chain.
+            printf("WARNING: peer %s getblocks locator has no common blocks — serving main chain from genesis (counter=%d, will reset after 10)\\n",
                 pfrom->addr.ToString().c_str(), pfrom->nIncompatibleGetblocks);
+            pindex = pindexGenesisBlock;
         }
         else if (pindex && pindex != pindexGenesisBlock)
         {
