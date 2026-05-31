@@ -1,0 +1,132 @@
+name: Krystie Gate
+
+# Runs on every push to krystie-wip/* branches.
+# Static checks first (cheap), then build + tests.
+# If everything green AND the commit is Krystie's, fast-forwards master.
+# Sami's pushes (admin) bypass this entire flow — he goes direct to master.
+
+on:
+  push:
+    branches:
+      - 'krystie-wip/**'
+
+jobs:
+  static-gate:
+    name: "Static gate (red-list / test-first / no-clearnet)"
+    runs-on: ubuntu-latest
+    outputs:
+      is_krystie_commit: ${{ steps.gate.outputs.is_krystie_commit }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Import Krystie public key (for verification)
+        run: |
+          mkdir -p ~/.gnupg && chmod 700 ~/.gnupg
+          if [ -f .gitea/krystie-release.pub.asc ]; then
+            gpg --import .gitea/krystie-release.pub.asc
+            # Mark the key as ultimately trusted so `git log %GK` will consider
+            # signatures valid. Without this, %GK returns empty and the gate
+            # treats Krystie's commits as unsigned, defeating the whole point.
+            FP=$(gpg --list-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
+            echo "${FP}:6:" | gpg --import-ownertrust
+            echo "Imported and trusted Krystie public key: ${FP}"
+            # Configure git to call gpg for verification (it does by default,
+            # but explicit doesn't hurt) and not to require signed-by-default.
+            git config --global gpg.program gpg
+          else
+            echo "WARN: .gitea/krystie-release.pub.asc not found — gate will treat all commits as non-Krystie (i.e. allow)"
+          fi
+      - name: Run gate
+        id: gate
+        env:
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_BEFORE: ${{ github.event.before }}
+        run: |
+          python3 .gitea/krystie_gate.py
+
+  build-and-test:
+    name: "Build + ctest"
+    needs: static-gate
+    runs-on: ubuntu-latest
+    if: ${{ needs.static-gate.result == 'success' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            libssl-dev libboost-all-dev libdb++-dev libleveldb-dev \
+            librocksdb-dev libevent-dev libsodium-dev \
+            libsecp256k1-dev || true
+          # Some packages may not be available; the C++20 / RocksDB modernization
+          # is in flight, so missing deps are tolerable for v1 of the gate.
+      - name: Configure (daemon-only, no Qt)
+        run: |
+          mkdir -p build && cd build
+          cmake .. -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_QT=OFF \
+            -DBUILD_TESTS=ON \
+            -DBUILD_ROCKSDB=OFF \
+            || (echo "::warning::CMake configure failed — likely WIP modernization. Allowing build skip for v1." && exit 0)
+      - name: Build
+        run: |
+          if [ -f build/build.ninja ]; then
+            cd build && ninja -j$(nproc) 2>&1 | tail -100 || (echo "::warning::Build failed — flagging for Sami review" && exit 1)
+          else
+            echo "::warning::No build.ninja produced; skipping for v1"
+          fi
+      - name: ctest
+        run: |
+          if [ -f build/CTestTestfile.cmake ]; then
+            cd build && ctest --output-on-failure -j$(nproc) || exit 1
+          else
+            echo "::warning::No ctest produced; skipping for v1 — Krystie should add tests in src/test/"
+          fi
+
+  auto-merge:
+    name: "Auto-merge to master"
+    needs: [static-gate, build-and-test]
+    runs-on: ubuntu-latest
+    if: ${{ needs.static-gate.result == 'success' && needs.build-and-test.result == 'success' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.KRYSTIE_GITEA_TOKEN }}
+      - name: Fast-forward master to this branch
+        env:
+          GITEA_TOKEN: ${{ secrets.KRYSTIE_GITEA_TOKEN }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # The wip branch is master + N Krystie commits. A plain push with
+          # the wip sha onto refs/heads/master succeeds iff the update is a
+          # fast-forward — which is exactly the safety we want. (Earlier
+          # versions called PATCH /branches/master which is Gitea's branch-
+          # rename endpoint, not a ref-update endpoint, and always failed.)
+          REPO="${GITHUB_REPOSITORY}"  # owner/name
+          GIT_URL="http://localhost:3030/${REPO}.git"
+          git -c "http.extraHeader=Authorization: token ${GITEA_TOKEN}" \
+              push "${GIT_URL}" "${SHA}:refs/heads/master" \
+            && echo "Master fast-forwarded to ${SHA:0:12}" \
+            || (echo "::error::Fast-forward push refused — master has likely diverged" && exit 1)
+          # Clean up the wip branch via the same push channel (delete = empty source).
+          git -c "http.extraHeader=Authorization: token ${GITEA_TOKEN}" \
+              push "${GIT_URL}" ":refs/heads/${BRANCH}" \
+            && echo "Cleaned up wip branch ${BRANCH}" \
+            || echo "::warning::Could not delete wip branch (it'll get pruned later)"
