@@ -2822,7 +2822,12 @@ bool CBlock::CheckBlock(bool fCheckPOW, bool fCheckMerkleRoot, bool fCheckSig) c
             return DoS(100, error("CheckBlock() : more than one coinbase"));
 
     // Check coinbase timestamp
-    if (GetBlockTime() > FutureDrift((int64_t)vtx[0].nTime))
+    // NOTE: Must use the pre-fork (10-minute) drift tolerance here because
+    // CheckBlock() is context-free (no nHeight) and can be called on blocks
+    // at any height, including during chain reorgs from old fork chains.
+    // The tight 90-second drift for post-fork blocks is enforced separately
+    // in AcceptBlock/ConnectBlock with proper height context.
+    if (GetBlockTime() > (int64_t)vtx[0].nTime + 10 * 60)
         return DoS(50, error("CheckBlock() : coinbase timestamp is too early"));
 
     if (IsProofOfStake())
