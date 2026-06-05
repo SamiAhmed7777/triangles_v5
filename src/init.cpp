@@ -417,7 +417,7 @@ std::string HelpMessage()
         //"  -proxy=<ip:port>       " + _("Connect through socks proxy") + "\n" +
         //"  -socks=<n>             " + _("Select the version of socks proxy to use (4-5, default: 5)") + "\n" +
         "  -tor=<ip:port>         " + _("Use proxy to reach tor hidden services (default: same as -proxy)") + "\n"
-        "  -notor                 " + _("Disable Tor (WARNING: wallet will not start - Tor is required)") + "\n" +
+        "  -notor                 " + _("Disable Tor - run in clearnet-only mode (no .onion connectivity)") + "\n" +
         "  -torsocks=<port>       " + _("Set embedded or managed Tor SOCKS proxy port (default: 19099)") + "\n" +
         "  -torhiddenservice      " + _("Enable the managed Tor hidden service (default: 1)") + "\n" +
         "  -torhsport=<port>      " + _("Set embedded or managed Tor hidden service port (default: wallet listen port)") + "\n" +
@@ -927,7 +927,8 @@ bool AppInit2()
     // v5.9.5: P2P UTXO snapshot fetch is the default for fresh installs (Step 11.6).
     // The legacy clearnet HTTP bootstrap only runs when the user explicitly requests
     // it via -bootstrap, or when -snapshot=0 disables the P2P fetcher.
-#ifndef QT_GUI
+// Bootstrap auto-download works for both GUI and daemon.
+    // GUI users get the same automatic bootstrap on fresh installs.
     {
         bool wantsBootstrap = GetBoolArg("-bootstrap", false);
         bool noBootstrap = GetBoolArg("-nobootstrap", false);
@@ -938,6 +939,7 @@ bool AppInit2()
         if (needsBootstrap && !noBootstrap && !snapshotMode) {
             printf("Bootstrap: no blockchain data found — downloading automatically.\n");
             printf("Bootstrap: (use -nobootstrap to skip)\n");
+            uiInterface.InitMessage(_("Downloading blockchain data..."));
             wantsBootstrap = true;
         } else if (needsBootstrap && snapshotMode && !wantsBootstrap) {
             printf("Bootstrap: no blockchain data found — will fetch UTXO snapshot via P2P after network start.\n");
@@ -951,13 +953,24 @@ bool AppInit2()
         std::string host = Bootstrap::DEFAULT_HOST;
         std::string strError;
 
-        auto progressFn = [](int64_t bytesDownloaded, int64_t totalBytes) {
+        int64_t lastGuiUpdate = 0;
+        auto progressFn = [&lastGuiUpdate](int64_t bytesDownloaded, int64_t totalBytes) {
             if (totalBytes > 0) {
                 printf("\rBootstrap: %lld / %lld MB (%lld%%)",
                        (long long)(bytesDownloaded / (1024*1024)),
                        (long long)(totalBytes / (1024*1024)),
                        (long long)((bytesDownloaded * 100) / totalBytes));
                 fflush(stdout);
+                // Update GUI status bar every ~1 MB
+                int64_t now = GetTimeMillis();
+                if (now - lastGuiUpdate > 1000) {
+                    lastGuiUpdate = now;
+                    std::string msg = strprintf("Downloading blockchain: %lld / %lld MB (%lld%%)",
+                        (long long)(bytesDownloaded / (1024*1024)),
+                        (long long)(totalBytes / (1024*1024)),
+                        (long long)((bytesDownloaded * 100) / totalBytes));
+                    uiInterface.InitMessage(msg);
+                }
             }
         };
 
@@ -999,7 +1012,6 @@ bool AppInit2()
             strprintf("host=%s success=%d utxo_snapshot=%d", host.c_str(), success, triedUtxoSnapshot));
     }
     } // end bootstrap scope
-#endif
 
     // ********************************************************* Step 6c: manual UTXO snapshot loading
     // If utxo-snapshot.bin exists in data dir and the chain DB hasn't been
@@ -1343,6 +1355,15 @@ bool AppInit2()
             #ifdef USE_UPNP
             fUseUPnP = false;
             #endif
+        } else if (GetBoolArg("-notor", false)) {
+            // -notor: user explicitly disabled Tor.  Allow the daemon to start
+            // in clearnet-only mode (useful for diagnostics, benchmarking, and
+            // recovery).  .onion connectivity will not be available.
+            printf("NOTICE: Tor disabled via -notor. Running in clearnet-only mode.\n");
+            printf("  .onion connections will NOT be available.\n");
+            SetReachable(NET_IPV4, true);
+            SetReachable(NET_IPV6, true);
+            SetReachable(NET_TOR, false);
         } else {
             std::string torError = CTorEmbedded::GetInstance()->GetStartupError();
             if (torError.empty())

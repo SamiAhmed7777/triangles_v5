@@ -71,3 +71,10 @@ triangles.conf
 *.o
 src/trianglesd
 src/obj/
+build-bench/
+build-cmake/
+build-cmake-test/
+build-latest/
+build-rocks-probe/
+build-rocksdb/
+bench-results.csv

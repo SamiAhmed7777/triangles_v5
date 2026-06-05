@@ -546,10 +546,17 @@ int ReadHTTP(std::basic_istream<char>& stream, map<string, string>& mapHeadersRe
 bool HTTPAuthorized(map<string, string>& mapHeaders)
 {
     string strAuth = mapHeaders["authorization"];
-    if (strAuth.substr(0,6) != "Basic ")
+    if (strAuth.size() < 6 || strAuth.substr(0,6) != "Basic ")
         return false;
     string strUserPass64 = strAuth.substr(6); strUserPass64 = TrimString(strUserPass64);
-    string strUserPass = DecodeBase64(strUserPass64);
+    if (strUserPass64.empty())
+        return false;
+    string strUserPass;
+    try {
+        strUserPass = DecodeBase64(strUserPass64);
+    } catch (const std::exception&) {
+        return false;
+    }
     return TimingResistantEqual(strUserPass, strRPCUserColonPass);
 }
 
@@ -783,44 +790,61 @@ static void RPCAcceptHandler(boost::shared_ptr< basic_socket_acceptor<Protocol, 
 {
     vnThreadsRunning[THREAD_RPCLISTENER]++;
 
-    // Immediately start accepting new connections, except when we're cancelled or our socket is closed.
-    if (error != asio::error::operation_aborted
-     && acceptor->is_open())
-        RPCListen(acceptor, context, fUseSSL);
+    try {
+        // Immediately start accepting new connections, except when we're cancelled or our socket is closed.
+        if (error != asio::error::operation_aborted
+         && acceptor->is_open())
+            RPCListen(acceptor, context, fUseSSL);
 
-    AcceptedConnectionImpl<ip::tcp>* tcp_conn = dynamic_cast< AcceptedConnectionImpl<ip::tcp>* >(conn);
+        AcceptedConnectionImpl<ip::tcp>* tcp_conn = dynamic_cast< AcceptedConnectionImpl<ip::tcp>* >(conn);
 
-    if (error)
-    {
-        if (error != asio::error::operation_aborted)
-            printf("RPC accept error from %s: %s (%d)\n",
-                   tcp_conn ? tcp_conn->peer.address().to_string().c_str() : "unknown peer",
-                   error.message().c_str(),
-                   error.value());
+        if (error)
+        {
+            if (error != asio::error::operation_aborted)
+                printf("RPC accept error from %s: %s (%d)\n",
+                       tcp_conn ? tcp_conn->peer.address().to_string().c_str() : "unknown peer",
+                       error.message().c_str(),
+                       error.value());
+            delete conn;
+            vnThreadsRunning[THREAD_RPCLISTENER]--;
+            return;
+        }
+
+        // Restrict callers by IP.  It is important to
+        // do this before starting client thread, to filter out
+        // certain DoS and misbehaving clients.
+        else if (tcp_conn
+              && !ClientAllowed(tcp_conn->peer.address()))
+        {
+            // Only send a 403 if we're not using SSL to prevent a DoS during the SSL handshake.
+            try {
+                if (!fUseSSL)
+                    conn->stream() << HTTPReply(HTTP_FORBIDDEN, "", false) << std::flush;
+            } catch (const std::exception& e) {
+                printf("RPC error sending 403 to %s: %s\n",
+                       tcp_conn->peer.address().to_string().c_str(), e.what());
+            }
+            delete conn;
+            vnThreadsRunning[THREAD_RPCLISTENER]--;
+            return;
+        }
+
+        // start HTTP client thread
+        else if (!NewThread(ThreadRPCServer3, conn)) {
+            printf("Failed to create RPC server client thread\n");
+            delete conn;
+        }
+
+        vnThreadsRunning[THREAD_RPCLISTENER]--;
+    } catch (std::exception& e) {
+        PrintException(&e, "RPCAcceptHandler()");
         delete conn;
         vnThreadsRunning[THREAD_RPCLISTENER]--;
-        return;
-    }
-
-    // Restrict callers by IP.  It is important to
-    // do this before starting client thread, to filter out
-    // certain DoS and misbehaving clients.
-    else if (tcp_conn
-          && !ClientAllowed(tcp_conn->peer.address()))
-    {
-        // Only send a 403 if we're not using SSL to prevent a DoS during the SSL handshake.
-        if (!fUseSSL)
-            conn->stream() << HTTPReply(HTTP_FORBIDDEN, "", false) << std::flush;
+    } catch (...) {
+        PrintException(NULL, "RPCAcceptHandler()");
         delete conn;
+        vnThreadsRunning[THREAD_RPCLISTENER]--;
     }
-
-    // start HTTP client thread
-    else if (!NewThread(ThreadRPCServer3, conn)) {
-        printf("Failed to create RPC server client thread\n");
-        delete conn;
-    }
-
-    vnThreadsRunning[THREAD_RPCLISTENER]--;
 }
 
 void ThreadRPCServer2(void* parg)
@@ -1128,6 +1152,7 @@ void ThreadRPCServer3(void* parg)
     AcceptedConnection *conn = (AcceptedConnection *) parg;
 
     bool fRun = true;
+    try {
     while (true)
     {
         if (fShutdown || !fRun)
@@ -1245,6 +1270,13 @@ void ThreadRPCServer3(void* parg)
             ErrorReply(conn->stream(), JSONRPCError(RPC_PARSE_ERROR, e.what()), jreq.id);
             break;
         }
+    }
+
+    } // end try
+    catch (std::exception& e) {
+        PrintException(&e, "ThreadRPCServer3()");
+    } catch (...) {
+        PrintException(NULL, "ThreadRPCServer3()");
     }
 
     delete conn;
