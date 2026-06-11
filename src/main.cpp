@@ -3071,7 +3071,7 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     // triangles: check proof-of-stake
     // Limited duplicity on stake: prevents block flood attack
     // Duplicate stake allowed only when there is orphan child block
-    if (pblock->IsProofOfStake() && setStakeSeen.count(pblock->GetProofOfStake()) && !mapOrphanBlocksByPrev.count(hash))
+    if (pblock->IsProofOfStake() && !GetBoolArg("-ignoredupstake", false) && setStakeSeen.count(pblock->GetProofOfStake()) && !mapOrphanBlocksByPrev.count(hash))
         return error("ProcessBlock() : duplicate proof-of-stake (%s, %d) for block %s", pblock->GetProofOfStake().first.ToString().c_str(), pblock->GetProofOfStake().second, hash.ToString().c_str());
 
     // Preliminary checks
@@ -3129,13 +3129,15 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         {
             // Limited duplicity on stake: prevents block flood attack
             // Duplicate stake allowed only when there is orphan child block
-            if (setStakeSeenOrphan.count(pblock2->GetProofOfStake()) && !mapOrphanBlocksByPrev.count(hash))
+            if (!GetBoolArg("-ignoredupstake", false) && setStakeSeenOrphan.count(pblock2->GetProofOfStake()) && !mapOrphanBlocksByPrev.count(hash))
                 return error("ProcessBlock() : duplicate proof-of-stake (%s, %d) for orphan block %s", pblock2->GetProofOfStake().first.ToString().c_str(), pblock2->GetProofOfStake().second, hash.ToString().c_str());
             else
                 setStakeSeenOrphan.insert(pblock2->GetProofOfStake());
         }
+        uint256 hashPrevOrphan = pblock2->hashPrevBlock;
+        CBlock* pblock2raw = pblock2.get();
         mapOrphanBlocks.insert(make_pair(hash, std::move(pblock2)));
-        mapOrphanBlocksByPrev.insert(make_pair(pblock2->hashPrevBlock, pblock2.get()));
+        mapOrphanBlocksByPrev.insert(make_pair(hashPrevOrphan, pblock2raw));
         dequeOrphanOrder.push_back(hash);  // track insertion order for FIFO eviction
 
         // Limit orphan blocks to prevent memory exhaustion.
@@ -3147,11 +3149,11 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         // Ask this guy to fill in what we're missing
         if (pfrom && pindexBest)
         {
-            pfrom->PushGetBlocks(pindexBest, GetOrphanRoot(pblock2.get()));
+            pfrom->PushGetBlocks(pindexBest, GetOrphanRoot(pblock2raw));
             // triangles: getblocks may not obtain the ancestor block rejected
             // earlier by duplicate-stake check so we ask for it again directly
             if (!IsInitialBlockDownload())
-                pfrom->AskFor(CInv(MSG_BLOCK, WantedByOrphan(pblock2.get())));
+                pfrom->AskFor(CInv(MSG_BLOCK, WantedByOrphan(pblock2raw)));
         }
         return true;
     }
