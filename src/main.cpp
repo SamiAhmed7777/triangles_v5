@@ -3765,58 +3765,15 @@ bool FastImportBlockFile()
             if (pindexNew->pprev)
                 pindexNew->pprev->pnext = pindexNew;
 
-            // Build tx index + UTXO entries, tracking money supply
-            int64_t nBlockValueIn = 0;
-            int64_t nBlockValueOut = 0;
-            int64_t nFees = 0;
-            unsigned int nTxPos = nBlockPos + ::GetSerializeSize(CBlock(), SER_DISK, CLIENT_VERSION)
-                                - (2 * GetSizeOfCompactSize(0)) + GetSizeOfCompactSize(block.vtx.size());
-            for (const CTransaction& tx : block.vtx)
-            {
-                uint256 hashTx = tx.GetHash();
-                CDiskTxPos posThisTx(1, nBlockPos, nTxPos);
-                txdb.UpdateTxIndex(hashTx, CTxIndex(posThisTx, tx.vout.size()));
-                nTxPos += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
-
-                int64_t nTxValueOut = tx.GetValueOut();
-                nBlockValueOut += nTxValueOut;
-
-                // UTXO entries — read input values before erasing for money supply
-                if (!tx.IsCoinBase())
-                {
-                    int64_t nTxValueIn = 0;
-                    for (const CTxIn& txin : tx.vin)
-                    {
-                        CUtxoEntry utxo;
-                        if (txdb.ReadUtxo(txin.prevout.hash, txin.prevout.n, utxo))
-                            nTxValueIn += utxo.nValue;
-                        txdb.EraseUtxo(txin.prevout.hash, txin.prevout.n);
-                    }
-                    nBlockValueIn += nTxValueIn;
-                    if (!tx.IsCoinStake())
-                        nFees += nTxValueIn - nTxValueOut;
-                }
-                for (unsigned int k = 0; k < tx.vout.size(); k++)
-                {
-                    if (!tx.vout[k].IsEmpty())
-                    {
-                        CUtxoEntry utxo;
-                        utxo.nValue = tx.vout[k].nValue;
-                        utxo.nHeight = pindexNew->nHeight;
-                        utxo.scriptPubKey = tx.vout[k].scriptPubKey;
-                        utxo.fCoinBase = tx.IsCoinBase();
-                        utxo.fCoinStake = tx.IsCoinStake();
-                        utxo.nTxTime = tx.nTime;
-                        txdb.WriteUtxo(hashTx, k, utxo);
-                    }
-                }
-            }
-
-            // Money supply tracking — matches ConnectBlock formula
-            pindexNew->nMint = nBlockValueOut - nBlockValueIn + nFees;
-            pindexNew->nMoneySupply = (pindexNew->pprev ? pindexNew->pprev->nMoneySupply : 0) + nBlockValueOut - nBlockValueIn;
-
-            // Write block index to batch
+            // NOTE: tx-index, UTXO-set and money-supply application are
+            // DEFERRED to a second pass over the active (best-trust) chain
+            // only — see the pass after this loop. Applying them here, for
+            // every block read from the file (which permanently retains
+            // ORPHANED side-chain blocks), wrote those orphans' outputs into
+            // the UTXO set as phantom coins and over-counted nMoneySupply.
+            // That was the root cause of UTXO-set / supply inflation on every
+            // reindex. Here we only build the block index for all blocks so
+            // best-chain selection by trust still works.
             txdb.WriteBlockIndex(CDiskBlockIndex(pindexNew));
 
             // Update best chain
@@ -3853,6 +3810,80 @@ bool FastImportBlockFile()
                 int pct = (nFileSize > 0) ? (int)((int64_t)nPos * 100 / nFileSize) : 0;
                 printf("FastImport: %d blocks indexed (%d%%)\n", nLoaded, pct);
                 uiInterface.InitMessage(strprintf(_("Importing blocks... %d indexed (%d%%)"), nLoaded, pct));
+            }
+        }
+
+        // ---- Pass 2: apply tx-index, UTXO set and money supply along the
+        // ACTIVE (best-trust) chain ONLY. The file-order pass above indexed
+        // every block including orphaned side-chain blocks; replaying only
+        // the main chain here keeps the UTXO set and money supply exactly in
+        // consensus and prevents orphan outputs becoming phantom coins. ----
+        if (pindexBest)
+        {
+            std::vector<CBlockIndex*> vMain;
+            for (CBlockIndex* p = pindexBest; p; p = p->pprev)
+                vMain.push_back(p);
+            std::reverse(vMain.begin(), vMain.end());
+            printf("FastImportBlockFile: applying UTXO/supply along %d main-chain blocks...\n", (int)vMain.size());
+            uiInterface.InitMessage(_("Building UTXO set (main chain)..."));
+
+            int64_t nRunningSupply = 0;
+            int nApplied = 0;
+            for (CBlockIndex* pindex : vMain)
+            {
+                CBlock blockMain;
+                if (!blockMain.ReadFromDisk(pindex))
+                    return error("FastImportBlockFile: ReadFromDisk failed at height %d", pindex->nHeight);
+
+                int64_t nBlockValueIn = 0;
+                int64_t nBlockValueOut = 0;
+                unsigned int nTxPos2 = pindex->nBlockPos + ::GetSerializeSize(CBlock(), SER_DISK, CLIENT_VERSION)
+                                    - (2 * GetSizeOfCompactSize(0)) + GetSizeOfCompactSize(blockMain.vtx.size());
+                for (const CTransaction& tx : blockMain.vtx)
+                {
+                    uint256 hashTx = tx.GetHash();
+                    CDiskTxPos posThisTx(1, pindex->nBlockPos, nTxPos2);
+                    txdb.UpdateTxIndex(hashTx, CTxIndex(posThisTx, tx.vout.size()));
+                    nTxPos2 += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
+
+                    nBlockValueOut += tx.GetValueOut();
+                    if (!tx.IsCoinBase())
+                    {
+                        for (const CTxIn& txin : tx.vin)
+                        {
+                            CUtxoEntry uprev;
+                            if (txdb.ReadUtxo(txin.prevout.hash, txin.prevout.n, uprev))
+                                nBlockValueIn += uprev.nValue;
+                            txdb.EraseUtxo(txin.prevout.hash, txin.prevout.n);
+                        }
+                    }
+                    for (unsigned int k = 0; k < tx.vout.size(); k++)
+                    {
+                        if (tx.vout[k].IsEmpty())
+                            continue;
+                        CUtxoEntry utxo;
+                        utxo.nValue = tx.vout[k].nValue;
+                        utxo.nHeight = pindex->nHeight;
+                        utxo.scriptPubKey = tx.vout[k].scriptPubKey;
+                        utxo.fCoinBase = tx.IsCoinBase();
+                        utxo.fCoinStake = tx.IsCoinStake();
+                        utxo.nTxTime = tx.nTime;
+                        txdb.WriteUtxo(hashTx, k, utxo);
+                    }
+                }
+
+                pindex->nMint = nBlockValueOut - nBlockValueIn;
+                nRunningSupply += (nBlockValueOut - nBlockValueIn);
+                pindex->nMoneySupply = nRunningSupply;
+                txdb.WriteBlockIndex(CDiskBlockIndex(pindex));
+
+                if (++nApplied % 200000 == 0) { txdb.TxnCommit(); txdb.TxnBegin(); }
+                if (nApplied % 5000 == 0)
+                {
+                    int pct2 = (int)((int64_t)nApplied * 100 / (vMain.empty() ? 1 : vMain.size()));
+                    printf("FastImport UTXO apply: %d/%d main-chain blocks (%d%%)\n", nApplied, (int)vMain.size(), pct2);
+                    uiInterface.InitMessage(strprintf(_("Building UTXO set... %d%%"), pct2));
+                }
             }
         }
 
