@@ -105,6 +105,8 @@ public:
         fFileBacked = false;
         nMasterKeyMaxID = 0;
         pwalletdbEncryption = nullptr;
+        fHDEnabled = false;
+        nHDChainIndex = 0;
         nOrderPosNext = 0;
         nCachedStakeWeight = 0;
         nCachedStakeWeightTime = 0;
@@ -124,6 +126,13 @@ public:
     CPubKey vchDefaultKey;
     int64_t nTimeFirstKey;
 
+    // ---- HD (BIP39/BIP32) wallet state ----
+    bool fHDEnabled;                              // an HD seed has been set
+    int64_t nHDChainIndex;                        // next external index (m/44'/2222'/0'/0/n)
+    std::string hdMnemonic;                       // in-memory phrase (present when unlocked/unencrypted)
+    std::vector<unsigned char> vchCryptedHDMnemonic; // encrypted phrase (loaded, decrypted on unlock)
+    uint256 hdMnemonicIV;                         // IV for the encrypted phrase
+
     // check whether we are allowed to upgrade (or already support) to the named feature
     bool CanSupportFeature(WalletFeature wf) { return nWalletMaxVersion >= static_cast<int>(wf); }
 
@@ -133,6 +142,14 @@ public:
     // keystore implementation
     // Generate a new key
     CPubKey GenerateNewKey();
+
+    // ---- HD wallet (BIP39/BIP32) ----
+    bool IsHDEnabled() const { return fHDEnabled; }
+    bool SetHDSeed(const std::string& mnemonicIn, const std::string& passphrase, bool fGenerate, std::string& mnemonicOut, std::string& strError);
+    bool GetHDMnemonic(std::string& mnemonicOut) const;
+    bool DeriveHDKey(int64_t index, CKey& keyOut) const;
+    bool LoadHDMnemonic(const std::string& m) { hdMnemonic = m; fHDEnabled = true; return true; }
+    bool LoadCryptedHDMnemonic(const uint256& iv, const std::vector<unsigned char>& cipher) { hdMnemonicIV = iv; vchCryptedHDMnemonic = cipher; fHDEnabled = true; return true; }
     // Adds a key to the store, and saves it to disk.
     bool AddKey(const CKey& key);
     // Adds a key to the store, without saving it to disk (used by LoadWallet)
