@@ -442,4 +442,10 @@ bool CSyncCheckpoint::ProcessSyncCheckpoint(CNode* pfrom)
     }
 
     if (!Checkpoints::WriteSyncCheckpoint(hashCheckpoint))
-        return error("ProcessSyncCheckpoint(
+        return error("ProcessSyncCheckpoint(): failed to write sync checkpoint %s", hashCheckpoint.ToString().c_str());
+    Checkpoints::checkpointMessage = *this;
+    Checkpoints::hashPendingCheckpoint = 0;
+    Checkpoints::checkpointMessagePending.SetNull();
+    printf("ProcessSyncCheckpoint: sync-checkpoint at %s\n", hashCheckpoint.ToString().c_str());
+    return true;
+}
