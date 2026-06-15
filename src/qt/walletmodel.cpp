@@ -676,3 +676,49 @@ void WalletModel::listLockedCoins(std::vector<COutPoint>& vOutpts)
 {
     return;
 }
+
+
+// ---- HD wallet (BIP39/BIP32) ----
+bool WalletModel::hdEnabled() const
+{
+    return wallet->IsHDEnabled();
+}
+
+bool WalletModel::hdNew(QString &mnemonicOut, QString &errorOut)
+{
+    std::string mnemonic, strError;
+    if (!wallet->SetHDSeed("", "", true, mnemonic, strError)) {
+        errorOut = QString::fromStdString(strError);
+        return false;
+    }
+    wallet->TopUpKeyPool();
+    mnemonicOut = QString::fromStdString(mnemonic);
+    return true;
+}
+
+bool WalletModel::hdRestore(const QString &mnemonic, QString &errorOut)
+{
+    std::string out, strError;
+    if (!wallet->SetHDSeed(mnemonic.toStdString(), "", false, out, strError)) {
+        errorOut = QString::fromStdString(strError);
+        return false;
+    }
+    wallet->TopUpKeyPool();
+    {
+        LOCK2(cs_main, wallet->cs_wallet);
+        wallet->ScanForWalletTransactions(pindexGenesisBlock, true);
+        wallet->ReacceptWalletTransactions();
+    }
+    return true;
+}
+
+bool WalletModel::hdShow(QString &mnemonicOut, QString &errorOut)
+{
+    std::string mnemonic;
+    if (!wallet->GetHDMnemonic(mnemonic)) {
+        errorOut = QObject::tr("Wallet has no HD seed (use 'Generate New').");
+        return false;
+    }
+    mnemonicOut = QString::fromStdString(mnemonic);
+    return true;
+}

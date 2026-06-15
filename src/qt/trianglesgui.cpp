@@ -31,6 +31,7 @@
 #include "trianglesunits.h"
 #include "guiconstants.h"
 #include "askpassphrasedialog.h"
+#include "hdseeddialog.h"
 #include "notificator.h"
 #include "guiutil.h"
 #include "rpcconsole.h"
@@ -484,6 +485,8 @@ void TrianglesGUI::createActions(bool fIsTestnet)
     backupWalletAction->setStatusTip(tr("Backup wallet to another location"));
     changePassphraseAction = new QAction(QIcon(":/menu_16/passphrase"), tr("&Change Passphrase..."), this);
     changePassphraseAction->setStatusTip(tr("Change the passphrase used for wallet encryption"));
+    hdSeedAction = new QAction(QIcon(":/menu_16/passphrase"), tr("&Seed Phrase (HD Backup)..."), this);
+    hdSeedAction->setStatusTip(tr("Generate, restore, or back up your 24-word HD seed phrase"));
     unlockWalletAction = new QAction(QIcon(":/menu_16/unlock"), tr("&Unlock Wallet..."), this);
     unlockWalletAction->setStatusTip(tr("Unlock wallet"));
     unlockWalletStakingAction = new QAction(QIcon(":/menu_16/unlock"), tr("&Unlock Wallet for staking..."), this);
@@ -509,6 +512,7 @@ void TrianglesGUI::createActions(bool fIsTestnet)
     connect(encryptWalletAction, SIGNAL(triggered(bool)), this, SLOT(encryptWallet(bool)));
     connect(backupWalletAction, SIGNAL(triggered()), this, SLOT(backupWallet()));
     connect(changePassphraseAction, SIGNAL(triggered()), this, SLOT(changePassphrase()));
+    connect(hdSeedAction, SIGNAL(triggered()), this, SLOT(hdSeedManager()));
     connect(unlockWalletAction, SIGNAL(triggered()), this, SLOT(unlockWallet()));
     connect(unlockWalletStakingAction, SIGNAL(triggered()), this, SLOT(unlockWalletStaking()));
     connect(lockWalletAction, SIGNAL(triggered()), this, SLOT(lockWallet()));
@@ -538,6 +542,7 @@ void TrianglesGUI::createMenuBar()
     QMenu *settings = appMenuBar->addMenu(tr("&Settings"));
     settings->addAction(encryptWalletAction);
     settings->addAction(changePassphraseAction);
+    settings->addAction(hdSeedAction);
     settings->addAction(unlockWalletAction);
     settings->addAction(lockWalletAction);
     settings->addSeparator();
@@ -1610,6 +1615,15 @@ void TrianglesGUI::backupWallet()
 void TrianglesGUI::changePassphrase()
 {
     AskPassphraseDialog dlg(AskPassphraseDialog::ChangePass, this);
+    dlg.setModel(walletModel);
+    dlg.exec();
+}
+
+void TrianglesGUI::hdSeedManager()
+{
+    if (!walletModel)
+        return;
+    HDSeedDialog dlg(this);
     dlg.setModel(walletModel);
     dlg.exec();
 }

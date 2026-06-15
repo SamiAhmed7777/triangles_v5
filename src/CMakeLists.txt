@@ -307,6 +307,7 @@ if(BUILD_QT)
         qt/trianglesunits.cpp
         qt/qvaluecombobox.cpp
         qt/askpassphrasedialog.cpp
+        qt/hdseeddialog.cpp
         qt/notificator.cpp
         qt/qtipcserver.cpp
         qt/rpcconsole.cpp
