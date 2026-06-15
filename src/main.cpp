@@ -4457,8 +4457,43 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         {
             // Find the last block the caller has in the main chain
             pindex = locator.GetBlockIndex();
+
+            // triangles fix: handle broken pnext chain.
+            // GetBlockIndex() returns pindexGenesisBlock when no locator
+            // hash matches our main chain (peer is on a different fork or
+            // a stale local state). pindexGenesisBlock->pnext is always
+            // null, which would cause the for-loop below to send ZERO
+            // headers, leaving the peer stuck (logged as "getheaders -1").
+            //
+            // Mirror the getblocks handler: if the locator matches nothing
+            // on our main chain, serve our headers from genesis so the peer
+            // can discover the canonical chain. Then fall back to a tip-
+            // backwards walk if pnext is null for any other reason (this
+            // happens when LoadBlockIndex() didn't fully heal pnext links,
+            // or the chain was bootstrapped from a snapshot).
+            if (!locator.IsNull() && pindex == pindexGenesisBlock &&
+                pindexGenesisBlock && locator.GetTipHash() != pindexGenesisBlock->GetBlockHash())
+            {
+                printf("WARNING: peer getheaders locator has no common blocks — serving headers from genesis (peer may be on a fork)\n");
+                pindex = pindexGenesisBlock;
+            }
+
             if (pindex)
-                pindex = pindex->pnext;
+            {
+                if (pindex->pnext)
+                {
+                    pindex = pindex->pnext;
+                }
+                else
+                {
+                    // pnext is null — fall back to walking from pindexBest
+                    // backwards to find the block immediately after pindex
+                    CBlockIndex* pWalk = pindexBest;
+                    while (pWalk && pWalk->pprev != pindex)
+                        pWalk = pWalk->pprev;
+                    pindex = pWalk;  // null if pindex is already the tip
+                }
+            }
         }
 
         vector<CBlock> vHeaders;
