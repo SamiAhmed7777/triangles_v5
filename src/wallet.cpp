@@ -2935,6 +2935,9 @@ bool CWallet::SetHDSeed(const std::string& mnemonicIn, const std::string& passph
         }
         wdb.WriteHDChain(nHDChainIndex);
     }
+    // Replace any pre-existing (random) keypool with HD-derived keys so that
+    // getnewaddress immediately hands out deterministic m/44'/2222'/0'/0/i keys.
+    NewKeyPool();
     mnemonicOut = m;
     return true;
 }
