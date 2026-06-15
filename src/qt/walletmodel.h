@@ -103,6 +103,12 @@ public:
     // Wallet backup
     bool backupWallet(const QString &filename);
 
+    // ---- HD wallet (BIP39/BIP32) ----
+    bool hdEnabled() const;
+    bool hdNew(QString &mnemonicOut, QString &errorOut);
+    bool hdRestore(const QString &mnemonic, QString &errorOut);
+    bool hdShow(QString &mnemonicOut, QString &errorOut);
+
     // RAI object for unlocking wallet, returned by requestUnlock()
     class UnlockContext
     {

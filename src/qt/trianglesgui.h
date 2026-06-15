@@ -131,6 +131,7 @@ private:
     QAction *encryptWalletAction;
     QAction *backupWalletAction;
     QAction *changePassphraseAction;
+    QAction *hdSeedAction;
     QAction *unlockWalletAction;
     QAction *unlockWalletStakingAction;
     QAction *lockWalletAction;
@@ -243,6 +244,8 @@ private slots:
     void backupWallet();
     /** Change encrypted wallet passphrase */
     void changePassphrase();
+    /** Open the HD seed phrase (generate/restore/backup) dialog */
+    void hdSeedManager();
     /** Ask for passphrase to unlock wallet temporarily */
     void unlockWallet();
     /** Ask for passphrase to unlock wallet temporarily - FOR STAKING ONLY */
