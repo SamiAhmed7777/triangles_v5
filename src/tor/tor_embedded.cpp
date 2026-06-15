@@ -122,11 +122,20 @@ bool CTorEmbedded::Start(int socks, int hsPort, bool enableHiddenService)
     // Prepare Tor data directory under the wallet's data dir
     torDataDir = (::GetDataDir() / "tor_data").string();
     fs::create_directories(torDataDir);
+    // CRITICAL: Tor refuses to use a DataDirectory readable by other users.
+    // Without 0700, tor_run_main() returns -1 and the embedded Tor never starts.
+    fs::permissions(torDataDir, fs::perms::owner_all, fs::perm_options::replace);
 
     std::string hsDir;
     if (hiddenServiceEnabled) {
         hsDir = (fs::path(torDataDir) / "hidden_service").string();
         fs::create_directories(hsDir);
+        // CRITICAL: Tor rejects hidden service directories that are not 0700
+        // ("Permissions on directory ... are too permissive") and aborts config
+        // validation with code -1. This was the root cause of "Embedded Tor
+        // exited with code -1" — fs::create_directories honors umask (0022 on
+        // most Linux systems), leaving the dir at 0755. Force 0700 after creation.
+        fs::permissions(hsDir, fs::perms::owner_all, fs::perm_options::replace);
     }
 
     // Build the argv for tor_run_main
