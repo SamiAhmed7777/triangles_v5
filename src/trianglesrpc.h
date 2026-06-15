@@ -155,6 +155,10 @@ extern json_spirit::Value getwalletinfo(const json_spirit::Array& params, bool f
 extern json_spirit::Value dumpwallet(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value importwallet(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value dumpprivkey(const json_spirit::Array& params, bool fHelp); // in rpcdump.cpp
+extern json_spirit::Value hdnew(const json_spirit::Array& params, bool fHelp);
+extern json_spirit::Value hdrestore(const json_spirit::Array& params, bool fHelp);
+extern json_spirit::Value hdshow(const json_spirit::Array& params, bool fHelp);
+extern json_spirit::Value hdinfo(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value importprivkey(const json_spirit::Array& params, bool fHelp);
 
 extern json_spirit::Value getsubsidy(const json_spirit::Array& params, bool fHelp);

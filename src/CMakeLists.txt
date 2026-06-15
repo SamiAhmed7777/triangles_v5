@@ -42,6 +42,7 @@ set(CORE_SOURCES
     bootstrap.cpp
     checkpoints.cpp
     crypter.cpp
+    hdwallet.cpp
     crypto_ecdh.cpp
     crypto_ecdsa.cpp
     db.cpp

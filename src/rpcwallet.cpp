@@ -1858,3 +1858,78 @@ Value makekeypair(const Array& params, bool fHelp)
     result.push_back(Pair("PublicKey", HexStr(key.GetPubKey().Raw())));
 return result;
 }
+
+
+Value hdinfo(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error("hdinfo\nReturns HD (BIP39/BIP32) wallet status.");
+    Object obj;
+    obj.push_back(Pair("hdenabled", pwalletMain->IsHDEnabled()));
+    obj.push_back(Pair("coin_type", 2222));
+    obj.push_back(Pair("derivation_path", "m/44'/2222'/0'/0/i"));
+    obj.push_back(Pair("nextindex", (int64_t)pwalletMain->nHDChainIndex));
+    return obj;
+}
+
+Value hdnew(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() > 1)
+        throw runtime_error(
+            "hdnew [passphrase]\n"
+            "Generate a NEW 24-word HD seed phrase, activate it as this wallet's\n"
+            "deterministic seed, and return the phrase. WRITE IT DOWN: it is the\n"
+            "only backup of every address this wallet derives.");
+    EnsureWalletIsUnlocked();
+    if (pwalletMain->IsHDEnabled())
+        throw JSONRPCError(RPC_WALLET_ERROR, "Wallet already has an HD seed; use 'hdshow' to back it up.");
+    string passphrase = params.size() > 0 ? params[0].get_str() : "";
+    string mnemonic, strError;
+    if (!pwalletMain->SetHDSeed("", passphrase, true, mnemonic, strError))
+        throw JSONRPCError(RPC_WALLET_ERROR, strError);
+    pwalletMain->TopUpKeyPool();
+    Object obj;
+    obj.push_back(Pair("mnemonic", mnemonic));
+    obj.push_back(Pair("words", 24));
+    obj.push_back(Pair("warning", "Write these 24 words down and keep them secret and offline. Anyone with them can spend your coins."));
+    return obj;
+}
+
+Value hdrestore(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 1 || params.size() > 2)
+        throw runtime_error(
+            "hdrestore \"mnemonic\" [passphrase]\n"
+            "Activate an HD seed from an existing 24-word phrase, derive the keypool\n"
+            "and rescan the chain for funds on the derived addresses.");
+    EnsureWalletIsUnlocked();
+    string mnemonic = params[0].get_str();
+    string passphrase = params.size() > 1 ? params[1].get_str() : "";
+    string out, strError;
+    if (!pwalletMain->SetHDSeed(mnemonic, passphrase, false, out, strError))
+        throw JSONRPCError(RPC_WALLET_ERROR, strError);
+    pwalletMain->TopUpKeyPool();
+    {
+        LOCK2(cs_main, pwalletMain->cs_wallet);
+        pwalletMain->ScanForWalletTransactions(pindexGenesisBlock, true);
+        pwalletMain->ReacceptWalletTransactions();
+    }
+    Object obj;
+    obj.push_back(Pair("restored", true));
+    return obj;
+}
+
+Value hdshow(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error(
+            "hdshow\nReveal the wallet's HD mnemonic for backup. The wallet must be unlocked.");
+    EnsureWalletIsUnlocked();
+    string mnemonic;
+    if (!pwalletMain->GetHDMnemonic(mnemonic))
+        throw JSONRPCError(RPC_WALLET_ERROR, "Wallet has no HD seed (use 'hdnew' to create one).");
+    Object obj;
+    obj.push_back(Pair("mnemonic", mnemonic));
+    obj.push_back(Pair("warning", "Keep these words secret and offline."));
+    return obj;
+}

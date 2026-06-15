@@ -429,6 +429,24 @@ ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue,
                 pwallet->mapKeyMetadata[keyid] = CKeyMetadata(keypool.nTime);
 
         }
+        else if (strType == "hdmnemonic")
+        {
+            std::string m;
+            ssValue >> m;
+            pwallet->LoadHDMnemonic(m);
+        }
+        else if (strType == "hdcmnemonic")
+        {
+            std::pair<uint256, std::vector<unsigned char> > cm;
+            ssValue >> cm;
+            pwallet->LoadCryptedHDMnemonic(cm.first, cm.second);
+        }
+        else if (strType == "hdchain")
+        {
+            int64_t n;
+            ssValue >> n;
+            pwallet->nHDChainIndex = n;
+        }
         else if (strType == "version")
         {
             ssValue >> wss.nFileVersion;
@@ -461,7 +479,8 @@ ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue,
 static bool IsKeyType(string strType)
 {
     return (strType== "key" || strType == "wkey" ||
-            strType == "mkey" || strType == "ckey");
+            strType == "mkey" || strType == "ckey" ||
+            strType == "hdmnemonic" || strType == "hdcmnemonic");
 }
 
 DBErrors CWalletDB::LoadWallet(CWallet* pwallet)
