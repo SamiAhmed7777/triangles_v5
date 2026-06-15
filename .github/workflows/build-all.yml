@@ -118,9 +118,9 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
           else
-            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
-            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
-            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | tr -d '\r' | awk '{print $3}')
             echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
           fi
 
@@ -318,9 +318,9 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
           else
-            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
-            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
-            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | tr -d '\r' | awk '{print $3}')
             echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
           fi
 
@@ -437,9 +437,9 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
           else
-            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
-            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
-            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | tr -d '\r' | awk '{print $3}')
             echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
           fi
 
@@ -569,9 +569,9 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
           else
-            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
-            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
-            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | tr -d '\r' | awk '{print $3}')
             echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
           fi
 
