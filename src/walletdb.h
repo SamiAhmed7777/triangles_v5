@@ -169,6 +169,21 @@ public:
         return Write(std::string("defaultkey"), vchPubKey.Raw());
     }
 
+    bool WriteHDMnemonic(const std::string& mnemonic) {
+        nWalletDBUpdated++;
+        Erase(std::string("hdcmnemonic"));
+        return Write(std::string("hdmnemonic"), mnemonic);
+    }
+    bool WriteHDCryptedMnemonic(const uint256& iv, const std::vector<unsigned char>& cipher) {
+        nWalletDBUpdated++;
+        Erase(std::string("hdmnemonic"));
+        return Write(std::string("hdcmnemonic"), std::make_pair(iv, cipher));
+    }
+    bool WriteHDChain(int64_t nIndex) {
+        nWalletDBUpdated++;
+        return Write(std::string("hdchain"), nIndex);
+    }
+
     bool ReadPool(int64_t nPool, CKeyPool& keypool)
     {
         return Read(std::make_pair(std::string("pool"), nPool), keypool);

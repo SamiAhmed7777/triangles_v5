@@ -42,6 +42,7 @@ set(CORE_SOURCES
     bootstrap.cpp
     checkpoints.cpp
     crypter.cpp
+    hdwallet.cpp
     crypto_ecdh.cpp
     crypto_ecdsa.cpp
     db.cpp
@@ -306,6 +307,7 @@ if(BUILD_QT)
         qt/trianglesunits.cpp
         qt/qvaluecombobox.cpp
         qt/askpassphrasedialog.cpp
+        qt/hdseeddialog.cpp
         qt/notificator.cpp
         qt/qtipcserver.cpp
         qt/rpcconsole.cpp
