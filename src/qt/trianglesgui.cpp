@@ -1453,6 +1453,7 @@ void TrianglesGUI::menuOperationsRequested()
     QAction* unlockWalletStaking = menu.addAction(QIcon(":/menu_16/unlock"), tr("&Unlock Wallet...").remove('&').remove("..."));
     QAction* lockWallet = menu.addAction(QIcon(":/menu_16/lock"), tr("&Lock Wallet...").remove('&').remove("..."));
     QAction* changePassword = menu.addAction(QIcon(":/menu_16/passphrase"), tr("&Change Passphrase...").remove('&').remove("..."));
+    QAction* hdSeed = menu.addAction(QIcon(":/menu_16/passphrase"), tr("Seed Phrase (HD Backup)..."));
     QAction* signMessage = menu.addAction(QIcon(":/menu_16/sign"), tr("Sign &message...").remove('&').remove("..."));
     QAction* verifySignature = menu.addAction(QIcon(":/menu_16/verify"), tr("&Verify message...").remove('&').remove("..."));
 
@@ -1512,6 +1513,10 @@ void TrianglesGUI::menuOperationsRequested()
     {
         if (walletModel->getEncryptionStatus() == WalletModel::Unlocked || walletModel->getEncryptionStatus() == WalletModel::Locked)
             changePassphrase();
+    }
+    else if (selected == hdSeed)
+    {
+        hdSeedManager();
     }
     else if (selected == signMessage)
     {
