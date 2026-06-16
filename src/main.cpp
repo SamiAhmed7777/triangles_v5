@@ -4471,11 +4471,28 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             // backwards walk if pnext is null for any other reason (this
             // happens when LoadBlockIndex() didn't fully heal pnext links,
             // or the chain was bootstrapped from a snapshot).
+            //
+            // pitfall #61 guard: if pindexFinalized is set (from the startup
+            // hardcoded-checkpoint init in init.cpp), serve from there instead
+            // of genesis. This prevents a fork peer from feeding us their
+            // short chain back via getheaders — the peer only learns our
+            // canonical chain from the finalized point forward, and their
+            // conflicting fork gets rejected at the reorg check in
+            // Reorganize() because the fork point is below pindexFinalized.
             if (!locator.IsNull() && pindex == pindexGenesisBlock &&
                 pindexGenesisBlock && locator.GetTipHash() != pindexGenesisBlock->GetBlockHash())
             {
-                printf("WARNING: peer getheaders locator has no common blocks — serving headers from genesis (peer may be on a fork)\n");
-                pindex = pindexGenesisBlock;
+                if (pindexFinalized && pindexFinalized->pnext)
+                {
+                    printf("getheaders: fork detected from peer %s, serving headers from finalized block %d (not genesis) — pitfall #61 guard\n",
+                        pfrom->addr.ToString().c_str(), pindexFinalized->nHeight);
+                    pindex = pindexFinalized;
+                }
+                else
+                {
+                    printf("WARNING: peer getheaders locator has no common blocks — serving headers from genesis (peer may be on a fork)\n");
+                    pindex = pindexGenesisBlock;
+                }
             }
 
             if (pindex)
