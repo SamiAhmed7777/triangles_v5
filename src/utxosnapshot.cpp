@@ -8,6 +8,12 @@
 #include "checkpoints.h"
 #include "util.h"
 #include "ui_interface.h"
+#include "addressindex.h"
+
+#include <variant>
+
+// defined in main.cpp
+extern bool fAddressIndex;
 
 #include <filesystem>
 
@@ -188,6 +194,22 @@ bool DumpSnapshot(const fs::path& destPath,
            contentHash.ToString().c_str());
 
     return true;
+}
+
+// Extract (type, hash160) from a scriptPubKey for the address index.
+// Mirrors GetAddressFromScript() in main.cpp (which is file-static there).
+static bool SnapAddressFromScript(const CScript& script, int& nType, uint160& hashBytes)
+{
+    CTxDestination dest;
+    if (!ExtractDestination(script, dest))
+        return false;
+    if (const CKeyID* keyId = std::get_if<CKeyID>(&dest)) {
+        nType = ADDR_TYPE_P2PKH; hashBytes = *keyId; return true;
+    }
+    if (const CScriptID* scriptId = std::get_if<CScriptID>(&dest)) {
+        nType = ADDR_TYPE_P2SH; hashBytes = *scriptId; return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +404,19 @@ bool LoadSnapshot(const fs::path& snapshotPath,
                 success = false;
                 strError = "WriteUtxo failed at index " + std::to_string(i);
                 break;
+            }
+
+            // Address index: snapshot UTXOs are all unspent -> credit balance + record UTXO.
+            if (::fAddressIndex && !entry.scriptPubKey.empty() && entry.nValue != 0) {
+                int nAType; uint160 aHash;
+                if (SnapAddressFromScript(entry.scriptPubKey, nAType, aHash)) {
+                    txdb.WriteAddressUtxo(nAType, aHash, txhash, nIndex,
+                                          entry.nValue, entry.nHeight, entry.scriptPubKey);
+                    int64_t nABal = 0;
+                    txdb.ReadAddressBalance(nAType, aHash, nABal);
+                    nABal += entry.nValue;
+                    txdb.WriteAddressBalance(nAType, aHash, nABal);
+                }
             }
             nBatchSize++;
 
