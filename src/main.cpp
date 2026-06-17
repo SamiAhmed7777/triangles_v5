@@ -3771,8 +3771,9 @@ bool FastImportBlockFile()
             int64_t nFees = 0;
             unsigned int nTxPos = nBlockPos + ::GetSerializeSize(CBlock(), SER_DISK, CLIENT_VERSION)
                                 - (2 * GetSizeOfCompactSize(0)) + GetSizeOfCompactSize(block.vtx.size());
-            for (const CTransaction& tx : block.vtx)
+            for (size_t nTxIdx = 0; nTxIdx < block.vtx.size(); nTxIdx++)
             {
+                const CTransaction& tx = block.vtx[nTxIdx];
                 uint256 hashTx = tx.GetHash();
                 CDiskTxPos posThisTx(1, nBlockPos, nTxPos);
                 txdb.UpdateTxIndex(hashTx, CTxIndex(posThisTx, tx.vout.size()));
@@ -3790,6 +3791,18 @@ bool FastImportBlockFile()
                         CUtxoEntry utxo;
                         if (txdb.ReadUtxo(txin.prevout.hash, txin.prevout.n, utxo))
                             nTxValueIn += utxo.nValue;
+                        if (fAddressIndex && !utxo.scriptPubKey.empty() && utxo.nValue != 0)
+                        {
+                            int nAType; uint160 aHash;
+                            if (GetAddressFromScript(utxo.scriptPubKey, nAType, aHash))
+                            {
+                                txdb.EraseAddressUtxo(nAType, aHash, txin.prevout.hash, txin.prevout.n);
+                                int64_t nABal = 0;
+                                txdb.ReadAddressBalance(nAType, aHash, nABal);
+                                nABal -= utxo.nValue;
+                                txdb.WriteAddressBalance(nAType, aHash, nABal);
+                            }
+                        }
                         txdb.EraseUtxo(txin.prevout.hash, txin.prevout.n);
                     }
                     nBlockValueIn += nTxValueIn;
@@ -3808,6 +3821,20 @@ bool FastImportBlockFile()
                         utxo.fCoinStake = tx.IsCoinStake();
                         utxo.nTxTime = tx.nTime;
                         txdb.WriteUtxo(hashTx, k, utxo);
+                        if (fAddressIndex && !tx.vout[k].scriptPubKey.empty() && tx.vout[k].nValue != 0)
+                        {
+                            int nAType; uint160 aHash;
+                            if (GetAddressFromScript(tx.vout[k].scriptPubKey, nAType, aHash))
+                            {
+                                txdb.WriteAddressUtxo(nAType, aHash, hashTx, k,
+                                                      tx.vout[k].nValue, pindexNew->nHeight, tx.vout[k].scriptPubKey);
+                                int64_t nABal = 0;
+                                txdb.ReadAddressBalance(nAType, aHash, nABal);
+                                nABal += tx.vout[k].nValue;
+                                txdb.WriteAddressBalance(nAType, aHash, nABal);
+                                txdb.WriteAddressTxId(nAType, aHash, pindexNew->nHeight, (int)nTxIdx, hashTx);
+                            }
+                        }
                     }
                 }
             }
@@ -3859,6 +3886,8 @@ bool FastImportBlockFile()
         // Final commit
         if (pindexBest)
         {
+            if (fAddressIndex)
+                UpdateAddressIndexSyncState(txdb, pindexBest);
             txdb.WriteHashBestChain(hashBestChain);
 
             // Write sync checkpoint
