@@ -792,8 +792,11 @@ bool DownloadUtxoSnapshot(const std::string& host,
 
     printf("Bootstrap: UTXO snapshot downloaded, loading into database...\n");
 
-    // Load the snapshot into a fresh active chain DB
-    if (!UtxoSnapshot::LoadSnapshot(tmpPath, dataDir, strError)) {
+    // Load the snapshot into a fresh active chain DB. P2P-delivered
+    // snapshots keep the checkpoint gate on (requireCheckpoint=true) —
+    // the manifest height+hash already passed IsKnownCheckpoint above,
+    // and we re-check here as defense in depth.
+    if (!UtxoSnapshot::LoadSnapshot(tmpPath, dataDir, strError, /*requireCheckpoint=*/true)) {
         fs::remove(tmpPath);
         return false;
     }
