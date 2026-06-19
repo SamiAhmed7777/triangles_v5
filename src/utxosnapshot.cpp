@@ -314,6 +314,20 @@ bool LoadSnapshot(const fs::path& snapshotPath,
     bool success = true;
     unsigned int nBatchSize = 0;
 
+    // CRITICAL: Set fSerializeChainTrust=true before writing CDiskBlockIndex records.
+    // LoadBlockIndex later reads with fSerializeChainTrust=true (derived from
+    // dbformat >= 2), so writes must include nChainTrust to match. Without this,
+    // every LoadSnapshot is followed by an "end of data: iostream error" in
+    // LoadBlockIndex because the reader expects a field the writer omitted.
+    //
+    // The default value is false; nothing else in the daemon sets it to true
+    // BEFORE LoadSnapshot runs (only the in-place upgrade path inside
+    // LoadBlockIndex sets it true, which is too late). The snapshot writer
+    // (an external daemon or our own DumpSnapshot) may have set it differently;
+    // but for a fresh LevelDB created by LoadSnapshot, we want the resulting
+    // DB to be self-consistent, so we always write with the field included.
+    CDiskBlockIndex::fSerializeChainTrust = true;
+
     if (!txdb.TxnBegin()) {
         fclose(file);
         strError = "Failed to begin chain DB transaction";
