@@ -284,13 +284,13 @@ jobs:
           cp build/bin/trianglesd.exe daemon-dist/
           cp build/bin/triangles-cli.exe daemon-dist/
 
-          # Copy all linked DLLs from MSYS2 (covers both binaries; ldd union)
-          {
-            ldd build/bin/trianglesd.exe | grep '/mingw64' | awk '{print $3}'
-            ldd build/bin/triangles-cli.exe | grep '/mingw64' | awk '{print $3}'
-          } | sort -u | while read dll; do
-            cp "$dll" daemon-dist/ 2>/dev/null || true
+          # Collect all linked DLLs from MSYS2 (covers both binaries; dedup via sort -u)
+          ldd build/bin/trianglesd.exe    | grep '/mingw64' | awk '{print $3}' > /tmp/cli-dlls.txt
+          ldd build/bin/triangles-cli.exe | grep '/mingw64' | awk '{print $3}' >> /tmp/cli-dlls.txt
+          sort -u /tmp/cli-dlls.txt | while read dll; do
+            [ -n "$dll" ] && cp "$dll" daemon-dist/ 2>/dev/null || true
           done
+          rm -f /tmp/cli-dlls.txt
 
       - name: Bundle Tor for daemon
         shell: powershell
@@ -492,11 +492,11 @@ jobs:
           [ -d tor-extract/data ] && cp -r tor-extract/data ${PKG}/usr/lib/cryptographic-triangles/tor/data
 
           # Bundle ALL shared library dependencies (except glibc/kernel)
-          # Union of ldd output from both binaries
-          {
-            ldd build/bin/trianglesd    | grep '=> /' | awk '{print $3}'
-            ldd build/bin/triangles-cli | grep '=> /' | awk '{print $3}'
-          } | sort -u | while read lib; do
+          # Union of ldd output from both binaries, dedup via sort -u
+          ldd build/bin/trianglesd    | grep '=> /' | awk '{print $3}' > /tmp/cli-libs.txt
+          ldd build/bin/triangles-cli | grep '=> /' | awk '{print $3}' >> /tmp/cli-libs.txt
+          sort -u /tmp/cli-libs.txt | while read lib; do
+            [ -z "$lib" ] && continue
             case "$lib" in
               /lib/x86_64-linux-gnu/libc.so*|/lib/x86_64-linux-gnu/libm.so*|/lib/x86_64-linux-gnu/libpthread.so*|/lib/x86_64-linux-gnu/libdl.so*|/lib/x86_64-linux-gnu/librt.so*|/lib/x86_64-linux-gnu/ld-linux*|/lib64/ld-linux*)
                 ;; # Skip glibc core — always present
@@ -505,6 +505,7 @@ jobs:
                 ;;
             esac
           done
+          rm -f /tmp/cli-libs.txt
           echo "=== Bundled libs ==="
           ls ${PKG}/usr/lib/cryptographic-triangles/lib/ | wc -l
           ls ${PKG}/usr/lib/cryptographic-triangles/lib/
