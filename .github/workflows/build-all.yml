@@ -280,20 +280,25 @@ jobs:
 
       - name: Package daemon with DLLs
         run: |
+          echo "STEP_START: pwd=$(pwd) sh=$BASH_VERSION"
           mkdir -p daemon-dist/tor
+          echo "STEP_AFTER_MKDIR"
           cp build/bin/trianglesd.exe daemon-dist/
+          echo "STEP_AFTER_CP1"
           cp build/bin/triangles-cli.exe daemon-dist/
-
-          # Collect DLLs from both binaries. Use simple for loop instead of
-          # pipes-into-while, which interact badly with MSYS2 bash + GitHub
-          # Actions' set -e -o pipefail. cp is idempotent so dupes are fine.
+          echo "STEP_AFTER_CP2"
           for bin in trianglesd triangles-cli; do
+            echo "STEP_LDD_$bin"
             ldd "build/bin/${bin}.exe" | grep '/mingw64' | awk '{print $3}' > dll-list.txt
+            echo "STEP_GREP_$bin count=$(wc -l < dll-list.txt)"
             while IFS= read -r dll; do
               cp "$dll" daemon-dist/ >/dev/null 2>&1 || true
             done < dll-list.txt
             rm -f dll-list.txt
+            echo "STEP_DONE_$bin"
           done
+          echo "STEP_DONE"
+          ls -la daemon-dist/
 
       - name: Bundle Tor for daemon
         shell: powershell
