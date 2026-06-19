@@ -31,6 +31,7 @@
 #include <filesystem>
 #include <fstream>
 #include <boost/interprocess/sync/file_lock.hpp>
+#include <algorithm>
 #include <openssl/crypto.h>
 
 #ifndef WIN32
@@ -100,6 +101,97 @@ void ExitTimeout(void* parg)
     MilliSleep(5000);
     ExitProcess(0);
 #endif
+}
+
+// Wait up to maxWaitSec for at least minPeers peers to have reported their
+// chain height via the version handshake. Returns the median peer height, or
+// -1 if we couldn't get enough peers (timeout, no peers, all nStartingHeight=-1).
+int WaitForPeerHeights(int minPeers, int maxWaitSec)
+{
+    const int pollIntervalMs = 500;
+    const int64_t deadline = GetTimeMillis() + (int64_t)maxWaitSec * 1000;
+
+    while (GetTimeMillis() < deadline && !fRequestShutdown) {
+        std::vector<int> heights;
+        {
+            LOCK(cs_vNodes);
+            for (CNode* pnode : vNodes) {
+                if (pnode && pnode->nStartingHeight > 0)
+                    heights.push_back(pnode->nStartingHeight);
+            }
+        }
+        if ((int)heights.size() >= minPeers) {
+            std::sort(heights.begin(), heights.end());
+            int median = heights[heights.size() / 2];
+            printf("AutoRebuild: got %zu peer heights; median=%d\n", heights.size(), median);
+            return median;
+        }
+        MilliSleep(pollIntervalMs);
+    }
+
+    std::vector<int> heights;
+    {
+        LOCK(cs_vNodes);
+        for (CNode* pnode : vNodes) {
+            if (pnode && pnode->nStartingHeight > 0)
+                heights.push_back(pnode->nStartingHeight);
+        }
+    }
+    if (heights.empty()) {
+        printf("AutoRebuild: no peers reported heights after %ds\n", maxWaitSec);
+        return -1;
+    }
+    std::sort(heights.begin(), heights.end());
+    int median = heights[heights.size() / 2];
+    printf("AutoRebuild: timed out with %zu peers; median=%d\n", heights.size(), median);
+    return median;
+}
+
+// If -autorerebuild is set and our local chain is more than that many blocks
+// behind the median peer height, wipe the chain DB (preserving wallet.dat +
+// onion + smsg state) and request shutdown. On restart, the daemon sees no
+// chain DB and the snapshot path takes over.
+void MaybeAutoRebuild(int thresholdBlocks)
+{
+    if (thresholdBlocks <= 0)
+        return;
+
+    if (nBestHeight < 0) {
+        printf("AutoRebuild: local nBestHeight unset — skipping\n");
+        return;
+    }
+
+    printf("AutoRebuild: enabled (threshold=%d blocks). Local chain tip: %d\n",
+           thresholdBlocks, nBestHeight);
+    int medianPeer = WaitForPeerHeights(/*minPeers=*/3, /*maxWaitSec=*/60);
+    if (medianPeer <= 0) {
+        printf("AutoRebuild: could not get peer heights — skipping rebuild\n");
+        return;
+    }
+
+    int lag = medianPeer - nBestHeight;
+    printf("AutoRebuild: peer median=%d, local=%d, lag=%d\n",
+           medianPeer, nBestHeight, lag);
+
+    if (lag < thresholdBlocks) {
+        printf("AutoRebuild: lag %d < threshold %d — no rebuild needed\n",
+               lag, thresholdBlocks);
+        return;
+    }
+
+    printf("\n*** AutoRebuild: chain is %d blocks behind — wiping chain DB ***\n", lag);
+    printf("*** Preserving wallet.dat, smsgDB, onion state. ***\n");
+    printf("*** Daemon will shutdown; restart to load signed UTXO snapshot. ***\n\n");
+
+    WipeChainDataDir();
+
+    fs::path blkPath = GetDataDir() / "blk0001.dat";
+    if (fs::exists(blkPath)) {
+        fs::remove(blkPath);
+        printf("AutoRebuild: removed stale %s\n", blkPath.string().c_str());
+    }
+
+    StartShutdown();
 }
 
 void StartShutdown()
@@ -440,6 +532,8 @@ std::string HelpMessage()
         "  -onionseed             " + _("Find peers using .onion seeds (default: 1 unless -connect)") + "\n" +
         "  -seedurl=<host>        " + _("HTTP seed list host (default: seeds.cryptographic-triangles.org)") + "\n" +
         "  -noseedurl             " + _("Disable HTTP seed list fetch on startup") + "\n" +
+        "  -autorerebuild=<n>     " + _("If our chain is more than <n> blocks behind peers, wipe chain DB and shutdown for clean restart (default: 0=disabled)") + "\n" +
+        "  -allowfastimport       " + _("Permit FastImport as fallback (operator opt-in only; default off)") + "\n" +
         "  -banscore=<n>          " + _("Threshold for disconnecting misbehaving peers (default: 100)") + "\n" +
         "  -bantime=<n>           " + _("Number of seconds to keep misbehaving peers from reconnecting (default: 86400)") + "\n" +
         "  -par=<n>               " + _("Set the number of script verification threads (default: auto, 0 = auto, 1 = single-threaded)") + "\n" +
@@ -1117,12 +1211,33 @@ bool AppInit2()
         }
     }
 
+    // AutoRebuild: if -autorerebuild is set and we are behind peers, wipe chain DB
+    // and shutdown for clean restart. Must run before FastImportBlockFile below.
+    MaybeAutoRebuild(GetArg("-autorerebuild", 0));
+    if (fRequestShutdown) {
+        printf("AutoRebuild: shutdown requested before chain load complete\n");
+        return false;
+    }
+
     // If the block index is empty but blk0001.dat exists (bootstrap download),
-    // fast-import: build the index directly from the block file without re-writing
-    // data. Batches LevelDB commits every 200K blocks for speed.
+    // fast-import would normally rebuild from the block file. Per Sami: FastImport
+    // is REMOVED as a primary path — the UTXO snapshot is the canonical sync start.
+    // FastImport is gated behind -allowfastimport for explicit operator opt-in only
+    // (emergency recovery, snapshot format incompatibility, etc).
     if (nBestHeight == 0 && std::filesystem::exists(GetDataDir() / "blk0001.dat")
         && mapBlockIndex.size() <= 1)
     {
+        if (!GetBoolArg("-allowfastimport", false))
+        {
+            return InitError(_(
+                "Block index empty and blk0001.dat is present, but FastImport is disabled "
+                "(default). The snapshot path is the only supported sync start.\n\n"
+                "To recover:\n"
+                "  1. Place a signed utxo-snapshot.bin in the data directory and restart, OR\n"
+                "  2. Delete blk0001.dat (the snapshot path will sync from network), OR\n"
+                "  3. Pass -allowfastimport=1 to permit FastImport (operator opt-in only)."));
+        }
+        printf("FastImport: WARNING -allowfastimport is set; rebuilding from local blk0001.dat.\n");
         uiInterface.InitMessage(_("Importing bootstrap blocks..."));
         printf("Block index empty but blk0001.dat exists - running fast import...\n");
         int64_t nFastImportStart = GetTimeMillis();
