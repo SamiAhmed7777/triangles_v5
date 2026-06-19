@@ -258,18 +258,20 @@ if(BUILD_CLI)
     add_executable(triangles-cli
         triangles-cli.cpp
     )
-    # Boost: only need headers for asio + system. Boost::system gets resolved at
-    # link time via the platform's default library search path (libboost_system
-    # on Linux, libboost_system.dylib on macOS Homebrew, libboost_system-mt-*.dll
-    # on Windows MSYS2). Avoids needing a per-component CMake config file.
+    # Boost: header-only asio via Boost::boost target (sets include dirs;
+    # available in Boost 1.83+). libboost_system is the small compiled
+    # library that provides error_code/error_category symbols; link it
+    # explicitly by name to avoid needing the per-component CMake config
+    # file (which Homebrew's boost formula doesn't ship for the system
+    # component on macOS).
     find_package(Boost REQUIRED)
     target_link_libraries(triangles-cli
         PRIVATE
             json_compat
+            Boost::boost
     )
-    if(UNIX AND NOT APPLE)
-        # Linux: explicit link to libboost_system (header-only Boost.System
-        # is rare; we explicitly link the small compiled library).
+    # Link libboost_system per-platform by library name
+    if(UNIX OR WIN32)
         target_link_libraries(triangles-cli PRIVATE boost_system)
     endif()
 
@@ -277,13 +279,6 @@ if(BUILD_CLI)
         set_target_properties(triangles-cli PROPERTIES SUFFIX ".exe")
         # boost::asio needs ws2_32 on Windows
         target_link_libraries(triangles-cli PRIVATE ws2_32)
-    endif()
-
-    if(APPLE)
-        # macOS Homebrew ships libboost_system.dylib without a CMake config
-        # file, so link by library name (resolved via Homebrew's compiler
-        # toolchain search paths).
-        target_link_libraries(triangles-cli PRIVATE boost_system)
     endif()
 
     if(MSVC)
