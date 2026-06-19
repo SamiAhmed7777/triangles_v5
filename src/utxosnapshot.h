@@ -11,7 +11,7 @@
 static const unsigned int UTXO_SNAPSHOT_MAGIC = 0x53585455; // "UTXS" little-endian
 
 // UTXO snapshot format version
-static const unsigned int UTXO_SNAPSHOT_VERSION = 1;
+static const unsigned int UTXO_SNAPSHOT_VERSION = 2;
 
 // Number of block index entries to include in snapshot (covers difficulty,
 // median time, stake modifier, and reorg depth requirements)
