@@ -10,9 +10,11 @@
 // Build with -DBUILD_CLI=ON (default ON).
 //
 // Self-contained: does NOT link util.cpp / wallet.cpp / net.cpp / triangles_common.
-// Only links json_compat (nlohmann/json via json_spirit shim), boost (asio +
-// program_options + filesystem + system), and OpenSSL (for base64).
-// This keeps the CLI binary small (~600 KB stripped on Linux, ~1.5 MB on Windows).
+// Only links json_compat (nlohmann/json via json_spirit shim) and the platform's
+// native socket library (Winsock on Windows, libc on POSIX). No Boost dependency
+// at all — keeps the binary small and avoids platform-specific link problems
+// with boost::asio / libboost_system (MSYS2 names them with -mt- versioned
+// suffixes; Homebrew doesn't ship the CMake config for the system component).
 //
 // Connection parameters (highest precedence first):
 //   1. Command line flags: -rpcuser/-rpcpassword/-rpcconnect/-rpcport
@@ -38,9 +40,6 @@
 
 #include "json/json_compat.h"
 
-#include <boost/asio.hpp>
-#include <boost/asio/streambuf.hpp>
-
 #include <filesystem>
 
 #include <algorithm>
@@ -58,9 +57,32 @@
 #include <utility>
 #include <vector>
 
+// Cross-platform socket includes
+#ifdef _WIN32
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #pragma comment(lib, "ws2_32.lib")
+  using socket_t = SOCKET;
+  #define TRI_CLI_INVALID_SOCKET INVALID_SOCKET
+  #define TRI_CLI_CLOSE_SOCKET(s) closesocket(s)
+#else
+  #include <sys/types.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <netdb.h>
+  #include <unistd.h>
+  #include <fcntl.h>
+  #include <errno.h>
+  using socket_t = int;
+  #define TRI_CLI_INVALID_SOCKET (-1)
+  #define TRI_CLI_CLOSE_SOCKET(s) close(s)
+#endif
+
 using namespace std;
-namespace asio = boost::asio;
-using boost::asio::ip::tcp;
 namespace fs = std::filesystem;
 using namespace json_spirit;
 
@@ -92,17 +114,14 @@ static void ReadConfigFile(const string& path)
     if (!f.good()) return;
     string line;
     while (getline(f, line)) {
-        // Strip CR (Windows) and leading whitespace
         if (!line.empty() && line.back() == '\r') line.pop_back();
         size_t start = line.find_first_not_of(" \t");
         if (start == string::npos) continue;
         if (line[start] == '#') continue;
-        // Parse key = value
         size_t eq = line.find('=', start);
         if (eq == string::npos) continue;
         string key   = line.substr(start, eq - start);
         string value = line.substr(eq + 1);
-        // Trim whitespace on both ends
         auto trim = [](string& s) {
             size_t a = s.find_first_not_of(" \t");
             size_t b = s.find_last_not_of(" \t");
@@ -111,7 +130,6 @@ static void ReadConfigFile(const string& path)
         };
         trim(key);
         trim(value);
-        // Strip surrounding quotes
         if (value.size() >= 2 &&
             ((value.front() == '"'  && value.back() == '"') ||
              (value.front() == '\'' && value.back() == '\''))) {
@@ -125,25 +143,21 @@ static void ReadConfigFile(const string& path)
     }
 }
 
-// Cross-platform default data directory (matches the daemon's path)
 static fs::path GetDefaultDataDir()
 {
-#ifdef WIN32
-    // %APPDATA%/CryptographicTriangles
+#ifdef _WIN32
     const char* appdata = getenv("APPDATA");
     if (appdata && *appdata) {
         return fs::path(appdata) / "CryptographicTriangles";
     }
     return fs::path("C:/CryptographicTriangles");
 #elif defined(__APPLE__)
-    // ~/Library/Application Support/CryptographicTriangles
     const char* home = getenv("HOME");
     if (home && *home) {
         return fs::path(home) / "Library/Application Support/CryptographicTriangles";
     }
     return fs::path("/tmp/CryptographicTriangles");
 #else
-    // ~/.cryptographic-triangles (matches daemon's GetDefaultDataDir)
     const char* home = getenv("HOME");
     if (home && *home) {
         return fs::path(home) / ".cryptographic-triangles";
@@ -171,7 +185,6 @@ static void ParseCommandLine(int argc, char* const argv[])
     mapMultiArgs.clear();
     for (int i = 1; i < argc; ++i) {
         string str(argv[i]);
-        // Bare "-" means: read remaining args from stdin
         if (str == "-") {
             mapMultiArgs["-"].push_back("-");
             continue;
@@ -203,9 +216,6 @@ struct RPCConn {
 
 static int AppInitRPCConn(RPCConn& conn)
 {
-    // Load conf file FIRST (before pulling creds) so defaults from triangles.conf
-    // are visible. Command-line flags (already in mapArgs) take precedence because
-    // ReadConfigFile only inserts when key is absent.
     fs::path confPath = GetConfigFilePath();
     if (!confPath.empty()) ReadConfigFile(confPath.string());
 
@@ -234,7 +244,6 @@ static Value ParseCLIParam(const string& arg)
         return Value(string(""));
     }
     Value v;
-    // Try parsing the arg as JSON. If it parses to a non-string literal, keep.
     if (read_string(arg, v) && v.type() != str_type) {
         return v;
     }
@@ -247,7 +256,6 @@ static void ParseCommandLineRPCParams(int argc, char* const argv[],
     method = Value(string(""));
     params.clear();
     int i = 1;
-    // Skip leading flags
     static const set<string> valFlags = {
         "-conf", "-datadir", "-rpcconnect", "-rpcport",
         "-rpcuser", "-rpcpassword"
@@ -309,12 +317,37 @@ static string Base64Encode(const string& in)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HTTP/1.1 JSON-RPC POST (plaintext)
+// HTTP/1.1 JSON-RPC POST (plaintext) — using raw sockets (no Boost)
 // ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+
+class SocketInit {
+public:
+    SocketInit() {
+#ifdef _WIN32
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
+    }
+    ~SocketInit() {
+#ifdef _WIN32
+        WSACleanup();
+#endif
+    }
+};
+
+inline void close_socket(socket_t s) {
+    TRI_CLI_CLOSE_SOCKET(s);
+}
+
+} // namespace
 
 static int CallRPC(const RPCConn& conn, const string& strMethod,
                    const Array& params, Value& result)
 {
+    SocketInit sockInit;
+
     Object req;
     req.push_back(Pair("jsonrpc", Value(string("1.0"))));
     req.push_back(Pair("id",      Value(string("triangles-cli"))));
@@ -324,81 +357,114 @@ static int CallRPC(const RPCConn& conn, const string& strMethod,
 
     string strAuth = Base64Encode(conn.user + ":" + conn.pass);
 
-    asio::io_context io;
-    tcp::resolver resolver(io);
-    boost::system::error_code ec;
-    auto endpoints = resolver.resolve(conn.host, conn.port, ec);
-    if (ec) {
+    // Resolve host:port via getaddrinfo
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    struct addrinfo* addrRes = nullptr;
+    int rc = getaddrinfo(conn.host.c_str(), conn.port.c_str(), &hints, &addrRes);
+    if (rc != 0 || addrRes == nullptr) {
         cerr << "triangles-cli: resolve " << conn.host << ":" << conn.port
-             << " failed: " << ec.message() << "\n";
+             << " failed: " << gai_strerror(rc) << "\n";
+        if (addrRes) freeaddrinfo(addrRes);
         return 1;
     }
 
-    tcp::socket sock(io);
-    sock.connect(*endpoints.begin(), ec);
-    if (ec) {
+    // Try each resolved address until one connects
+    socket_t sock = TRI_CLI_INVALID_SOCKET;
+    for (struct addrinfo* ai = addrRes; ai != nullptr; ai = ai->ai_next) {
+        sock = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (sock == TRI_CLI_INVALID_SOCKET) {
+            continue;
+        }
+        if (::connect(sock, ai->ai_addr, ai->ai_addrlen) == 0) {
+            break;  // connected
+        }
+        close_socket(sock);
+        sock = TRI_CLI_INVALID_SOCKET;
+    }
+    freeaddrinfo(addrRes);
+    if (sock == TRI_CLI_INVALID_SOCKET) {
         cerr << "triangles-cli: connect to " << conn.host << ":" << conn.port
-             << " failed: " << ec.message() << "\n"
+             << " failed\n"
              << "(is trianglesd running and accepting JSON-RPC?)\n";
         return 1;
     }
 
-    ostringstream reqStream;
-    reqStream << "POST / HTTP/1.1\r\n"
-              << "Host: " << conn.host << ":" << conn.port << "\r\n"
-              << "Authorization: Basic " << strAuth << "\r\n"
-              << "Content-Type: application/json\r\n"
-              << "Content-Length: " << strRequest.size() << "\r\n"
-              << "Connection: close\r\n"
-              << "\r\n"
-              << strRequest;
-    asio::streambuf requestBuf;
-    std::ostream os(&requestBuf);
-    os << reqStream.str();
-    asio::write(sock, requestBuf, ec);
-    if (ec) {
-        cerr << "triangles-cli: write failed: " << ec.message() << "\n";
-        return 1;
+    // Build HTTP/1.1 request
+    string reqData =
+        "POST / HTTP/1.1\r\n"
+        "Host: " + conn.host + ":" + conn.port + "\r\n"
+        "Authorization: Basic " + strAuth + "\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: " + to_string(strRequest.size()) + "\r\n"
+        "Connection: close\r\n"
+        "\r\n" + strRequest;
+
+    // Send
+    size_t totalSent = 0;
+    while (totalSent < reqData.size()) {
+        ssize_t n = ::send(sock, reqData.data() + totalSent,
+                           reqData.size() - totalSent, 0);
+        if (n <= 0) {
+            cerr << "triangles-cli: write failed\n";
+            close_socket(sock);
+            return 1;
+        }
+        totalSent += static_cast<size_t>(n);
     }
 
-    asio::streambuf responseBuf;
-    boost::system::error_code readEc;
-    while (asio::read(sock, responseBuf,
-                      asio::transfer_at_least(1), readEc)) {
-        // keep reading until EOF or error
+    // Read full response (until EOF)
+    string respData;
+    char buf[4096];
+    while (true) {
+        ssize_t n = ::recv(sock, buf, sizeof(buf), 0);
+        if (n > 0) {
+            respData.append(buf, static_cast<size_t>(n));
+        } else if (n == 0) {
+            break;  // EOF
+        } else {
+            // Error
+#ifdef _WIN32
+            int err = WSAGetLastError();
+            if (err == WSAECONNRESET || err == WSAECONNABORTED) {
+                // Treat as EOF
+                break;
+            }
+#else
+            if (errno == EINTR) continue;  // interrupted, retry
+            if (errno == ECONNRESET) break;  // peer closed
+#endif
+            cerr << "triangles-cli: read failed\n";
+            close_socket(sock);
+            return 1;
+        }
     }
-    if (readEc && readEc != asio::error::eof) {
-        cerr << "triangles-cli: read failed: " << readEc.message() << "\n";
-        return 1;
-    }
+    close_socket(sock);
 
-    std::istream rs(&responseBuf);
-    string line;
-    if (!std::getline(rs, line)) {
-        cerr << "triangles-cli: empty response\n";
+    // Parse status line
+    size_t hdrEnd = respData.find("\r\n\r\n");
+    if (hdrEnd == string::npos) {
+        cerr << "triangles-cli: malformed response (no header terminator)\n";
         return 1;
     }
-    if (!line.empty() && line.back() == '\r') line.pop_back();
+    string statusLine = respData.substr(0, respData.find("\r\n"));
     int status = 0;
     {
-        istringstream iss(line);
+        istringstream iss(statusLine);
         string httpVer;
         iss >> httpVer >> status;
     }
     if (status != 200) {
         cerr << "triangles-cli: server returned HTTP " << status << "\n";
-        ostringstream body;
-        body << rs.rdbuf();
-        if (!body.str().empty()) cerr << body.str() << "\n";
+        string body = respData.substr(hdrEnd + 4);
+        if (!body.empty()) cerr << body << "\n";
         return 1;
     }
-    while (std::getline(rs, line) && line != "\r" && !line.empty()) {}
-    string body;
-    {
-        ostringstream oss;
-        oss << rs.rdbuf();
-        body = oss.str();
-    }
+    string body = respData.substr(hdrEnd + 4);
 
     Value reply;
     if (!read_string(body, reply)) {
@@ -533,7 +599,6 @@ int main(int argc, char* argv[])
             CommandLineHelp(cout);
             return 0;
         }
-        // else fall through: delegate to daemon's help <command>
     }
 
     if (!GetArg("-getinfo", "").empty()) {

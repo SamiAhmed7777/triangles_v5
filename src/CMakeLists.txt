@@ -258,26 +258,18 @@ if(BUILD_CLI)
     add_executable(triangles-cli
         triangles-cli.cpp
     )
-    # Boost: header-only asio via Boost::boost target (sets include dirs;
-    # available in Boost 1.83+). libboost_system is the small compiled
-    # library that provides error_code/error_category symbols; link it
-    # explicitly by name to avoid needing the per-component CMake config
-    # file (which Homebrew's boost formula doesn't ship for the system
-    # component on macOS).
-    find_package(Boost REQUIRED)
+    # No Boost dependency: uses raw POSIX/Winsock sockets for HTTP. Only links
+    # the json_compat header-only shim and the platform's native socket lib
+    # (Winsock ws2_32 on Windows; libc on POSIX). Keeps the binary small and
+    # avoids per-platform Boost linking pain (MSYS2 uses versioned -mt- names;
+    # Homebrew doesn't ship the boost_system CMake config).
     target_link_libraries(triangles-cli
         PRIVATE
             json_compat
-            Boost::boost
     )
-    # Link libboost_system per-platform by library name
-    if(UNIX OR WIN32)
-        target_link_libraries(triangles-cli PRIVATE boost_system)
-    endif()
 
     if(WIN32)
         set_target_properties(triangles-cli PROPERTIES SUFFIX ".exe")
-        # boost::asio needs ws2_32 on Windows
         target_link_libraries(triangles-cli PRIVATE ws2_32)
     endif()
 
