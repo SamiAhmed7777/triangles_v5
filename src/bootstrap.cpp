@@ -17,6 +17,7 @@
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/sha.h>
 
 #include <fstream>
 #include <sstream>
@@ -771,15 +772,172 @@ bool DownloadBootstrap(const std::string& host,
     return true;
 }
 
+namespace {
+
+// Try to find the canonical UTXO snapshot entry in the bootstrap server's
+// manifest.json. Looks for an entry of type "utxo_snapshot" and extracts
+// its filename + expected SHA256. Returns true on success.
+//
+// We deliberately do a simple substring scan rather than full JSON parsing:
+// the manifest is operator-controlled, the format is stable, and adding a
+// JSON dependency for ~50 lines of code isn't worth it.
+//
+// On failure, the caller falls back to the legacy "utxo-snapshot.bin" URL,
+// which the bootstrap server symlinks to the canonical file.
+bool FindCanonicalSnapshotInManifest(const std::string& manifestText,
+                                     std::string& outFilename,
+                                     std::string& outSha256,
+                                     std::string& strError)
+{
+    // Look for the "utxo_snapshot" file entry, e.g.:
+    //   "utxo-snapshot-2207680.utx": {
+    //     ...
+    //     "type": "utxo_snapshot",
+    //     "sha256": "eeefe107...",
+    //     ...
+    //   }
+    size_t typePos = manifestText.find("\"utxo_snapshot\"");
+    if (typePos == std::string::npos) {
+        strError = "manifest.json has no utxo_snapshot entry";
+        return false;
+    }
+
+    // Walk backwards from the typePos to find the start of this file's block.
+    // Format: "filename": { ... "type": "utxo_snapshot" ...
+    // We scan for the nearest preceding '"' followed by ':' that introduces a
+    // top-level file entry. Simple heuristic: find the line containing the
+    // type marker, then search backwards for the file key.
+    size_t entryStart = manifestText.rfind('"', typePos);
+    if (entryStart == std::string::npos || entryStart == 0) {
+        strError = "malformed manifest.json (no filename before utxo_snapshot entry)";
+        return false;
+    }
+    // Skip the opening quote
+    size_t filenameStart = entryStart + 1;
+    size_t filenameEnd = manifestText.find('"', filenameStart);
+    if (filenameEnd == std::string::npos) {
+        strError = "malformed manifest.json (unterminated filename)";
+        return false;
+    }
+    outFilename = manifestText.substr(filenameStart, filenameEnd - filenameStart);
+
+    // Within this block, extract the sha256.
+    // Walk forward from the typePos to find the matching closing brace of the
+    // entry. (Manifest is shallow, so a naive brace-count is fine.)
+    size_t braceStart = manifestText.find('{', filenameEnd);
+    if (braceStart == std::string::npos) {
+        strError = "malformed manifest.json (no body after filename)";
+        return false;
+    }
+    int depth = 0;
+    size_t bodyEnd = braceStart;
+    for (size_t i = braceStart; i < manifestText.size(); ++i) {
+        if (manifestText[i] == '{') depth++;
+        else if (manifestText[i] == '}') {
+            depth--;
+            if (depth == 0) { bodyEnd = i; break; }
+        }
+    }
+    if (depth != 0) {
+        strError = "malformed manifest.json (unbalanced braces in entry)";
+        return false;
+    }
+    std::string entry = manifestText.substr(braceStart, bodyEnd - braceStart);
+
+    size_t shaPos = entry.find("\"sha256\"");
+    if (shaPos == std::string::npos) {
+        strError = "manifest entry has no sha256 field";
+        return false;
+    }
+    size_t valStart = entry.find('"', shaPos + 8);
+    if (valStart == std::string::npos) {
+        strError = "malformed manifest.json (no sha256 value)";
+        return false;
+    }
+    valStart++;
+    size_t valEnd = entry.find('"', valStart);
+    if (valEnd == std::string::npos) {
+        strError = "malformed manifest.json (unterminated sha256 value)";
+        return false;
+    }
+    outSha256 = entry.substr(valStart, valEnd - valStart);
+
+    return true;
+}
+
+// Compute the SHA256 of a file, return as lowercase hex string.
+std::string Sha256OfFile(const fs::path& path)
+{
+    FILE* f = fopen(path.string().c_str(), "rb");
+    if (!f) return "";
+    SHA256_CTX ctx;
+    SHA256_Init(&ctx);
+    unsigned char buf[64 * 1024];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+        SHA256_Update(&ctx, buf, n);
+    fclose(f);
+    unsigned char out[SHA256_DIGEST_LENGTH];
+    SHA256_Final(out, &ctx);
+    static const char hex[] = "0123456789abcdef";
+    std::string s(SHA256_DIGEST_LENGTH * 2, '0');
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
+        s[2*i]     = hex[(out[i] >> 4) & 0xF];
+        s[2*i + 1] = hex[out[i] & 0xF];
+    }
+    return s;
+}
+
+} // anonymous namespace
+
 bool DownloadUtxoSnapshot(const std::string& host,
                           const fs::path& dataDir,
                           ProgressCallback progressFn,
                           std::string& strError)
 {
     const bool noProxy = true;
-    const char* snapshotFilename = "utxo-snapshot.bin";
 
-    // Download utxo-snapshot.bin to a temp file
+    // Step 1: try to discover the canonical snapshot filename + expected
+    // SHA256 from the bootstrap server's manifest.json. If this fails (no
+    // manifest, old-format server), fall back to the legacy URL — which is
+    // a symlink to the canonical file on the operator's server.
+    std::string snapshotFilename = "utxo-snapshot.bin"; // legacy fallback
+    std::string expectedSha256; // empty = no manifest verification
+    bool haveManifest = false;
+
+    fs::path tmpManifest = dataDir / "manifest.json.tmp";
+    if (DownloadFile(host, "manifest.json", tmpManifest, nullptr, strError, noProxy)) {
+        // Read manifest content
+        FILE* mf = fopen(tmpManifest.string().c_str(), "rb");
+        if (mf) {
+            fseek(mf, 0, SEEK_END);
+            long sz = ftell(mf);
+            fseek(mf, 0, SEEK_SET);
+            std::string text(sz, '\0');
+            size_t nread = fread(&text[0], 1, sz, mf);
+            text.resize(nread);
+            fclose(mf);
+
+            std::string mFile, mSha;
+            std::string mErr;
+            if (FindCanonicalSnapshotInManifest(text, mFile, mSha, mErr)) {
+                snapshotFilename = mFile;
+                expectedSha256 = mSha;
+                haveManifest = true;
+                printf("Bootstrap: manifest declares canonical snapshot %s (sha256=%s)\n",
+                       snapshotFilename.c_str(), expectedSha256.substr(0, 16).c_str());
+            } else {
+                printf("Bootstrap: manifest parse failed (%s) — falling back to legacy URL\n",
+                       mErr.c_str());
+            }
+        }
+        fs::remove(tmpManifest);
+    } else {
+        printf("Bootstrap: no manifest.json available — falling back to legacy URL\n");
+        strError.clear(); // not fatal; we'll try the legacy URL next
+    }
+
+    // Step 2: download the canonical snapshot file.
     fs::path tmpPath = dataDir / "utxo-snapshot.bin.tmp";
     std::string urlPath = std::string(BASE_PATH) + snapshotFilename;
 
@@ -790,12 +948,31 @@ bool DownloadUtxoSnapshot(const std::string& host,
         return false;
     }
 
+    // Step 3: if we have a manifest, verify the file SHA256 matches.
+    // Defense in depth against MITM, server misconfiguration, or symlink drift.
+    if (haveManifest) {
+        std::string actualSha = Sha256OfFile(tmpPath);
+        if (actualSha.empty()) {
+            strError = "Cannot read downloaded snapshot for SHA256 verification";
+            fs::remove(tmpPath);
+            return false;
+        }
+        if (actualSha != expectedSha256) {
+            strError = "Snapshot SHA256 mismatch: expected " + expectedSha256
+                     + ", got " + actualSha
+                     + " (manifest/snapshot tampering or server misconfiguration)";
+            fs::remove(tmpPath);
+            return false;
+        }
+        printf("Bootstrap: snapshot SHA256 verified (%s)\n", actualSha.substr(0, 16).c_str());
+    }
+
     printf("Bootstrap: UTXO snapshot downloaded, loading into database...\n");
 
-    // Load the snapshot into a fresh active chain DB. P2P-delivered
-    // snapshots keep the checkpoint gate on (requireCheckpoint=true) —
-    // the manifest height+hash already passed IsKnownCheckpoint above,
-    // and we re-check here as defense in depth.
+    // Step 4: load the snapshot into a fresh active chain DB. P2P-delivered
+    // snapshots keep the checkpoint gate on (requireCheckpoint=true) — the
+    // manifest height+hash already passed IsKnownCheckpoint above, and we
+    // re-check here as defense in depth.
     if (!UtxoSnapshot::LoadSnapshot(tmpPath, dataDir, strError, /*requireCheckpoint=*/true)) {
         fs::remove(tmpPath);
         return false;

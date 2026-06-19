@@ -37,6 +37,7 @@ namespace Checkpoints
         // this height are rejected outright. Hash from the canonical chain.
         { 2205000, uint256("0x6bdd3c5e5a32e1dd9a70e705f1a28d1dd84929f89579bd2696d41bc87f39446f")},
         { 2206004, uint256("0xb34e8e6a7bb7f52167d81aaad4d26f87a876898fdd0fce860916fc1aaf9a2a46")},
+        { 2207680, uint256("0x6a5932e2625228d67f081ac8bf4fe3905aa25b8663f2d6b6ffc6adb47a9551ed")}, // canonical snapshot tip per signed manifest 2026-06-18
     };
 
     // Published UTXO snapshot file SHA256, keyed by snapshot height.
