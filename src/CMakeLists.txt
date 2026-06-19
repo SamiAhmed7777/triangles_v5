@@ -248,6 +248,39 @@ if(BUILD_DAEMON)
 endif()
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# 4b. JSON-RPC client (triangles-cli)
+#
+# Self-contained: only links univalue + boost::asio + boost::program_options
+# + boost::filesystem + OpenSSL (for base64 / future TLS). Does NOT link
+# triangles_common, wallet, or net — keeps the binary small.
+# ═══════════════════════════════════════════════════════════════════════════════
+if(BUILD_CLI)
+    add_executable(triangles-cli
+        triangles-cli.cpp
+    )
+    # Boost components used by the CLI
+    find_package(Boost REQUIRED COMPONENTS filesystem system)
+    target_link_libraries(triangles-cli
+        PRIVATE
+            json_compat
+            Boost::filesystem
+            Boost::system
+    )
+
+    if(WIN32)
+        set_target_properties(triangles-cli PROPERTIES SUFFIX ".exe")
+        # boost::asio needs ws2_32 on Windows
+        target_link_libraries(triangles-cli PRIVATE ws2_32)
+    endif()
+
+    if(MSVC)
+        set_target_properties(triangles-cli PROPERTIES
+            VS_WINRT_COMPONENT "console"
+        )
+    endif()
+endif()
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 5. Qt5 GUI wallet (triangles-qt)
 # ═══════════════════════════════════════════════════════════════════════════════
 if(BUILD_QT)

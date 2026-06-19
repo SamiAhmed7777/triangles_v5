@@ -268,6 +268,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_QT=OFF \
             -DBUILD_DAEMON=ON \
+            -DBUILD_CLI=ON \
             -DBUILD_TESTS=OFF \
             -DUSE_UPNP=ON
 
@@ -275,14 +276,19 @@ jobs:
         run: |
           cmake --build build -j$(nproc)
           strip --strip-all build/bin/trianglesd.exe
+          strip --strip-all build/bin/triangles-cli.exe
 
       - name: Package daemon with DLLs
         run: |
           mkdir -p daemon-dist/tor
           cp build/bin/trianglesd.exe daemon-dist/
+          cp build/bin/triangles-cli.exe daemon-dist/
 
-          # Copy all linked DLLs from MSYS2
-          ldd build/bin/trianglesd.exe | grep '/mingw64' | awk '{print $3}' | while read dll; do
+          # Copy all linked DLLs from MSYS2 (covers both binaries; ldd union)
+          {
+            ldd build/bin/trianglesd.exe | grep '/mingw64' | awk '{print $3}'
+            ldd build/bin/triangles-cli.exe | grep '/mingw64' | awk '{print $3}'
+          } | sort -u | while read dll; do
             cp "$dll" daemon-dist/ 2>/dev/null || true
           done
 
@@ -454,6 +460,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_QT=OFF \
             -DBUILD_DAEMON=ON \
+            -DBUILD_CLI=ON \
             -DBUILD_TESTS=OFF \
             -DUSE_UPNP=ON
 
@@ -461,7 +468,9 @@ jobs:
         run: cmake --build build -j$(nproc)
 
       - name: Strip binary
-        run: strip --strip-all build/bin/trianglesd
+        run: |
+          strip --strip-all build/bin/trianglesd
+          strip --strip-all build/bin/triangles-cli
 
       - name: Build .deb package (fully self-contained)
         run: |
@@ -477,12 +486,17 @@ jobs:
           mkdir -p ${PKG}/etc/systemd/system
 
           cp build/bin/trianglesd ${PKG}/usr/lib/cryptographic-triangles/
+          cp build/bin/triangles-cli ${PKG}/usr/lib/cryptographic-triangles/
           cp tor-extract/tor/tor ${PKG}/usr/lib/cryptographic-triangles/tor/
           chmod +x ${PKG}/usr/lib/cryptographic-triangles/tor/tor
           [ -d tor-extract/data ] && cp -r tor-extract/data ${PKG}/usr/lib/cryptographic-triangles/tor/data
 
           # Bundle ALL shared library dependencies (except glibc/kernel)
-          ldd build/bin/trianglesd | grep '=> /' | awk '{print $3}' | while read lib; do
+          # Union of ldd output from both binaries
+          {
+            ldd build/bin/trianglesd    | grep '=> /' | awk '{print $3}'
+            ldd build/bin/triangles-cli | grep '=> /' | awk '{print $3}'
+          } | sort -u | while read lib; do
             case "$lib" in
               /lib/x86_64-linux-gnu/libc.so*|/lib/x86_64-linux-gnu/libm.so*|/lib/x86_64-linux-gnu/libpthread.so*|/lib/x86_64-linux-gnu/libdl.so*|/lib/x86_64-linux-gnu/librt.so*|/lib/x86_64-linux-gnu/ld-linux*|/lib64/ld-linux*)
                 ;; # Skip glibc core — always present
@@ -495,7 +509,7 @@ jobs:
           ls ${PKG}/usr/lib/cryptographic-triangles/lib/ | wc -l
           ls ${PKG}/usr/lib/cryptographic-triangles/lib/
 
-          # Launcher with LD_LIBRARY_PATH
+          # Launchers with LD_LIBRARY_PATH
           cat > ${PKG}/usr/bin/trianglesd << 'LAUNCHER'
           #!/bin/bash
           INSTALL_DIR=/usr/lib/cryptographic-triangles
@@ -504,6 +518,15 @@ jobs:
           LAUNCHER
           sed -i 's/^          //' ${PKG}/usr/bin/trianglesd
           chmod +x ${PKG}/usr/bin/trianglesd
+
+          cat > ${PKG}/usr/bin/triangles-cli << 'LAUNCHER'
+          #!/bin/bash
+          INSTALL_DIR=/usr/lib/cryptographic-triangles
+          export LD_LIBRARY_PATH="${INSTALL_DIR}/lib:${LD_LIBRARY_PATH}"
+          exec "${INSTALL_DIR}/triangles-cli" "$@"
+          LAUNCHER
+          sed -i 's/^          //' ${PKG}/usr/bin/triangles-cli
+          chmod +x ${PKG}/usr/bin/triangles-cli
 
           cat > ${PKG}/etc/systemd/system/trianglesd.service << 'SVC'
           [Unit]
@@ -528,9 +551,9 @@ jobs:
           Version: ${VERSION}
           Architecture: amd64
           Maintainer: Cryptographic Triangles <dev@cryptographic-triangles.org>
-          Description: Cryptographic Triangles daemon with integrated Tor
-           Fully self-contained headless node with all libraries, Tor, and systemd service.
-           No external dependencies required — runs on any x86_64 Linux.
+          Description: Cryptographic Triangles daemon + CLI with integrated Tor
+           Fully self-contained headless node + JSON-RPC client with all libraries,
+           Tor, and systemd service. No external dependencies required.
           Section: finance
           Priority: optional
           CTRL
@@ -540,9 +563,10 @@ jobs:
           #!/bin/bash
           systemctl daemon-reload
           echo ""
-          echo "Cryptographic Triangles daemon installed."
-          echo "  Start:     sudo systemctl start trianglesd"
-          echo "  On boot:   sudo systemctl enable trianglesd"
+          echo "Cryptographic Triangles daemon + CLI installed."
+          echo "  Start daemon: sudo systemctl start trianglesd"
+          echo "  On boot:      sudo systemctl enable trianglesd"
+          echo "  Use CLI:      triangles-cli getinfo"
           echo ""
           POST
           chmod +x ${PKG}/DEBIAN/postinst
