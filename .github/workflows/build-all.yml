@@ -284,13 +284,16 @@ jobs:
           cp build/bin/trianglesd.exe daemon-dist/
           cp build/bin/triangles-cli.exe daemon-dist/
 
-          # Collect all linked DLLs from MSYS2 (covers both binaries; dedup via sort -u)
-          ldd build/bin/trianglesd.exe    | grep '/mingw64' | awk '{print $3}' > /tmp/cli-dlls.txt
-          ldd build/bin/triangles-cli.exe | grep '/mingw64' | awk '{print $3}' >> /tmp/cli-dlls.txt
-          sort -u /tmp/cli-dlls.txt | while read dll; do
-            [ -n "$dll" ] && cp "$dll" daemon-dist/ 2>/dev/null || true
+          # Collect DLLs from both binaries. Use simple for loop instead of
+          # pipes-into-while, which interact badly with MSYS2 bash + GitHub
+          # Actions' set -e -o pipefail. cp is idempotent so dupes are fine.
+          for bin in trianglesd triangles-cli; do
+            ldd "build/bin/${bin}.exe" | grep '/mingw64' | awk '{print $3}' > dll-list.txt
+            while IFS= read -r dll; do
+              cp "$dll" daemon-dist/ >/dev/null 2>&1 || true
+            done < dll-list.txt
+            rm -f dll-list.txt
           done
-          rm -f /tmp/cli-dlls.txt
 
       - name: Bundle Tor for daemon
         shell: powershell
@@ -492,20 +495,20 @@ jobs:
           [ -d tor-extract/data ] && cp -r tor-extract/data ${PKG}/usr/lib/cryptographic-triangles/tor/data
 
           # Bundle ALL shared library dependencies (except glibc/kernel)
-          # Union of ldd output from both binaries, dedup via sort -u
-          ldd build/bin/trianglesd    | grep '=> /' | awk '{print $3}' > /tmp/cli-libs.txt
-          ldd build/bin/triangles-cli | grep '=> /' | awk '{print $3}' >> /tmp/cli-libs.txt
-          sort -u /tmp/cli-libs.txt | while read lib; do
-            [ -z "$lib" ] && continue
-            case "$lib" in
-              /lib/x86_64-linux-gnu/libc.so*|/lib/x86_64-linux-gnu/libm.so*|/lib/x86_64-linux-gnu/libpthread.so*|/lib/x86_64-linux-gnu/libdl.so*|/lib/x86_64-linux-gnu/librt.so*|/lib/x86_64-linux-gnu/ld-linux*|/lib64/ld-linux*)
-                ;; # Skip glibc core — always present
-              *)
-                cp -L "$lib" ${PKG}/usr/lib/cryptographic-triangles/lib/ 2>/dev/null || true
-                ;;
-            esac
+          # Use simple for loop (cp is idempotent so dupes are fine)
+          for bin in trianglesd triangles-cli; do
+            ldd "build/bin/${bin}" | grep '=> /' | awk '{print $3}' > lib-list.txt
+            while IFS= read -r lib; do
+              case "$lib" in
+                /lib/x86_64-linux-gnu/libc.so*|/lib/x86_64-linux-gnu/libm.so*|/lib/x86_64-linux-gnu/libpthread.so*|/lib/x86_64-linux-gnu/libdl.so*|/lib/x86_64-linux-gnu/librt.so*|/lib/x86_64-linux-gnu/ld-linux*|/lib64/ld-linux*)
+                  ;; # Skip glibc core — always present
+                *)
+                  cp -L "$lib" ${PKG}/usr/lib/cryptographic-triangles/lib/ >/dev/null 2>&1 || true
+                  ;;
+              esac
+            done < lib-list.txt
+            rm -f lib-list.txt
           done
-          rm -f /tmp/cli-libs.txt
           echo "=== Bundled libs ==="
           ls ${PKG}/usr/lib/cryptographic-triangles/lib/ | wc -l
           ls ${PKG}/usr/lib/cryptographic-triangles/lib/
