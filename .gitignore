@@ -49,7 +49,6 @@ blocks/
 # IDE
 .vscode/
 .idea/
-.claude/
 *.swp
 *.swo
 *~
@@ -68,7 +67,6 @@ triangles.conf
 *.key
 *.cert
 *.gpg
-*.o
 src/trianglesd
 src/obj/
 build-bench/
@@ -78,3 +76,15 @@ build-latest/
 build-rocks-probe/
 build-rocksdb/
 bench-results.csv
+
+# Local build dirs (krystie)
+/build-*/
+/build/
+/bench-results.csv
+/build-rocks-probe/
+/build-rocksdb/
+/build-cmake/
+/build-cmake-test/
+/build-latest/
+/build-bench/
+/.qmake.stash
