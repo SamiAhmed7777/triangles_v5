@@ -42,20 +42,27 @@ bool DumpSnapshot(const fs::path& destPath,
         return false;
     }
 
-    // Collect block index entries (last nHeaders blocks, height ascending)
+    // Collect block index entries.
+    // v2 always includes EVERY block from genesis to tip, so a node
+    // loading this snapshot has full chain index (every block addressable
+    // via mapBlockIndex + readable from blk0001.dat).
+    // The nHeaders argument is honored only for legacy v1 generation.
+    const bool includeAllBlocks = (nHeaders == 0 || nHeaders > (unsigned int)nBestHeight);
     std::vector<std::pair<uint256, CDiskBlockIndex>> vHeaders;
-    vHeaders.reserve(nHeaders);
     {
         CBlockIndex* pindex = pindexBest;
-        unsigned int nCollected = 0;
-        while (pindex && nCollected < nHeaders) {
+        while (pindex) {
             CDiskBlockIndex diskindex(pindex);
             vHeaders.push_back({*pindex->phashBlock, diskindex});
             pindex = pindex->pprev;
-            nCollected++;
         }
-        // Reverse to height ascending order
+        // Reverse to height ascending order (genesis first)
         std::reverse(vHeaders.begin(), vHeaders.end());
+
+        // Legacy v1 path: trim to last nHeaders if requested and not already all
+        if (!includeAllBlocks && vHeaders.size() > nHeaders) {
+            vHeaders.erase(vHeaders.begin(), vHeaders.begin() + (vHeaders.size() - nHeaders));
+        }
     }
 
     // Open the chain DB once and reuse for both the UTXO count and the
@@ -91,6 +98,18 @@ bool DumpSnapshot(const fs::path& destPath,
     int64_t moneySupply = pindexBest->nMoneySupply;
     unsigned int numHeaders = (unsigned int)vHeaders.size();
     unsigned int numUtxos = (unsigned int)nUtxoCount;
+    // numBlocks = size of raw blk0001.dat content to embed in the snapshot.
+    // We size this up front; the actual write below streams the file.
+    unsigned int numBlocks = 0;
+    {
+        FILE* blkFile = fopen((GetDataDir() / "blk0001.dat").string().c_str(), "rb");
+        if (blkFile) {
+            fseek(blkFile, 0, SEEK_END);
+            long blkSize = ftell(blkFile);
+            fclose(blkFile);
+            if (blkSize > 0) numBlocks = (unsigned int)blkSize;
+        }
+    }
     uint256 contentHash; // placeholder, filled after writing data
 
     fwrite(&magic, sizeof(magic), 1, file);
@@ -101,6 +120,7 @@ bool DumpSnapshot(const fs::path& destPath,
     fwrite(&moneySupply, sizeof(moneySupply), 1, file);
     fwrite(&numHeaders, sizeof(numHeaders), 1, file);
     fwrite(&numUtxos, sizeof(numUtxos), 1, file);
+    fwrite(&numBlocks, sizeof(numBlocks), 1, file); // v2+: size of embedded blk0001.dat
     long contentHashPos = ftell(file);
     fwrite(&contentHash, sizeof(contentHash), 1, file); // placeholder
 
@@ -182,6 +202,34 @@ bool DumpSnapshot(const fs::path& destPath,
         }
     }
 
+    // v2: Append the raw blk0001.dat content so a fresh node is fully
+    // self-contained. Streams in chunks; SHA256 covers the bytes.
+    if (numBlocks > 0) {
+        FILE* blkFile = fopen((GetDataDir() / "blk0001.dat").string().c_str(), "rb");
+        if (!blkFile) {
+            fclose(file);
+            strError = "Cannot open blk0001.dat for snapshot embedding";
+            return false;
+        }
+        printf("UtxoSnapshot: embedding blk0001.dat (%u bytes) into snapshot\n", numBlocks);
+        unsigned char blkBuf[64 * 1024];
+        size_t nLeft = numBlocks;
+        while (nLeft > 0) {
+            size_t nWant = nLeft > sizeof(blkBuf) ? sizeof(blkBuf) : nLeft;
+            size_t nRead = fread(blkBuf, 1, nWant, blkFile);
+            if (nRead != nWant) {
+                fclose(blkFile);
+                fclose(file);
+                strError = "Short read on blk0001.dat during snapshot embed";
+                return false;
+            }
+            fwrite(blkBuf, 1, nRead, file);
+            SHA256_Update(&sha256, blkBuf, nRead);
+            nLeft -= nRead;
+        }
+        fclose(blkFile);
+    }
+
     // Finalize content hash and write it to the header
     SHA256_Final((unsigned char*)&contentHash, &sha256);
     fseek(file, contentHashPos, SEEK_SET);
@@ -189,8 +237,8 @@ bool DumpSnapshot(const fs::path& destPath,
 
     fclose(file);
 
-    printf("UtxoSnapshot: wrote %s (%d headers, %d UTXOs, hash=%s)\n",
-           destPath.string().c_str(), numHeaders, numUtxos,
+    printf("UtxoSnapshot: wrote %s (%d headers, %d UTXOs, %u block bytes, hash=%s)\n",
+           destPath.string().c_str(), numHeaders, numUtxos, numBlocks,
            contentHash.ToString().c_str());
 
     return true;
@@ -240,7 +288,7 @@ bool LoadSnapshot(const fs::path& snapshotPath,
     int height;
     uint256 blockHash;
     int64_t moneySupply;
-    unsigned int numHeaders, numUtxos;
+    unsigned int numHeaders = 0, numUtxos = 0, numBlocks = 0;
     uint256 expectedContentHash;
 
     if (fread(&magic, sizeof(magic), 1, file) != 1 ||
@@ -248,12 +296,32 @@ bool LoadSnapshot(const fs::path& snapshotPath,
         fread(&network, sizeof(network), 1, file) != 1 ||
         fread(&height, sizeof(height), 1, file) != 1 ||
         fread(&blockHash, sizeof(blockHash), 1, file) != 1 ||
-        fread(&moneySupply, sizeof(moneySupply), 1, file) != 1 ||
-        fread(&numHeaders, sizeof(numHeaders), 1, file) != 1 ||
-        fread(&numUtxos, sizeof(numUtxos), 1, file) != 1 ||
-        fread(&expectedContentHash, sizeof(expectedContentHash), 1, file) != 1) {
+        fread(&moneySupply, sizeof(moneySupply), 1, file) != 1) {
         fclose(file);
-        strError = "Truncated snapshot header";
+        strError = "Truncated snapshot header (common fields)";
+        return false;
+    }
+    if (fread(&numHeaders, sizeof(numHeaders), 1, file) != 1) {
+        fclose(file);
+        strError = "Truncated snapshot header (numHeaders)";
+        return false;
+    }
+    if (fread(&numUtxos, sizeof(numUtxos), 1, file) != 1) {
+        fclose(file);
+        strError = "Truncated snapshot header (numUtxos)";
+        return false;
+    }
+    // v2+ has numBlocks between numUtxos and contentHash. v1 stops here.
+    if (version >= 2) {
+        if (fread(&numBlocks, sizeof(numBlocks), 1, file) != 1) {
+            fclose(file);
+            strError = "Truncated snapshot header (numBlocks)";
+            return false;
+        }
+    }
+    if (fread(&expectedContentHash, sizeof(expectedContentHash), 1, file) != 1) {
+        fclose(file);
+        strError = "Truncated snapshot header (contentHash)";
         return false;
     }
 
@@ -458,6 +526,36 @@ bool LoadSnapshot(const fs::path& snapshotPath,
 
         if (success && !flushBatch())
             success = false;
+    }
+
+    // v2: After UTXOs, extract the raw blk0001.dat content. This makes the
+    // loaded node fully self-contained — no separate bootstrap needed.
+    if (success && version >= 2 && numBlocks > 0) {
+        printf("UtxoSnapshot: extracting %u block bytes to blk0001.dat...\n", numBlocks);
+        fs::path blkOut = dataDir / "blk0001.dat";
+        FILE* blkOutFile = fopen(blkOut.string().c_str(), "wb");
+        if (!blkOutFile) {
+            success = false;
+            strError = "Cannot create blk0001.dat for snapshot extract: " + blkOut.string();
+        } else {
+            unsigned char blkBuf[64 * 1024];
+            size_t nLeft = numBlocks;
+            while (nLeft > 0 && success) {
+                size_t nWant = nLeft > sizeof(blkBuf) ? sizeof(blkBuf) : nLeft;
+                size_t nRead = fread(blkBuf, 1, nWant, file);
+                if (nRead != nWant) {
+                    success = false;
+                    strError = "Short read on snapshot blocks section";
+                    break;
+                }
+                fwrite(blkBuf, 1, nRead, blkOutFile);
+                SHA256_Update(&sha256, blkBuf, nRead);
+                nLeft -= nRead;
+            }
+            fclose(blkOutFile);
+            if (success)
+                printf("UtxoSnapshot: wrote blk0001.dat (%u bytes)\n", numBlocks);
+        }
     }
 
     // Verify content hash
