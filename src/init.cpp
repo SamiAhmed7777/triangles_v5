@@ -1025,8 +1025,13 @@ bool AppInit2()
             printf("Found utxo-snapshot.bin — loading UTXO snapshot...\n");
             uiInterface.InitMessage(_("Loading UTXO snapshot..."));
 
+            // Local file load: skip the checkpoint gate. The operator has
+            // filesystem access, so the trust model is already equivalent
+            // to direct chain state modification — a malicious local file
+            // is no worse than a malicious chain DB. P2P-delivered
+            // snapshots (SnapshotNet) keep the checkpoint gate on.
             std::string strError;
-            if (UtxoSnapshot::LoadSnapshot(snapshotFile, dataPath, strError)) {
+            if (UtxoSnapshot::LoadSnapshot(snapshotFile, dataPath, strError, /*requireCheckpoint=*/false)) {
                 printf("UTXO snapshot loaded successfully.\n");
             } else {
                 printf("UTXO snapshot load failed: %s\n", strError.c_str());

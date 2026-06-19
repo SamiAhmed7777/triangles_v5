@@ -214,11 +214,20 @@ static bool SnapAddressFromScript(const CScript& script, int& nType, uint160& ha
 
 // ---------------------------------------------------------------------------
 // LoadSnapshot - load a UTXO snapshot into a fresh LevelDB
+//
+// `requireCheckpoint` controls whether the snapshot's tip block must be a
+// known checkpoint. This gate exists to prevent malicious P2P peers from
+// tricking the daemon into accepting a fake UTXO set at an arbitrary
+// height on an alternate chain. Local file loads (operator already has
+// filesystem access, so the trust model is the same as editing the chain
+// state directly) skip the gate via requireCheckpoint=false. P2P-delivered
+// snapshots (SnapshotNet) keep the gate on.
 // ---------------------------------------------------------------------------
 
 bool LoadSnapshot(const fs::path& snapshotPath,
                   const fs::path& /*dataDir — unused; resolved per-backend via GetChainDataDir()*/,
-                  std::string& strError)
+                  std::string& strError,
+                  bool requireCheckpoint)
 {
     FILE* file = fopen(snapshotPath.string().c_str(), "rb");
     if (!file) {
@@ -274,8 +283,9 @@ bool LoadSnapshot(const fs::path& snapshotPath,
         return false;
     }
 
-    // Verify snapshot block is a known checkpoint
-    if (!Checkpoints::IsKnownCheckpoint(height, blockHash)) {
+    // Verify snapshot block is a known checkpoint (only for P2P-delivered
+    // snapshots — local files are operator-trusted and can be at any height)
+    if (requireCheckpoint && !Checkpoints::IsKnownCheckpoint(height, blockHash)) {
         fclose(file);
         strError = "Snapshot block " + blockHash.ToString() + " at height "
                  + std::to_string(height) + " is not a known checkpoint";
