@@ -83,6 +83,7 @@ extern unsigned int nStakeMinAge;
 extern unsigned int nNodeLifespan;
 extern int nCoinbaseMaturity;
 extern int nBestHeight;
+extern bool fLoadedFromSnapshot; // true after successful UtxoSnapshot::LoadSnapshot
 extern uint256 nBestChainTrust;
 extern uint256 nBestInvalidTrust;
 extern uint256 hashBestChain;
