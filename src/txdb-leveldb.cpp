@@ -624,7 +624,18 @@ bool CTxDB::LoadBlockIndex()
             break;
         CBlock block;
         if (!block.ReadFromDisk(pindex))
+        {
+            // Snapshot-sourced chains have block headers + UTXOs but not raw
+            // block bodies on disk yet. Skip verification for those — the
+            // UTXO set itself was content-hash verified during LoadSnapshot.
+            // For non-snapshot chains, this remains a fatal error.
+            if (fLoadedFromSnapshot) {
+                printf("LoadBlockIndex(): block %d not on disk (snapshot-sourced), skipping verification\n",
+                       pindex->nHeight);
+                continue;
+            }
             return error("LoadBlockIndex() : block.ReadFromDisk failed");
+        }
         if (nCheckLevel>0 && !block.CheckBlock(true, true, (nCheckLevel>6)))
         {
             printf("LoadBlockIndex() : *** found bad block at %d, hash=%s\n", pindex->nHeight, pindex->GetBlockHash().ToString().c_str());

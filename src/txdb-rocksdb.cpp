@@ -654,7 +654,14 @@ bool CRocksTxDB::LoadBlockIndex()
             break;
         CBlock block;
         if (!block.ReadFromDisk(pindex))
+        {
+            if (fLoadedFromSnapshot) {
+                printf("LoadBlockIndex(): block %d not on disk (snapshot-sourced), skipping verification\n",
+                       pindex->nHeight);
+                continue;
+            }
             return error("LoadBlockIndex(): block.ReadFromDisk failed");
+        }
         if (nCheckLevel > 0 && !block.CheckBlock(true, true, (nCheckLevel > 6)))
         {
             printf("LoadBlockIndex(): bad block at %d, hash=%s\n",

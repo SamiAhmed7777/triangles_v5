@@ -505,6 +505,8 @@ bool LoadSnapshot(const fs::path& snapshotPath,
     printf("UtxoSnapshot: successfully loaded %d headers + %d UTXOs at height %d\n",
            numHeaders, numUtxos, height);
 
+    fLoadedFromSnapshot = true;
+
     return true;
 }
 
