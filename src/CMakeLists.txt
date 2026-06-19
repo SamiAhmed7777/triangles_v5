@@ -258,19 +258,32 @@ if(BUILD_CLI)
     add_executable(triangles-cli
         triangles-cli.cpp
     )
-    # Boost components used by the CLI
-    find_package(Boost REQUIRED COMPONENTS filesystem system)
+    # Boost: only need headers for asio + system. Boost::system gets resolved at
+    # link time via the platform's default library search path (libboost_system
+    # on Linux, libboost_system.dylib on macOS Homebrew, libboost_system-mt-*.dll
+    # on Windows MSYS2). Avoids needing a per-component CMake config file.
+    find_package(Boost REQUIRED)
     target_link_libraries(triangles-cli
         PRIVATE
             json_compat
-            Boost::filesystem
-            Boost::system
     )
+    if(UNIX AND NOT APPLE)
+        # Linux: explicit link to libboost_system (header-only Boost.System
+        # is rare; we explicitly link the small compiled library).
+        target_link_libraries(triangles-cli PRIVATE boost_system)
+    endif()
 
     if(WIN32)
         set_target_properties(triangles-cli PROPERTIES SUFFIX ".exe")
         # boost::asio needs ws2_32 on Windows
         target_link_libraries(triangles-cli PRIVATE ws2_32)
+    endif()
+
+    if(APPLE)
+        # macOS Homebrew ships libboost_system.dylib without a CMake config
+        # file, so link by library name (resolved via Homebrew's compiler
+        # toolchain search paths).
+        target_link_libraries(triangles-cli PRIVATE boost_system)
     endif()
 
     if(MSVC)

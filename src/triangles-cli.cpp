@@ -41,8 +41,7 @@
 #include <boost/asio.hpp>
 #include <boost/asio/streambuf.hpp>
 
-#include <boost/filesystem/operations.hpp>
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 
 #include <algorithm>
 #include <cstdint>
@@ -62,7 +61,7 @@
 using namespace std;
 namespace asio = boost::asio;
 using boost::asio::ip::tcp;
-namespace fs = boost::filesystem;
+namespace fs = std::filesystem;
 using namespace json_spirit;
 
 // ─────────────────────────────────────────────────────────────────────────────
