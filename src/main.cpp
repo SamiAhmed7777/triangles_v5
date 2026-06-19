@@ -3463,7 +3463,17 @@ bool LoadBlockIndex(bool fAllowNew)
         if (!txdb.TxnCommit())
             return error("LoadBlockIndex() : failed to commit new checkpoint master key to db");
         if ((!fTestNet) && !Checkpoints::ResetSyncCheckpoint())
-            return error("LoadBlockIndex() : failed to reset sync-checkpoint");
+        {
+            // For snapshot-sourced chains, the small initial block index may
+            // not include any of the known sync checkpoints yet (snapshot only
+            // includes ~1166 headers near tip). The sync checkpoint will be
+            // set when the node syncs past a known checkpoint height.
+            if (fLoadedFromSnapshot) {
+                printf("LoadBlockIndex(): sync-checkpoint reset deferred (snapshot-sourced, no checkpoints in small index yet)\n");
+            } else {
+                return error("LoadBlockIndex() : failed to reset sync-checkpoint");
+            }
+        }
     }
 
     return true;
