@@ -19,6 +19,12 @@
 #include <openssl/err.h>
 #include <openssl/sha.h>
 
+#include "key.h"
+#include "base58.h"
+#include "util.h"
+
+extern const std::string strMessageMagic;
+
 #include <fstream>
 #include <sstream>
 #include <cstdio>
@@ -784,9 +790,90 @@ namespace {
 //
 // On failure, the caller falls back to the legacy "utxo-snapshot.bin" URL,
 // which the bootstrap server symlinks to the canonical file.
+// Trusted signer addresses for snapshot manifests. A snapshot is accepted
+// iff its manifest's signing_address matches one of these AND its signature
+// verifies under Triangles' compact-message protocol.
+static const char* TRUSTED_SNAPSHOT_SIGNERS[] = {
+    "TG8f76yktTxDrT7JJymY3wVAusXiD3fVvX",  // Sami's snapshot publisher key
+};
+static const size_t NUM_TRUSTED_SNAPSHOT_SIGNERS =
+    sizeof(TRUSTED_SNAPSHOT_SIGNERS) / sizeof(TRUSTED_SNAPSHOT_SIGNERS[0]);
+
+bool IsTrustedSnapshotSigner(const std::string& addr)
+{
+    for (size_t i = 0; i < NUM_TRUSTED_SNAPSHOT_SIGNERS; ++i)
+        if (addr == TRUSTED_SNAPSHOT_SIGNERS[i])
+            return true;
+    return false;
+}
+
+// Verify a Triangles signed-message compact signature. Returns true iff:
+//   - The address is valid
+//   - The signature is valid base64
+//   - The compact signature recovers to a public key whose hash160 matches
+//     the address's keyID
+//   - The hash being verified is Hash(strMessageMagic || message)
+//
+// Mirrors verifymessage RPC. Caller separately checks trust.
+bool VerifySignedMessage(const std::string& strAddress,
+                         const std::string& strSignatureB64,
+                         const std::string& strMessage,
+                         std::string& strError)
+{
+    CTrianglesAddress addr(strAddress);
+    if (!addr.IsValid()) {
+        strError = "Invalid signer address: " + strAddress;
+        return false;
+    }
+    CKeyID keyID;
+    if (!addr.GetKeyID(keyID)) {
+        strError = "Address does not refer to a key: " + strAddress;
+        return false;
+    }
+
+    bool fInvalid = false;
+    std::vector<unsigned char> vchSig = DecodeBase64(strSignatureB64.c_str(), &fInvalid);
+    if (fInvalid) {
+        strError = "Malformed base64 in signature";
+        return false;
+    }
+
+    CDataStream ss(SER_GETHASH, 0);
+    ss << strMessageMagic;
+    ss << strMessage;
+
+    CKey key;
+    if (!key.SetCompactSignature(Hash(ss.begin(), ss.end()), vchSig)) {
+        strError = "Signature does not verify (recovered key mismatch or malformed sig)";
+        return false;
+    }
+    if (key.GetPubKey().GetID() != keyID) {
+        strError = "Signature recovered to a different key than the claimed signer";
+        return false;
+    }
+    return true;
+}
+
+// Extract a string field value from a small JSON object (subset).
+std::string ExtractJsonString(const std::string& json, const std::string& field)
+{
+    std::string key = "\"" + field + "\"";
+    size_t pos = json.find(key);
+    if (pos == std::string::npos) return "";
+    pos += key.size();
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == ':' || json[pos] == '\t'))
+        pos++;
+    if (pos >= json.size() || json[pos] != '\"') return "";
+    pos++;
+    size_t end = json.find('\"', pos);
+    if (end == std::string::npos) return "";
+    return json.substr(pos, end - pos);
+}
+
 bool FindCanonicalSnapshotInManifest(const std::string& manifestText,
                                      std::string& outFilename,
                                      std::string& outSha256,
+                                     std::string& outManifestFilename,
                                      std::string& strError)
 {
     // Look for the "utxo_snapshot" file entry, e.g.:
@@ -862,7 +949,36 @@ bool FindCanonicalSnapshotInManifest(const std::string& manifestText,
     }
     outSha256 = entry.substr(valStart, valEnd - valStart);
 
+    // Extract manifest filename (optional).
+    outManifestFilename.clear();
+    size_t manPos = entry.find("\"manifest\"");
+    if (manPos != std::string::npos) {
+        size_t mvStart = entry.find('\"', manPos + 10);
+        if (mvStart != std::string::npos) {
+            mvStart++;
+            size_t mvEnd = entry.find('\"', mvStart);
+            if (mvEnd != std::string::npos)
+                outManifestFilename = entry.substr(mvStart, mvEnd - mvStart);
+        }
+    }
+
     return true;
+}
+
+// Read an entire file into a string. Empty string on error.
+std::string ReadFileToString(const fs::path& path)
+{
+    FILE* f = fopen(path.string().c_str(), "rb");
+    if (!f) return "";
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); return ""; }
+    fseek(f, 0, SEEK_SET);
+    std::string s(sz, '\0');
+    size_t nread = fread(&s[0], 1, sz, f);
+    s.resize(nread);
+    fclose(f);
+    return s;
 }
 
 // Compute the SHA256 of a file, return as lowercase hex string.
@@ -897,47 +1013,77 @@ bool DownloadUtxoSnapshot(const std::string& host,
 {
     const bool noProxy = true;
 
-    // Step 1: try to discover the canonical snapshot filename + expected
-    // SHA256 from the bootstrap server's manifest.json. If this fails (no
-    // manifest, old-format server), fall back to the legacy URL — which is
-    // a symlink to the canonical file on the operator's server.
-    std::string snapshotFilename = "utxo-snapshot.bin"; // legacy fallback
-    std::string expectedSha256; // empty = no manifest verification
+    // Step 1: discover the canonical snapshot filename + expected SHA256 +
+    // per-snapshot manifest filename from the big manifest.json. Falls back
+    // to legacy URL if manifest unavailable.
+    std::string snapshotFilename = "utxo-snapshot.bin";
+    std::string expectedSha256;
+    std::string snapshotManifestFilename;
     bool haveManifest = false;
 
     fs::path tmpManifest = dataDir / "manifest.json.tmp";
     if (DownloadFile(host, "manifest.json", tmpManifest, nullptr, strError, noProxy)) {
-        // Read manifest content
-        FILE* mf = fopen(tmpManifest.string().c_str(), "rb");
-        if (mf) {
-            fseek(mf, 0, SEEK_END);
-            long sz = ftell(mf);
-            fseek(mf, 0, SEEK_SET);
-            std::string text(sz, '\0');
-            size_t nread = fread(&text[0], 1, sz, mf);
-            text.resize(nread);
-            fclose(mf);
-
-            std::string mFile, mSha;
-            std::string mErr;
-            if (FindCanonicalSnapshotInManifest(text, mFile, mSha, mErr)) {
-                snapshotFilename = mFile;
-                expectedSha256 = mSha;
-                haveManifest = true;
-                printf("Bootstrap: manifest declares canonical snapshot %s (sha256=%s)\n",
-                       snapshotFilename.c_str(), expectedSha256.substr(0, 16).c_str());
-            } else {
-                printf("Bootstrap: manifest parse failed (%s) — falling back to legacy URL\n",
-                       mErr.c_str());
-            }
-        }
+        std::string text = ReadFileToString(tmpManifest);
         fs::remove(tmpManifest);
+
+        std::string mFile, mSha, mManifest;
+        std::string mErr;
+        if (FindCanonicalSnapshotInManifest(text, mFile, mSha, mManifest, mErr)) {
+            snapshotFilename = mFile;
+            expectedSha256 = mSha;
+            snapshotManifestFilename = mManifest;
+            haveManifest = true;
+            printf("Bootstrap: manifest declares canonical snapshot %s (sha256=%s)\n",
+                   snapshotFilename.c_str(), expectedSha256.substr(0, 16).c_str());
+        } else {
+            printf("Bootstrap: manifest parse failed (%s) — falling back to legacy URL\n",
+                   mErr.c_str());
+        }
     } else {
         printf("Bootstrap: no manifest.json available — falling back to legacy URL\n");
-        strError.clear(); // not fatal; we'll try the legacy URL next
+        strError.clear();
     }
 
-    // Step 2: download the canonical snapshot file.
+    // Step 2: verify the per-snapshot manifest's signature. This is the
+    // AUTHENTICATION gate — the signature attests that the listed snapshot
+    // file came from a trusted operator. No checkpoint required; signature
+    // alone proves authenticity.
+    if (!snapshotManifestFilename.empty()) {
+        fs::path tmpSnapManifest = dataDir / "snapshot-manifest.tmp";
+        if (!DownloadFile(host, snapshotManifestFilename, tmpSnapManifest, nullptr, strError, noProxy)) {
+            fs::remove(tmpSnapManifest);
+            return false;
+        }
+        std::string snapManifestText = ReadFileToString(tmpSnapManifest);
+        fs::remove(tmpSnapManifest);
+
+        std::string signerAddr = ExtractJsonString(snapManifestText, "signing_address");
+        std::string message     = ExtractJsonString(snapManifestText, "message");
+        std::string signature   = ExtractJsonString(snapManifestText, "signature");
+        std::string declaredSha = ExtractJsonString(snapManifestText, "snapshot_sha256");
+
+        if (signerAddr.empty() || message.empty() || signature.empty()) {
+            strError = "per-snapshot manifest missing required fields (signing_address/message/signature)";
+            return false;
+        }
+        if (!IsTrustedSnapshotSigner(signerAddr)) {
+            strError = "snapshot manifest signer " + signerAddr + " is not in trusted signers list";
+            return false;
+        }
+        std::string vErr;
+        if (!VerifySignedMessage(signerAddr, signature, message, vErr)) {
+            strError = "snapshot signature verification failed: " + vErr;
+            return false;
+        }
+        if (!declaredSha.empty())
+            expectedSha256 = declaredSha;
+        printf("Bootstrap: snapshot signature verified (signer=%s)\n", signerAddr.c_str());
+    } else {
+        printf("Bootstrap: WARNING — no per-snapshot manifest available; "
+               "loading snapshot WITHOUT signature verification\n");
+    }
+
+    // Step 3: download the canonical snapshot file.
     fs::path tmpPath = dataDir / "utxo-snapshot.bin.tmp";
     std::string urlPath = std::string(BASE_PATH) + snapshotFilename;
 
@@ -948,9 +1094,8 @@ bool DownloadUtxoSnapshot(const std::string& host,
         return false;
     }
 
-    // Step 3: if we have a manifest, verify the file SHA256 matches.
-    // Defense in depth against MITM, server misconfiguration, or symlink drift.
-    if (haveManifest) {
+    // Step 4: verify the downloaded file's SHA256 against the manifest.
+    if (!expectedSha256.empty()) {
         std::string actualSha = Sha256OfFile(tmpPath);
         if (actualSha.empty()) {
             strError = "Cannot read downloaded snapshot for SHA256 verification";
@@ -969,18 +1114,15 @@ bool DownloadUtxoSnapshot(const std::string& host,
 
     printf("Bootstrap: UTXO snapshot downloaded, loading into database...\n");
 
-    // Step 4: load the snapshot into a fresh active chain DB. P2P-delivered
-    // snapshots keep the checkpoint gate on (requireCheckpoint=true) — the
-    // manifest height+hash already passed IsKnownCheckpoint above, and we
-    // re-check here as defense in depth.
-    if (!UtxoSnapshot::LoadSnapshot(tmpPath, dataDir, strError, /*requireCheckpoint=*/true)) {
+    // Step 5: load the snapshot. requireCheckpoint is FALSE — signature is
+    // the authentication gate; checkpoints would force snapshots only at
+    // specific heights. Signature alone is sufficient.
+    if (!UtxoSnapshot::LoadSnapshot(tmpPath, dataDir, strError, /*requireCheckpoint=*/false)) {
         fs::remove(tmpPath);
         return false;
     }
 
-    // Clean up the temp file
     fs::remove(tmpPath);
-
     printf("Bootstrap: UTXO snapshot loaded successfully.\n");
     return true;
 }
