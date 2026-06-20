@@ -50,7 +50,14 @@ namespace Bootstrap {
 
 bool NeedsBootstrap(const fs::path& dataDir)
 {
-    return !fs::exists(dataDir / "blk0001.dat");
+    // Need bootstrap if there's no chain database (the UTXO set / block index).
+    // blk0001.dat alone is NOT sufficient — it's raw block data that requires
+    // FastImport to build an index, and FastImport is disabled by default.
+    // Check for both LevelDB (txleveldb/) and RocksDB (chainstate/) backends.
+    bool hasChainDb = fs::exists(dataDir / "txleveldb")
+                   || fs::exists(dataDir / "blocks" / "chainstate")
+                   || fs::exists(dataDir / "chainstate");
+    return !hasChainDb;
 }
 
 // Direct TCP connection bypassing Tor SOCKS proxy.

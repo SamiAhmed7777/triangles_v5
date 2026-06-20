@@ -1030,14 +1030,11 @@ bool AppInit2()
         fs::path dataPath = GetDataDir();
         bool needsBootstrap = Bootstrap::NeedsBootstrap(dataPath);
 
-        if (needsBootstrap && !noBootstrap && !snapshotMode) {
-            printf("Bootstrap: no blockchain data found — downloading automatically.\n");
+        if (needsBootstrap && !noBootstrap) {
+            printf("Bootstrap: no blockchain data found — downloading UTXO snapshot automatically.\n");
             printf("Bootstrap: (use -nobootstrap to skip)\n");
-            uiInterface.InitMessage(_("Downloading blockchain data..."));
+            uiInterface.InitMessage(_("Downloading UTXO snapshot..."));
             wantsBootstrap = true;
-        } else if (needsBootstrap && snapshotMode && !wantsBootstrap) {
-            printf("Bootstrap: no blockchain data found — will fetch UTXO snapshot via P2P after network start.\n");
-            printf("Bootstrap: (use -bootstrap for legacy clearnet HTTP bootstrap, or -snapshot=0 to disable P2P fetcher)\n");
         }
 
     if (wantsBootstrap)
@@ -1229,20 +1226,20 @@ bool AppInit2()
     {
         if (!GetBoolArg("-allowfastimport", false))
         {
-            return InitError(_(
-                "Block index empty and blk0001.dat is present, but FastImport is disabled "
-                "(default). The snapshot path is the only supported sync start.\n\n"
-                "To recover:\n"
-                "  1. Place a signed utxo-snapshot.bin in the data directory and restart, OR\n"
-                "  2. Delete blk0001.dat (the snapshot path will sync from network), OR\n"
-                "  3. Pass -allowfastimport=1 to permit FastImport (operator opt-in only)."));
+            printf("FastImport: blk0001.dat present but -allowfastimport not set — "
+                   "ignoring block file, will sync from network via UTXO snapshot.\n");
+            // Remove the stale blk0001.dat so it doesn't trigger again
+            std::filesystem::remove(GetDataDir() / "blk0001.dat");
         }
+        else
+        {
         printf("FastImport: WARNING -allowfastimport is set; rebuilding from local blk0001.dat.\n");
         uiInterface.InitMessage(_("Importing bootstrap blocks..."));
         printf("Block index empty but blk0001.dat exists - running fast import...\n");
         int64_t nFastImportStart = GetTimeMillis();
         FastImportBlockFile();
         StartupPerfLog("bootstrap_fast_import", GetTimeMillis() - nFastImportStart, strprintf("bestheight=%d", nBestHeight));
+        }
     }
 
     // as LoadBlockIndex can take several minutes, it's possible the user
