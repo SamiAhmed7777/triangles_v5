@@ -1,0 +1,32 @@
+# /etc/tri/nodes.conf — Triangles node configuration
+#
+# Shared by Hermes and Krystie. Both agents on DNS2 tunnel RPC
+# to the trianglesd node on DNS3 via SSH.
+#
+# Node: DNS3 (100.81.59.99)
+
+# ─── Connection ──────────────────────────────────────────────────────────────
+
+# RPC is only accessible on localhost at the node, so we SSH-tunnel
+TRI_SSH_HOST="your-node-ip-here"
+TRI_SSH_USER="root"
+
+# RPC credentials (as set in triangles.conf on the node)
+TRI_RPC_HOST="127.0.0.1"
+TRI_RPC_PORT="19112"
+TRI_RPC_USER="your-rpc-user-here"
+TRI_RPC_PASS="your-rpc-password-here"
+
+# ─── Wallet ──────────────────────────────────────────────────────────────────
+
+# Wallet passphrase for unlocking (needed for messaging + sending)
+# Leave empty if wallet is unencrypted or set via env var TRI_WALLET_PASSPHRASE
+# TRI_WALLET_PASSPHRASE=""
+
+# Default sender address for messages (set after creating addresses)
+# TRI_DEFAULT_FROM=""
+
+# ─── Agent Addresses ─────────────────────────────────────────────────────────
+# When agents have their own TRI addresses, register them here:
+# HERMES_TRI_ADDR="T..."
+# KRYSTIE_TRI_ADDR="T..."

@@ -1,0 +1,39 @@
+#compdef tri
+
+_tri() {
+    local -a commands
+    commands=(
+        'status:Detailed node status'
+        'balance:Wallet balance'
+        'peers:Connected peers'
+        'stake:Staking info'
+        'address:Address management'
+        'send:Send TRI'
+        'tx:Transactions'
+        'msg:Secure messaging'
+        'raw:Raw RPC passthrough'
+        'help:Show help'
+    )
+    
+    _arguments -C \
+        "1:command:->command" \
+        "*::arg:->args"
+    
+    case "$state" in
+        command)
+            _describe 'tri command' commands
+            ;;
+        args)
+            case ${words[1]} in
+                address|addr)
+                    _values 'subcommand' 'new' 'list' 'balance'
+                    ;;
+                msg|message|messages)
+                    _values 'subcommand' 'inbox' 'outbox' 'send' 'anon' 'keys' 'enable' 'pubkey' 'unlock'
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_tri "$@"
