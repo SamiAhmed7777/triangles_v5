@@ -52,7 +52,7 @@ bool NeedsBootstrap(const fs::path& dataDir)
 {
     // Need bootstrap if there's no chain database (the UTXO set / block index).
     // blk0001.dat alone is NOT sufficient — it's raw block data that requires
-    // FastImport to build an index, and FastImport is disabled by default.
+    // (fast-import was removed; UTXO snapshot is the only sync path)
     // Check for both LevelDB (txleveldb/) and RocksDB (chainstate/) backends.
     bool hasChainDb = fs::exists(dataDir / "txleveldb")
                    || fs::exists(dataDir / "blocks" / "chainstate")
@@ -734,7 +734,7 @@ bool DownloadBootstrap(const std::string& host,
 
     // Check if the archive included a trusted pre-built index for the active
     // backend with a valid snapshot.manifest. If verified, keep it to skip the
-    // multi-hour FastImportBlockFile() rebuild.
+    // multi-hour rebuild (fast-import removed; UTXO snapshot is the only sync path).
     fs::path chainDbPath = GetChainDataDir();
     fs::path database  = dataDir / "database";
     fs::path manifestPath = dataDir / "snapshot.manifest";
@@ -767,7 +767,7 @@ bool DownloadBootstrap(const std::string& host,
 
     if (!keepIndex) {
         // No valid manifest or verification failed - delete the index.
-        // FastImportBlockFile() will rebuild from blk0001.dat on next startup.
+        // The block index will be rebuilt from the UTXO snapshot on next startup.
         printf("Bootstrap: removing extracted %s/ (will rebuild index from blk0001.dat)\n",
                GetChainDataDir().filename().string().c_str());
         if (fs::exists(chainDbPath))

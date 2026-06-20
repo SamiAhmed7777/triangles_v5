@@ -533,7 +533,6 @@ std::string HelpMessage()
         "  -seedurl=<host>        " + _("HTTP seed list host (default: seeds.cryptographic-triangles.org)") + "\n" +
         "  -noseedurl             " + _("Disable HTTP seed list fetch on startup") + "\n" +
         "  -autorerebuild=<n>     " + _("If our chain is more than <n> blocks behind peers, wipe chain DB and shutdown for clean restart (default: 0=disabled)") + "\n" +
-        "  -allowfastimport       " + _("Permit FastImport as fallback (operator opt-in only; default off)") + "\n" +
         "  -banscore=<n>          " + _("Threshold for disconnecting misbehaving peers (default: 100)") + "\n" +
         "  -bantime=<n>           " + _("Number of seconds to keep misbehaving peers from reconnecting (default: 86400)") + "\n" +
         "  -par=<n>               " + _("Set the number of script verification threads (default: auto, 0 = auto, 1 = single-threaded)") + "\n" +
@@ -1160,7 +1159,7 @@ bool AppInit2()
     }
 
     // Handle -reindex: delete the chain DB so it gets rebuilt from the raw
-    // blk*.dat files via FastImportBlockFile(). This recalculates money
+    // blk*.dat files. This recalculates money
     // supply, tx index, and UTXO set from scratch. Backend-agnostic via
     // WipeChainDataDir(), which resolves the directory per the configured
     // -chaindb backend.
@@ -1209,38 +1208,15 @@ bool AppInit2()
     }
 
     // AutoRebuild: if -autorerebuild is set and we are behind peers, wipe chain DB
-    // and shutdown for clean restart. Must run before FastImportBlockFile below.
+    // and shutdown for clean restart.
     MaybeAutoRebuild(GetArg("-autorerebuild", 0));
     if (fRequestShutdown) {
         printf("AutoRebuild: shutdown requested before chain load complete\n");
         return false;
     }
 
-    // If the block index is empty but blk0001.dat exists (bootstrap download),
-    // fast-import would normally rebuild from the block file. Per Sami: FastImport
-    // is REMOVED as a primary path — the UTXO snapshot is the canonical sync start.
-    // FastImport is gated behind -allowfastimport for explicit operator opt-in only
-    // (emergency recovery, snapshot format incompatibility, etc).
-    if (nBestHeight == 0 && std::filesystem::exists(GetDataDir() / "blk0001.dat")
-        && mapBlockIndex.size() <= 1)
-    {
-        if (!GetBoolArg("-allowfastimport", false))
-        {
-            printf("FastImport: blk0001.dat present but -allowfastimport not set — "
-                   "ignoring block file, will sync from network via UTXO snapshot.\n");
-            // Remove the stale blk0001.dat so it doesn't trigger again
-            std::filesystem::remove(GetDataDir() / "blk0001.dat");
-        }
-        else
-        {
-        printf("FastImport: WARNING -allowfastimport is set; rebuilding from local blk0001.dat.\n");
-        uiInterface.InitMessage(_("Importing bootstrap blocks..."));
-        printf("Block index empty but blk0001.dat exists - running fast import...\n");
-        int64_t nFastImportStart = GetTimeMillis();
-        FastImportBlockFile();
-        StartupPerfLog("bootstrap_fast_import", GetTimeMillis() - nFastImportStart, strprintf("bestheight=%d", nBestHeight));
-        }
-    }
+    // Block index loaded. With fast-import removed, the only supported sync path
+    // is the UTXO snapshot (auto-downloaded from bootstrap or placed manually in datadir).
 
     // as LoadBlockIndex can take several minutes, it's possible the user
     // requested to kill triangles-qt during the last operation. If so, exit.
