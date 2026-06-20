@@ -460,114 +460,6 @@ static int64_t ParseTarOctal(const char* field, size_t len)
 }
 
 // Extract a tar.gz file to a destination directory
-static bool ExtractTarGz(const fs::path& tarGzPath,
-                          const fs::path& destDir,
-                          std::string& strError)
-{
-    gzFile gz = gzopen(tarGzPath.string().c_str(), "rb");
-    if (!gz) {
-        strError = "Cannot open " + tarGzPath.string();
-        return false;
-    }
-
-    gzbuffer(gz, 262144); // 256 KB buffer for performance
-
-    char header[512];
-
-    while (true) {
-        int bytesRead = gzread(gz, header, 512);
-        if (bytesRead == 0) break; // EOF
-        if (bytesRead != 512) {
-            strError = "Truncated tar header";
-            gzclose(gz);
-            return false;
-        }
-
-        // End-of-archive marker (zero block)
-        bool allZero = true;
-        for (int i = 0; i < 512; i++) {
-            if (header[i] != 0) { allZero = false; break; }
-        }
-        if (allZero) break;
-
-        // Parse filename: name (offset 0, 100 bytes) + optional prefix (offset 345, 155 bytes)
-        char name[101] = {0};
-        char prefix[156] = {0};
-        memcpy(name, header, 100);
-        memcpy(prefix, header + 345, 155);
-
-        std::string fullName;
-        if (prefix[0] != '\0')
-            fullName = std::string(prefix) + "/" + std::string(name);
-        else
-            fullName = std::string(name);
-
-        // Security: reject absolute paths and path traversal
-        if (fullName.empty() || fullName[0] == '/' || fullName.find("..") != std::string::npos) {
-            strError = "Unsafe path in tar archive: " + fullName;
-            gzclose(gz);
-            return false;
-        }
-
-        char typeflag = header[156];
-        int64_t fileSize = ParseTarOctal(header + 124, 12);
-
-        if (typeflag == '5' || (!fullName.empty() && fullName.back() == '/')) {
-            // Directory entry
-            fs::create_directories(destDir / fullName);
-        } else if (typeflag == '0' || typeflag == '\0') {
-            // Regular file
-            fs::path filePath = destDir / fullName;
-            fs::create_directories(filePath.parent_path());
-
-            FILE* outFile = fopen(filePath.string().c_str(), "wb");
-            if (!outFile) {
-                strError = "Cannot create file: " + filePath.string();
-                gzclose(gz);
-                return false;
-            }
-
-            int64_t remaining = fileSize;
-            char buf[65536];
-            while (remaining > 0) {
-                int toRead = (remaining > (int64_t)sizeof(buf)) ? (int)sizeof(buf) : (int)remaining;
-                int n = gzread(gz, buf, toRead);
-                if (n <= 0) {
-                    fclose(outFile);
-                    strError = "Truncated tar data for: " + fullName;
-                    gzclose(gz);
-                    return false;
-                }
-                fwrite(buf, 1, n, outFile);
-                remaining -= n;
-            }
-            fclose(outFile);
-
-            // Skip padding to next 512-byte boundary
-            int64_t pad = (512 - (fileSize % 512)) % 512;
-            if (pad > 0) {
-                char padBuf[512];
-                if (gzread(gz, padBuf, (unsigned)pad) != (int)pad) {
-                    strError = "Truncated tar padding for: " + fullName;
-                    gzclose(gz);
-                    return false;
-                }
-            }
-        } else {
-            // Unknown entry type - skip its data
-            int64_t totalSkip = fileSize + ((512 - (fileSize % 512)) % 512);
-            char skipBuf[512];
-            while (totalSkip > 0) {
-                int toRead = (totalSkip > 512) ? 512 : (int)totalSkip;
-                if (gzread(gz, skipBuf, toRead) != toRead) break;
-                totalSkip -= toRead;
-            }
-        }
-    }
-
-    gzclose(gz);
-    return true;
-}
 
 } // anonymous namespace
 
@@ -684,34 +576,19 @@ bool DownloadBootstrap(const std::string& host,
 {
     bool gotBlockFile = false;
 
-    // Try downloading bootstrap.tar.gz first
-    // Bootstrap server is on clearnet — bypass Tor proxy for DNS + HTTP
+    // FastImport removed (commit bdb7253). v2 UTXO snapshot is the ONLY
+    // supported sync path. Skip the legacy tarball fallback entirely so we
+    // never hit /triangles-bootstrap.tar.gz (404 since 2026-06-19 cleanup)
+    // or /tri-bootstrap.tar.gz (also gone; was the URL in the old filelist.txt).
+    // The remaining path below reads filelist.txt → downloads utxo-snapshot.bin.
     const bool noProxy = true;
-    fs::path tmpTarGz = dataDir / "bootstrap.tar.gz.tmp";
-    std::string tarUrl = std::string(BASE_PATH) + "triangles-bootstrap.tar.gz";
-
-    printf("DownloadBootstrap(): attempting tar.gz download from %s%s\n", host.c_str(), tarUrl.c_str());
-    bool tarDownloaded = DownloadFile(host, tarUrl, tmpTarGz, progressFn, strError, noProxy);
-    printf("DownloadBootstrap(): tarDownloaded=%d result=%s\n", tarDownloaded, strError.c_str());
-
-    if (tarDownloaded) {
-        bool extractOk = ExtractTarGz(tmpTarGz, dataDir, strError);
-        fs::remove(tmpTarGz);
-
-        if (extractOk && fs::exists(dataDir / "blk0001.dat"))
-            gotBlockFile = true;
-        // If extraction failed, fall through to legacy path
-    }
 
     if (!gotBlockFile) {
-        // Fallback: try filelist.txt + individual file downloads
+        // Try filelist.txt — should contain only utxo-snapshot.bin (v2).
         std::string fallbackError;
         std::vector<std::string> files;
         if (!FetchFileList(host, files, fallbackError, noProxy)) {
-            if (!tarDownloaded)
-                strError = strError + " (fallback also failed: " + fallbackError + ")";
-            else
-                strError = "Extraction failed: " + strError + " (fallback also failed: " + fallbackError + ")";
+            strError = "filelist.txt unavailable: " + fallbackError;
             return false;
         }
 
