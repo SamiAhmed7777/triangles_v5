@@ -577,7 +577,7 @@ jobs:
           # 3. Open PR
           gh pr create \
             --repo microsoft/winget-pkgs \
-            --head "${GH_REPO}:${BRANCH}" \
+            --head "SamiAhmed7777:${BRANCH}" \
             --base master \
             --title "${PACKAGE_ID} version ${VERSION}" \
             --body "Automated update of ${PACKAGE_ID} to v${VERSION}. Artifacts at ${INSTALLER_URL} (SHA256: ${SHA})."
