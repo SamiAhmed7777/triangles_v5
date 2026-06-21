@@ -333,3 +333,261 @@ jobs:
           else
             echo "::notice::Homebrew distribution completed."
           fi
+
+  chocolatey:
+    name: Chocolatey (triangles)
+    needs: version
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    env:
+      CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check CHOCO_API_KEY + CHOCO_SKIP_WACATAC
+        run: |
+          if [ -z "$CHOCO_API_KEY" ]; then
+            echo "::warning::CHOCO_API_KEY not set — skipping Chocolatey push."
+          fi
+          if [ "$CHOCO_SKIP_WACATAC" != "" ]; then
+            echo "::warning::CHOCO_SKIP_WACATAC=$CHOCO_SKIP_WACATAC — skipping Chocolatey push (Wacatac still active)."
+          fi
+
+      - name: Wait for release artifacts
+        if: env.CHOCO_API_KEY != '' && env.CHOCO_SKIP_WACATAC != ''
+        shell: bash
+        run: |
+          for i in {1..30}; do
+            URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/Cryptographic-Triangles-${VERSION}-win-x64-setup.exe"
+            if curl -fsSL --head "$URL" >/dev/null 2>&1; then
+              echo "✓ Release .exe available: $URL"
+              exit 0
+            fi
+            echo "  waiting for release v${VERSION}... ($i/30)"
+            sleep 20
+          done
+          echo "::error::Release v${VERSION} Windows installer never became available"
+          exit 1
+
+      - name: Compute installer SHA256
+        if: env.CHOCO_API_KEY != '' && env.CHOCO_SKIP_WACATAC != ''
+        shell: bash
+        id: sha
+        run: |
+          curl -fsSL -o /tmp/triangles-setup.exe \
+            "https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/Cryptographic-Triangles-${VERSION}-win-x64-setup.exe"
+          SHA=$(sha256sum /tmp/triangles-setup.exe | awk '{print $1}')
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+          echo "Chocolatey installer SHA256: $SHA"
+
+      - name: Update nuspec version
+        if: env.CHOCO_API_KEY != '' && env.CHOCO_SKIP_WACATAC != ''
+        shell: bash
+        working-directory: ${{ github.workspace }}/packaging/chocolatey
+        run: |
+          python3 -c "
+          import re
+          with open('triangles.nuspec') as f: c = f.read()
+          c = re.sub(r'<version>[\d.]+</version>', f'<version>${VERSION}</version>', c)
+          with open('triangles.nuspec', 'w') as f: f.write(c)
+          print('updated nuspec version to', '${VERSION}')
+          "
+          grep -E "<version>|<id>" triangles.nuspec
+
+      - name: Update nuspec version + install script SHA
+        if: env.CHOCO_API_KEY != '' && env.CHOCO_SKIP_WACATAC != ''
+        shell: bash
+        working-directory: ${{ github.workspace }}/packaging/chocolatey
+        run: |
+          python3 -c "
+          import re
+          with open('triangles.nuspec') as f: c = f.read()
+          c = re.sub(r'<version>[\d.]+</version>', f'<version>${VERSION}</version>', c)
+          with open('triangles.nuspec', 'w') as f: f.write(c)
+          with open('tools/chocolateyInstall.ps1') as f: c = f.read()
+          c = c.replace('__CHECKSUM_PLACEHOLDER__', '${{ steps.sha.outputs.sha }}')
+          with open('tools/chocolateyInstall.ps1', 'w') as f: f.write(c)
+          print('updated nuspec version + install script checksum')
+          "
+          grep -E "<version>|<id>" triangles.nuspec
+          grep checksum64 tools/chocolateyInstall.ps1
+
+      - name: Pack Chocolatey package
+        if: env.CHOCO_API_KEY != '' && env.CHOCO_SKIP_WACATAC != ''
+        shell: pwsh
+        working-directory: ${{ github.workspace }}/packaging/chocolatey
+        run: |
+          choco pack
+          Get-ChildItem *.nupkg
+
+      - name: Push to Chocolatey
+        if: env.CHOCO_API_KEY != '' && env.CHOCO_SKIP_WACATAC != ''
+        shell: pwsh
+        working-directory: ${{ github.workspace }}/packaging/chocolatey
+        run: |
+          $apiKey = [System.Environment]::GetEnvironmentVariable('CHOCO_API_KEY', 'Process')
+          choco apikey add --key="$apiKey" --source='https://push.chocolatey.org/'
+          Get-ChildItem *.nupkg | ForEach-Object {
+            Write-Host "Pushing $($_.Name)..."
+            choco push $_.Name --source='https://push.chocolatey.org/'
+          }
+
+      - name: ✓ Summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -z "$CHOCO_API_KEY" ]; then
+            echo "::notice::Chocolatey job skipped (CHOCO_API_KEY not set)."
+          elif [ -n "$CHOCO_SKIP_WACATAC" ]; then
+            echo "::notice::Chocolatey job skipped (Wacatac detection still active). Set CHOCO_SKIP_WACATAC='' and re-run after Microsoft clears the false-positive."
+          else
+            echo "::notice::Chocolatey push completed (subject to moderator review)."
+          fi
+
+  winget:
+    name: WinGet (CryptographicTriangles.TrianglesQt)
+    needs: version
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check WINGET_TOKEN
+        run: |
+          if [ -z "$WINGET_TOKEN" ]; then
+            echo "::warning::WINGET_TOKEN not set — skipping WinGet PR. Add a GitHub PAT with 'public_repo' scope at Settings → Secrets → Actions."
+          fi
+
+      - name: Wait for release artifacts
+        if: env.WINGET_TOKEN != ''
+        run: |
+          for i in {1..30}; do
+            URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/Cryptographic-Triangles-${VERSION}-win-x64-setup.exe"
+            if curl -fsSL --head "$URL" >/dev/null 2>&1; then
+              echo "✓ Release .exe available: $URL"
+              exit 0
+            fi
+            echo "  waiting for release v${VERSION}... ($i/30)"
+            sleep 20
+          done
+          echo "::error::Release v${VERSION} Windows installer never became available"
+          exit 1
+
+      - name: Compute installer SHA256
+        if: env.WINGET_TOKEN != ''
+        id: sha
+        run: |
+          curl -fsSL -o /tmp/triangles-setup.exe \
+            "https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/Cryptographic-Triangles-${VERSION}-win-x64-setup.exe"
+          SHA=$(sha256sum /tmp/triangles-setup.exe | awk '{print $1}')
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+          echo "WinGet installer SHA256: $SHA"
+
+      - name: Fork + update WinGet manifest + open PR
+        if: env.WINGET_TOKEN != ''
+        env:
+          SHA: ${{ steps.sha.outputs.sha }}
+          PUBLISHER_INITIAL: C
+          PACKAGE_ID: CryptographicTriangles.TrianglesQt
+          INSTALLER_URL: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/Cryptographic-Triangles-${VERSION}-win-x64-setup.exe
+        run: |
+          set -e
+          # Install gh + jq if missing
+          which gh >/dev/null 2>&1 || (curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null && sudo apt update && sudo apt install -y gh jq)
+          
+          VERSION="$VERSION"
+          MANIFEST_DIR="manifests/$PUBLISHER_INITIAL/CryptographicTriangles/$PACKAGE_ID/$VERSION"
+          
+          # 1. Clone the winget-pkgs repo (Sami's fork) — auto-create fork if needed
+          echo "Forking microsoft/winget-pkgs..."
+          GH_REPO="SamiAhmed7777/winget-pkgs"
+          if ! gh repo view "$GH_REPO" >/dev/null 2>&1; then
+            gh repo fork microsoft/winget-pkgs --fork --remote=false
+          fi
+          gh repo sync "$GH_REPO" --source microsoft/winget-pkgs --branch master --force 2>&1 | tail -3 || true
+          rm -rf winget-pkgs
+          git clone --depth 1 "https://x-access-token:${WINGET_TOKEN}@github.com/${GH_REPO}.git" winget-pkgs
+          cd winget-pkgs
+          git config user.name "Sami Ahmed"
+          git config user.email "SamiAhmed7777@users.noreply.github.com"
+          
+          BRANCH="triangles-${VERSION}"
+          git checkout -b "$BRANCH"
+          
+          mkdir -p "$MANIFEST_DIR"
+          
+          # 2. Generate the three manifest files
+          cat > "$MANIFEST_DIR/${PACKAGE_ID}.yaml" <<EOF
+          PackageIdentifier: ${PACKAGE_ID}
+          PackageVersion: ${VERSION}
+          PackageLocale: en-US
+          Publisher: Cryptographic Triangles
+          PublisherUrl: https://cryptographic-triangles.org
+          PackageName: Cryptographic Triangles Qt Wallet
+          License: MIT
+          ShortDescription: Privacy-focused cryptocurrency wallet with PoS staking, Tor v3, and encrypted messaging.
+          ManifestType: version
+          ManifestVersion: 1.6.0
+          EOF
+          
+          cat > "$MANIFEST_DIR/${PACKAGE_ID}.locale.en-US.yaml" <<EOF
+          PackageIdentifier: ${PACKAGE_ID}
+          PackageVersion: ${VERSION}
+          PackageLocale: en-US
+          Publisher: Cryptographic Triangles
+          PublisherUrl: https://cryptographic-triangles.org
+          PackageName: Cryptographic Triangles Qt Wallet
+          License: MIT
+          ShortDescription: Privacy-focused cryptocurrency wallet with PoS staking, Tor v3, and encrypted messaging.
+          Description: |-
+            Cryptographic Triangles (TRI) is a privacy-focused cryptocurrency
+            featuring Proof-of-Stake consensus with 33% annual staking rewards,
+            Tor v3 onion routing, and built-in encrypted peer-to-peer messaging.
+            Originally launched in July 2014, featuring the unique Hash9 algorithm
+            (13-step hash cascade).
+          ManifestType: defaultLocale
+          ManifestVersion: 1.6.0
+          EOF
+          
+          cat > "$MANIFEST_DIR/${PACKAGE_ID}.installer.yaml" <<EOF
+          PackageIdentifier: ${PACKAGE_ID}
+          PackageVersion: ${VERSION}
+          PackageLocale: en-US
+          InstallerType: exe
+          InstallerScope: user
+          InstallerMode: interactive
+          Installers:
+            - Architecture: x64
+              InstallerType: exe
+              InstallerUrl: ${INSTALLER_URL}
+              InstallerSha256: ${SHA}
+          ManifestType: installer
+          ManifestVersion: 1.6.0
+          EOF
+          
+          git add "$MANIFEST_DIR"
+          git commit -m "${PACKAGE_ID} version ${VERSION}"
+          git push origin "$BRANCH"
+          
+          # 3. Open PR
+          gh pr create \
+            --repo microsoft/winget-pkgs \
+            --head "${GH_REPO}:${BRANCH}" \
+            --base master \
+            --title "${PACKAGE_ID} version ${VERSION}" \
+            --body "Automated update of ${PACKAGE_ID} to v${VERSION}. Artifacts at ${INSTALLER_URL} (SHA256: ${SHA})."
+          
+          echo "✓ PR opened"
+
+      - name: ✓ Summary
+        if: always()
+        run: |
+          if [ -z "$WINGET_TOKEN" ]; then
+            echo "::notice::WinGet job skipped (WINGET_TOKEN not set)."
+          else
+            echo "::notice::WinGet PR opened."
+          fi
