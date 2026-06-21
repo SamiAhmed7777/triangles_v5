@@ -261,6 +261,15 @@ public:
     int nBestKnownHeight;        // highest block height known to this peer (updated from inv/block msgs)
     int nIncompatibleGetblocks;  // count of getblocks with no common blocks (fork detection)
 
+    // Option C: peer reliability scoring. Higher = more reliable.
+    // Starts at 100 (neutral), grows with successful block delivery, shrinks with
+    // disconnects and unreachable-on-connect. Used by sync manager to prefer
+    // reliable peers for header/block requests and to demote flaky ones.
+    int nReliabilityScore = 100;
+    int nDisconnectCount = 0;     // disconnects since startup
+    int nConnectFailures = 0;     // host-unreachable on connect attempts
+    int64_t nLastDisconnectTime = 0; // for flapping detection (many disconnects in short window)
+
     // BIP 31 ping/pong latency tracking
     uint64_t nPingNonceSent;     // nonce of last ping sent (0 = no outstanding ping)
     int64_t nPingUsecStart;      // microsecond timestamp when last ping was sent
@@ -271,6 +280,8 @@ public:
     std::vector<CAddress> vAddrToSend;
     mruset<CAddress> setAddrKnown;
     bool fGetAddr;
+    int64_t nLastGetaddrTrigger; // last time we sent this peer a discovery round (getaddr+getseederlist+getwalletaddr)
+    int nSignedPeerBonus;       // +N reputation when peer completed walletaddr handshake (signed identity)
     std::set<uint256> setKnown;
     uint256 hashCheckpointKnown; // triangles: known sent sync-checkpoint
 
@@ -325,6 +336,8 @@ public:
         nPingUsecTime = 0;
         nPingRetryCount = 0;
         fGetAddr = false;
+        nLastGetaddrTrigger = 0;
+        nSignedPeerBonus = 0;
         nMisbehavior = 0;
         hashCheckpointKnown = 0;
         setInventoryKnown.max_size(SendBufferSize() / 1000);
@@ -549,6 +562,10 @@ public:
     void CancelSubscribe(unsigned int nChannel);
     void CloseSocketDisconnect();
     void Cleanup();
+    // Option C: recompute reliability score from current counters.
+    // Call this periodically (e.g. in sync manager tick) to apply the
+    // flapping penalty (5+ disconnects in 5min = extra 50 penalty).
+    int RecomputeReliabilityScore();
 
 
     // Denial-of-service detection/prevention

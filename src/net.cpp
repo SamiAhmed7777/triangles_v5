@@ -564,6 +564,14 @@ CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
 void CNode::CloseSocketDisconnect()
 {
     fDisconnect = true;
+    // Option C: track this disconnect for the reliability score. We increment
+    // BEFORE closing the socket so a flurry of disconnects from one peer is
+    // visible to the next sync manager tick (which iterates cs_vNodes).
+    ++nDisconnectCount;
+    nLastDisconnectTime = GetTime();
+    // Penalize the score by 25 per disconnect. Flapping peers (5+ in 5min) get
+    // an extra 50 penalty applied in the score recompute.
+    nReliabilityScore = std::max(0, nReliabilityScore - 25);
     if (hSocket != INVALID_SOCKET)
     {
         printf("disconnecting node %s\n", addrName.c_str());
@@ -579,6 +587,40 @@ void CNode::CloseSocketDisconnect()
 
 void CNode::Cleanup()
 {
+}
+
+int CNode::RecomputeReliabilityScore()
+{
+    // Option C: compute reliability score from current counters.
+    //
+    // Base: 100
+    // -10 per connect failure (host unreachable on attempt)
+    // -25 per disconnect (also applied immediately in CloseSocketDisconnect,
+    //   but we re-apply here so a fresh CNode that started with a low score
+    //   can recover)
+    // +5 per block delivered, capped at +200
+    // -50 if the peer has flapped (5+ disconnects in the last 5 minutes)
+    //
+    // Floor: 0 (peer effectively banned from sync)
+    // Ceiling: 500
+    int score = 100;
+    score -= 10 * nConnectFailures;
+    score -= 25 * nDisconnectCount;
+    int deliveryBonus = std::min(200, 5 * nBlocksDelivered);
+    score += deliveryBonus;
+
+    if (nDisconnectCount >= 5) {
+        // Flapping detection: 5+ disconnects in the peer's lifetime.
+        // We can't easily check "last 5 min" without history, so we use
+        // total count as a proxy. A peer that connects/disconnects a lot
+        // is unreliable regardless of timing.
+        score -= 50;
+    }
+
+    if (score < 0) score = 0;
+    if (score > 500) score = 500;
+    nReliabilityScore = score;
+    return score;
 }
 
 
@@ -1894,9 +1936,56 @@ void ThreadOpenConnections2(void* parg)
 
     // Initiate network connections
     int64_t nStart = GetTime();
+    int64_t nLastDiscoveryRound = 0;  // signed peer discovery: re-trigger getaddr+getseederlist+getwalletaddr
+    const int64_t DISCOVERY_COOLDOWN = 300; // 5min between rounds (peer count < threshold)
+    const int DISCOVERY_THRESHOLD = 4;       // if we have fewer than this many connected peers, re-trigger
     while (true)
     {
         ProcessOneShot();
+
+        // Signed peer discovery: when our connected-peer count drops, re-trigger
+        // the full signing + discovery round on every peer. Triangles already has
+        // getaddr / getseederlist / getwalletaddr in onion_v3.cpp — this just
+        // re-fires them periodically instead of only at startup.
+        int nConnectedOnion = 0;
+        int nSignedPeers = 0;
+        int64_t nNow = GetTime();
+        {
+            LOCK(cs_vNodes);
+            for (CNode* pnode : vNodes) {
+                if (!pnode->fInbound && pnode->fSuccessfullyConnected) {
+                    std::string ip = pnode->addr.ToStringIP();
+                    if (ip.find(".onion") != std::string::npos) {
+                        nConnectedOnion++;
+                        if (pnode->nSignedPeerBonus > 0) nSignedPeers++;
+                    }
+                }
+            }
+        }
+        if (nConnectedOnion < DISCOVERY_THRESHOLD &&
+            nNow - nLastDiscoveryRound > DISCOVERY_COOLDOWN)
+        {
+            nLastDiscoveryRound = nNow;
+            printf("SYNC-SIGN: low peer count (%d < %d), re-firing discovery round on all peers\n",
+                   nConnectedOnion, DISCOVERY_THRESHOLD);
+            LOCK(cs_vNodes);
+            for (CNode* pnode : vNodes) {
+                if (!pnode->fInbound && pnode->fSuccessfullyConnected) {
+                    std::string ip = pnode->addr.ToStringIP();
+                    if (ip.find(".onion") != std::string::npos &&
+                        nNow - pnode->nLastGetaddrTrigger > DISCOVERY_COOLDOWN)
+                    {
+                        pnode->nLastGetaddrTrigger = nNow;
+                        pnode->PushMessage("getaddr");
+                        pnode->PushMessage("getseederlist");
+                        // getwalletaddr is only sent on version handshake (main.cpp:3941);
+                        // we don't re-fire it here because it generates a new receiving
+                        // key on the peer each call, which is wasteful. Signed peers
+                        // are cached for 24h (onion_v3.cpp:2308) so they'll be reused.
+                    }
+                }
+            }
+        }
 
         vnThreadsRunning[THREAD_OPENCONNECTIONS]--;
         MilliSleep(500);

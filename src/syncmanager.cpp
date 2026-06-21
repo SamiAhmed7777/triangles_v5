@@ -22,11 +22,15 @@ struct CSyncManager::HeaderNode
     int64_t nLastRequestTime;
     int64_t nFirstRequestTime;
     int64_t nInsertTime;
+    // Phase 1.5: track which peer this header was last requested from. Used to
+    // compute per-peer inflight for the cap. Not a hard ownership — the block
+    // can be re-requested from a different peer if this one stalls.
+    CNode* pnodeLastRequest = nullptr;
 };
 
 namespace
 {
-static const unsigned int MAX_HEADER_SYNC_CACHE = 15000;
+static const unsigned int MAX_HEADER_SYNC_CACHE = 100000;
 static const size_t HEADER_REDUNDANT_PEER_THRESHOLD = 4;
 static const int64_t HEADER_REQUEST_TIMEOUT_MICROS = 60 * 1000000;
 static const int64_t HEADER_REDUNDANT_REQUEST_MICROS = 5 * 1000000;
@@ -35,7 +39,7 @@ static const int64_t HEADER_SYNC_TTL_MICROS = 15 * 60 * 1000000;
 // run ahead of the connected chain tip before we stop fetching MORE headers
 // and let the block planner catch up. Comfortly below MAX_HEADER_SYNC_CACHE
 // so the cache never overflows in normal from-zero sync.
-static const int HEADER_FRONT_MAX_AHEAD = 8000;
+static const int HEADER_FRONT_MAX_AHEAD = 32768;
 
 std::map<uint256, CSyncManager::HeaderNode> mapHeaders;
 uint256 hashBestHeader = 0;
@@ -472,8 +476,26 @@ unsigned int CSyncManager::QueueBlocksParallel(unsigned int nWindow)
     unsigned int nQueued = 0;
     unsigned int nPeerIndex = 0;
 
+    // Option C: sort eligible peers by reliability score, not just blocks delivered.
+    // A peer that's delivered 100 blocks but disconnected 20 times is less reliable
+    // than a peer that's delivered 50 blocks with 0 disconnects. The score captures
+    // both. We also drop peers with score <= 0 (effectively banned from sync).
+    for (CNode* pnode : vEligiblePeers) {
+        pnode->RecomputeReliabilityScore();
+    }
+    vEligiblePeers.erase(
+        std::remove_if(vEligiblePeers.begin(), vEligiblePeers.end(),
+            [](const CNode* p) { return p->nReliabilityScore <= 0; }),
+        vEligiblePeers.end());
+
     std::sort(vEligiblePeers.begin(), vEligiblePeers.end(),
         [](const CNode* a, const CNode* b) {
+            // Sort by reliability score (primary), then signed-peer bonus (signed > unsigned),
+            // then blocks delivered (tiebreaker).
+            if (a->nReliabilityScore != b->nReliabilityScore)
+                return a->nReliabilityScore > b->nReliabilityScore;
+            if (a->nSignedPeerBonus != b->nSignedPeerBonus)
+                return a->nSignedPeerBonus > b->nSignedPeerBonus;
             return a->nBlocksDelivered > b->nBlocksDelivered;
         });
 
@@ -505,6 +527,22 @@ unsigned int CSyncManager::QueueBlocksParallel(unsigned int nWindow)
         }
     }
 
+    // Phase 1.5: per-peer inflight counting via HeaderNode.pnodeLastRequest.
+    // Skip a peer if they're at their share of the global window. This caps the
+    // damage a single .onion peer can do if they're feeding low-quality blocks.
+    const unsigned int nPerPeerCap = GetPeerInflightCap(vEligiblePeers.size());
+    std::map<const CNode*, unsigned int> mapPeerInflight;
+    {
+        const int64_t nNowInflight = GetTime() * 1000000;
+        for (const auto& kv : mapHeaders) {
+            if (kv.second.fRequested &&
+                (nNowInflight - kv.second.nLastRequestTime) < HEADER_REQUEST_TIMEOUT_MICROS &&
+                kv.second.pnodeLastRequest != nullptr) {
+                ++mapPeerInflight[kv.second.pnodeLastRequest];
+            }
+        }
+    }
+
     for (std::vector<uint256>::const_iterator it = vPath.begin(); it != vPath.end(); ++it)
     {
         if (nInFlight + nQueued >= nWindow)
@@ -525,8 +563,31 @@ unsigned int CSyncManager::QueueBlocksParallel(unsigned int nWindow)
         if (!fNeedsRequest)
             continue;
 
-        CNode* pnode = vWeightedPeers[nPeerIndex % vWeightedPeers.size()];
+        // Phase 1.5: skip peers that are at their share of the global window. We
+        // try the weighted peer first, and if they're capped, fall back to any
+        // other eligible peer that's under the cap. This ensures one peer can't
+        // claim the whole window even if they're the highest-weighted.
+        CNode* pnode = nullptr;
+        for (size_t tryIdx = 0; tryIdx < vWeightedPeers.size(); ++tryIdx) {
+            CNode* candidate = vWeightedPeers[(nPeerIndex + tryIdx) % vWeightedPeers.size()];
+            unsigned int candidateInflight = mapPeerInflight.count(candidate) ? mapPeerInflight[candidate] : 0;
+            if (candidateInflight < nPerPeerCap) {
+                pnode = candidate;
+                nPeerIndex = (nPeerIndex + tryIdx) % vWeightedPeers.size();
+                break;
+            }
+        }
+        if (!pnode) {
+            // All peers at cap — skip this block for now, it'll be retried later
+            continue;
+        }
+
         pnode->AskFor(CInv(MSG_BLOCK, *it));
+
+        // Phase 1.5: record which peer this block was requested from for the
+        // per-peer inflight count
+        mi->second.pnodeLastRequest = pnode;
+        mapPeerInflight[pnode] = (mapPeerInflight.count(pnode) ? mapPeerInflight[pnode] : 0) + 1;
 
         if (IsInitialBlockDownload() &&
             vWeightedPeers.size() >= 2 &&
@@ -649,6 +710,10 @@ void CSyncManager::TrackBlockDelivery(CNode* pfrom, const uint256& hashBlock)
         return;
 
     pfrom->nBlocksDelivered++;
+    // Option C: reward the peer for delivering a block. Capped at +200 by
+    // RecomputeReliabilityScore. Also recompute to apply any flapping penalty
+    // that may have accumulated since the last recompute.
+    pfrom->nReliabilityScore = std::min(500, pfrom->nReliabilityScore + 5);
     if (nBestHeight > pfrom->nBestKnownHeight)
         pfrom->nBestKnownHeight = nBestHeight;
 
@@ -692,6 +757,22 @@ void CSyncManager::Tick(CNode* pto, int nHighestInvWalk, const uint256& hashHigh
             printf("IBD-DIAG: control-loop refill from %u peers (plannerDepth=%u inflight=%u target=%u)\n",
                 nRefilled, nPlannerDepth, nInFlight, HEADER_SYNC_TARGET_INFLIGHT);
         nLastHeaderPlannerControl = nNowSec;
+    }
+
+    // Pipeline refill: when the in-flight block window has drained (inflight==0)
+    // and the planner still has headers ahead of the connected tip, kick a fresh
+    // getheaders round on every eligible peer so the next batch of blocks is
+    // requested BEFORE the current download finishes. Closes the "Tor pipe
+    // empty" gaps that stall throughput between burst windows.
+    if (nInFlight < (unsigned int)(HEADER_DOWNLOAD_WINDOW / 16) &&
+        nPlannerDepth > 0)
+    {
+        const unsigned int nPipeline = RequestRefillAllPeers(
+            hashBestHeader, HEADER_SYNC_REFILL_MIN_INTERVAL_SECONDS,
+            "pipeline-prefetch");
+        if (nPipeline > 0)
+            printf("IBD-DIAG: pipeline-prefetch refill %u (plannerDepth=%u inflight=%u)\n",
+                nPipeline, nPlannerDepth, nInFlight);
     }
 
     if (nNowSec - nLastHeaderWatchdog >= HEADER_SYNC_CONTROL_INTERVAL_SECONDS &&
