@@ -491,6 +491,7 @@ jobs:
       - name: Fork + update WinGet manifest + open PR
         if: env.WINGET_TOKEN != ''
         env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
           SHA: ${{ steps.sha.outputs.sha }}
           PUBLISHER_INITIAL: C
           PACKAGE_ID: CryptographicTriangles.TrianglesQt
