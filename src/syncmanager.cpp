@@ -530,7 +530,7 @@ unsigned int CSyncManager::QueueBlocksParallel(unsigned int nWindow)
     // Phase 1.5: per-peer inflight counting via HeaderNode.pnodeLastRequest.
     // Skip a peer if they're at their share of the global window. This caps the
     // damage a single .onion peer can do if they're feeding low-quality blocks.
-    const unsigned int nPerPeerCap = GetPeerInflightCap(vEligiblePeers.size());
+    const unsigned int nPerPeerCap = HEADER_DOWNLOAD_WINDOW / std::max(1u, (unsigned int)vEligiblePeers.size()) + 1;
     std::map<const CNode*, unsigned int> mapPeerInflight;
     {
         const int64_t nNowInflight = GetTime() * 1000000;
