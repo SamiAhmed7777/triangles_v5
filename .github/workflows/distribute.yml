@@ -1,0 +1,229 @@
+name: Distribute Release
+
+# Auto-pushes new releases to package managers. Triggers on:
+#   - tag push (e.g. v5.9.21) — the normal release flow
+#   - workflow_dispatch — manual run for testing or backports
+#
+# Each job skips gracefully if its GitHub secret isn't set, so the workflow
+# can be merged and tested before secrets are configured.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Override version (e.g. 5.9.21). Leave blank to use tag.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
+      - run: echo "Distributing v${{ steps.v.outputs.version }}"
+
+  docker:
+    name: Docker Hub
+    needs: version
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: samiahmed7777
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ./packaging/docker
+          push: true
+          tags: |
+            samiahmed7777/trianglesd:${{ needs.version.outputs.version }}
+            samiahmed7777/trianglesd:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Verify pushed image
+        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+        run: |
+          docker pull samiahmed7777/trianglesd:${{ needs.version.outputs.version }}
+          echo "--- trianglesd -version ---"
+          docker run --rm samiahmed7777/trianglesd:${{ needs.version.outputs.version }} trianglesd -version 2>&1 | head -3
+          echo "--- triangles-cli getinfo (will fail without RPC, that's expected) ---"
+          docker run --rm samiahmed7777/trianglesd:${{ needs.version.outputs.version }} triangles-cli getinfo 2>&1 | head -3
+
+      - name: ⚠️ Skipped (DOCKERHUB_TOKEN not set)
+        if: ${{ secrets.DOCKERHUB_TOKEN == '' }}
+        run: |
+          echo "::warning::DOCKERHUB_TOKEN secret is not set on this repo. Add it at:"
+          echo "::warning::Settings → Secrets and variables → Actions → New repository secret"
+          exit 1
+
+  aur:
+    name: AUR (triangles-qt-bin)
+    needs: version
+    runs-on: ubuntu-22.04
+    container:
+      image: archlinux:latest
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools + create non-root user
+        run: |
+          pacman -Syu --noconfirm --needed git openssh base-devel python sudo
+          # makepkg refuses to run as root — create a build user
+          useradd -m -s /bin/bash build
+          echo 'build ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+          chown -R build:build "$GITHUB_WORKSPACE"
+
+      - name: Wait for release artifacts (build-all workflow runs in parallel)
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          for i in {1..30}; do
+            URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/cryptographic-triangles_${VERSION}_amd64.deb"
+            if curl -fsSL --head "$URL" >/dev/null 2>&1; then
+              echo "✓ Release .deb available: $URL"
+              exit 0
+            fi
+            echo "  waiting for release v${VERSION}... ($i/30)"
+            sleep 20
+          done
+          echo "::error::Release v${VERSION} .deb never became available after 10 minutes"
+          exit 1
+
+      - name: Download source .debs
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cd /tmp
+          curl -fsSL -o full.deb "https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/cryptographic-triangles_${VERSION}_amd64.deb"
+          curl -fsSL -o daemon.deb "https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/cryptographic-triangles-daemon_${VERSION}_amd64.deb"
+          ls -la /tmp/*.deb
+          sha256sum /tmp/full.deb /tmp/daemon.deb
+
+      - name: Update PKGBUILD with version + SHA256s (as build user)
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cp "$GITHUB_WORKSPACE/packaging/aur/PKGBUILD" /tmp/PKGBUILD
+          chown build:build /tmp/PKGBUILD /tmp/full.deb /tmp/daemon.deb
+          sudo -u build bash -c '
+            cd /tmp
+            FULL_SHA=$(sha256sum full.deb | awk "{print \$1}")
+            DAEMON_SHA=$(sha256sum daemon.deb | awk "{print \$1}")
+            echo "version='"$VERSION"' full=$FULL_SHA daemon=$DAEMON_SHA"
+            python3 - <<PYEOF
+          import re
+          with open("/tmp/PKGBUILD") as f:
+              content = f.read()
+          content = re.sub(r"^pkgver=.*", "pkgver='"$VERSION"'", content, count=1, flags=re.MULTILINE)
+          new_shas = """sha256sums=(
+              '"'"'$FULL_SHA'"'"'
+              '"'"'$DAEMON_SHA'"'"'
+              '"'"'SKIP'"'"'
+          )"""
+          content = re.sub(r"sha256sums=\(.*?\)", new_shas, content, count=1, flags=re.DOTALL)
+          with open("/tmp/PKGBUILD", "w") as f:
+              f.write(content)
+          PYEOF
+            grep -E "^(pkgver|sha256sums)" /tmp/PKGBUILD
+          '
+
+      - name: Generate .SRCINFO via makepkg (as build user)
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cp /tmp/full.deb "/tmp/cryptographic-triangles_${VERSION}_amd64.deb"
+          cp /tmp/daemon.deb "/tmp/cryptographic-triangles-daemon_${VERSION}_amd64.deb"
+          chown -R build:build /tmp/PKGBUILD /tmp/cryptographic-triangles-*.deb /tmp/.SRCINFO 2>/dev/null || true
+          sudo -u build bash -c '
+            cd /tmp
+            makepkg --printsrcinfo > .SRCINFO
+            cat .SRCINFO
+          '
+
+      - name: Setup SSH key for AUR
+        if: ${{ secrets.AUR_SSH_KEY != '' }}
+        run: |
+          mkdir -p /home/build/.ssh
+          printf '%s\n' "${{ secrets.AUR_SSH_KEY }}" > /home/build/.ssh/aur_key
+          chmod 600 /home/build/.ssh/aur_key
+          ssh-keyscan -t ed25519 aur.archlinux.org > /home/build/.ssh/known_hosts 2>/dev/null
+          chown -R build:build /home/build/.ssh
+
+      - name: Clone AUR repo
+        if: ${{ secrets.AUR_SSH_KEY != '' }}
+        run: |
+          sudo -u build bash -c '
+            cd /tmp
+            GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes" \
+              git clone ssh://aur@aur.archlinux.org/triangles-qt-bin.git
+            ls -la /tmp/triangles-qt-bin
+          '
+
+      - name: Stage updated files
+        if: ${{ secrets.AUR_SSH_KEY != '' }}
+        run: |
+          cp /tmp/PKGBUILD /tmp/triangles-qt-bin/PKGBUILD
+          cp /tmp/.SRCINFO /tmp/triangles-qt-bin/.SRCINFO
+          cp "$GITHUB_WORKSPACE/packaging/aur/triangles-qt.desktop" /tmp/triangles-qt-bin/triangles-qt.desktop
+          chown -R build:build /tmp/triangles-qt-bin
+          sudo -u build bash -c '
+            cd /tmp/triangles-qt-bin
+            git --no-pager diff --stat
+          '
+
+      - name: Commit and push to AUR
+        if: ${{ secrets.AUR_SSH_KEY != '' }}
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          sudo -u build bash -c '
+            cd /tmp/triangles-qt-bin
+            git config user.name "Sami Ahmed"
+            git config user.email "SamiAhmed7777@users.noreply.github.com"
+            git add PKGBUILD .SRCINFO triangles-qt.desktop
+            if git diff --cached --quiet; then
+              echo "No changes to commit"
+              exit 0
+            fi
+            git commit -m "triangles-qt-bin '"$VERSION"'-1"
+            GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes" \
+              git push origin master
+          '
+
+      - name: ⚠️ Skipped (AUR_SSH_KEY not set)
+        if: ${{ secrets.AUR_SSH_KEY == '' }}
+        run: |
+          echo "::warning::AUR_SSH_KEY secret is not set on this repo. Add it at:"
+          echo "::warning::Settings → Secrets and variables → Actions → New repository secret"
+          echo "::warning::The key should be the contents of ~/.ssh/aur_key (the private key, not .pub)"
+          exit 1
