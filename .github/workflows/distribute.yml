@@ -25,6 +25,7 @@ jobs:
   version:
     name: Resolve version
     runs-on: ubuntu-22.04
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
@@ -40,6 +41,7 @@ jobs:
   docker:
     name: Docker Hub
     needs: version
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -85,6 +87,7 @@ jobs:
   aur:
     name: AUR (triangles-qt-bin)
     needs: version
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     container:
       image: archlinux:latest
@@ -237,6 +240,7 @@ jobs:
   homebrew:
     name: Homebrew tap (SamiAhmed7777/homebrew-triangles)
     needs: version
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     env:
       HOMEBREW_GITHUB_TOKEN: *** secrets.HOMEBREW_GITHUB_TOKEN }}
