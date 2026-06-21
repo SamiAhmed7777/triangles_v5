@@ -233,3 +233,99 @@ jobs:
           else
             echo "::notice::AUR distribution completed."
           fi
+
+  homebrew:
+    name: Homebrew tap (SamiAhmed7777/homebrew-triangles)
+    needs: version
+    runs-on: ubuntu-22.04
+    env:
+      HOMEBREW_GITHUB_TOKEN: *** secrets.HOMEBREW_GITHUB_TOKEN }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Check HOMEBREW_GITHUB_TOKEN
+        run: |
+          if [ -z "$HOMEBREW_GITHUB_TOKEN" ]; then
+            echo "::warning::HOMEBREW_GITHUB_TOKEN secret not set — skipping Homebrew push. Add it at Settings → Secrets → Actions."
+            echo "::warning::Use a GitHub PAT with 'repo' scope for SamiAhmed7777/homebrew-triangles."
+          fi
+
+      - name: Wait for release artifacts
+        if: env.HOMEBREW_GITHUB_TOKEN != ''
+        run: |
+          for i in {1..30}; do
+            URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/Cryptographic-Triangles-v${VERSION}-macos-arm64.dmg"
+            if curl -fsSL --head "$URL" >/dev/null 2>&1; then
+              echo "✓ Release .dmg available: $URL"
+              exit 0
+            fi
+            echo "  waiting for release v${VERSION}... ($i/30)"
+            sleep 20
+          done
+          echo "::error::Release v${VERSION} macOS .dmg never became available"
+          exit 1
+
+      - name: Compute macOS .dmg SHA256
+        if: env.HOMEBREW_GITHUB_TOKEN != ''
+        id: sha
+        run: |
+          curl -fsSL -o /tmp/triangles.dmg \
+            "https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/Cryptographic-Triangles-v${VERSION}-macos-arm64.dmg"
+          SHA=$(sha256sum /tmp/triangles.dmg | awk '{print $1}')
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+          echo "macOS .dmg SHA256: $SHA"
+
+      - name: Clone homebrew-triangles
+        if: env.HOMEBREW_GITHUB_TOKEN != ''
+        run: |
+          git clone https://x-access-token:$HOMEBREW_GITHUB_TOKEN@github.com/SamiAhmed7777/homebrew-triangles.git /tmp/homebrew-triangles
+          cd /tmp/homebrew-triangles
+          git --no-pager log --oneline | head -3
+
+      - name: Update Formula and Cask
+        if: env.HOMEBREW_GITHUB_TOKEN != ''
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          cd /tmp/homebrew-triangles
+          # Update Casks/cryptographic-triangles.rb
+          python3 - <<PYEOF
+          import re
+          for path, old_v_pat, old_sha_pat in [
+              ('Casks/cryptographic-triangles.rb', r'^\s*version\s+"[\d.]+"', r'^\s*sha256\s+"[a-f0-9]+"'),
+              ('Formula/triangles.rb',             r'^\s*version\s+"[\d.]+"', r'^\s*sha256\s+"[a-f0-9]+"'),
+          ]:
+              with open(path) as f: content = f.read()
+              content = re.sub(old_v_pat, f'  version "$VERSION"', content, count=1, flags=re.MULTILINE)
+              content = re.sub(old_sha_pat, f'  sha256 "$SHA"', content, count=1, flags=re.MULTILINE)
+              with open(path, 'w') as f: f.write(content)
+          PYEOF
+          cat Formula/triangles.rb | head -5
+          echo "---"
+          cat Casks/cryptographic-triangles.rb | head -5
+          git --no-pager diff --stat
+
+      - name: Commit and push
+        if: env.HOMEBREW_GITHUB_TOKEN != ''
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cd /tmp/homebrew-triangles
+          git config user.name "Sami Ahmed"
+          git config user.email "SamiAhmed7777@users.noreply.github.com"
+          git add Formula/triangles.rb Casks/cryptographic-triangles.rb
+          if git diff --cached --quiet; then
+            echo "No changes to commit (Homebrew tap already at this version)"
+            exit 0
+          fi
+          git commit -m "triangles ${VERSION}"
+          git push origin main
+
+      - name: ✓ Summary
+        if: always()
+        run: |
+          if [ -z "$HOMEBREW_GITHUB_TOKEN" ]; then
+            echo "::notice::Homebrew job was skipped because HOMEBREW_GITHUB_TOKEN is not set."
+          else
+            echo "::notice::Homebrew distribution completed."
+          fi
