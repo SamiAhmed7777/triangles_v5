@@ -4,8 +4,9 @@ name: Distribute Release
 #   - tag push (e.g. v5.9.21) — the normal release flow
 #   - workflow_dispatch — manual run for testing or backports
 #
-# Each job skips gracefully if its GitHub secret isn't set, so the workflow
-# can be merged and tested before secrets are configured.
+# Each step that needs a secret checks for it and skips gracefully with a
+# clear warning if it's not set, so the workflow can be merged and tested
+# before secrets are configured.
 
 on:
   push:
@@ -43,6 +44,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,40 +54,33 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
-        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
-        uses: docker/login-action@v3
-        with:
-          username: samiahmed7777
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::warning::DOCKERHUB_TOKEN secret not set — skipping Docker push. Add it at Settings → Secrets → Actions."
+            exit 0
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login -u samiahmed7777 --password-stdin
 
       - name: Build and push
-        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
-        uses: docker/build-push-action@v6
-        with:
-          context: ./packaging/docker
-          push: true
-          tags: |
-            samiahmed7777/trianglesd:${{ needs.version.outputs.version }}
-            samiahmed7777/trianglesd:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: false
+        run: |
+          if [ -z "$DOCKERHUB_TOKEN" ]; then exit 0; fi
+          docker buildx build \
+            --push \
+            --tag samiahmed7777/trianglesd:$VERSION \
+            --tag samiahmed7777/trianglesd:latest \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --provenance=false \
+            ./packaging/docker
 
       - name: Verify pushed image
-        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
         run: |
-          docker pull samiahmed7777/trianglesd:${{ needs.version.outputs.version }}
+          if [ -z "$DOCKERHUB_TOKEN" ]; then exit 0; fi
+          docker pull samiahmed7777/trianglesd:$VERSION
           echo "--- trianglesd -version ---"
-          docker run --rm samiahmed7777/trianglesd:${{ needs.version.outputs.version }} trianglesd -version 2>&1 | head -3
-          echo "--- triangles-cli getinfo (will fail without RPC, that's expected) ---"
-          docker run --rm samiahmed7777/trianglesd:${{ needs.version.outputs.version }} triangles-cli getinfo 2>&1 | head -3
-
-      - name: ⚠️ Skipped (DOCKERHUB_TOKEN not set)
-        if: ${{ secrets.DOCKERHUB_TOKEN == '' }}
-        run: |
-          echo "::warning::DOCKERHUB_TOKEN secret is not set on this repo. Add it at:"
-          echo "::warning::Settings → Secrets and variables → Actions → New repository secret"
-          exit 1
+          docker run --rm samiahmed7777/trianglesd:$VERSION trianglesd -version 2>&1 | head -3
+          echo "--- triangles-cli getinfo (will fail without RPC, expected) ---"
+          docker run --rm samiahmed7777/trianglesd:$VERSION triangles-cli getinfo 2>&1 | head -3
 
   aur:
     name: AUR (triangles-qt-bin)
@@ -92,10 +89,21 @@ jobs:
     container:
       image: archlinux:latest
       options: --privileged
+    env:
+      AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check AUR_SSH_KEY
+        run: |
+          if [ -z "$AUR_SSH_KEY" ]; then
+            echo "::warning::AUR_SSH_KEY secret not set — skipping AUR push. Add it at Settings → Secrets → Actions."
+            echo "::warning::The key should be the contents of ~/.ssh/aur_key (private key, not .pub)."
+          fi
+
       - name: Install build tools + create non-root user
+        if: env.AUR_SSH_KEY != ''
         run: |
           pacman -Syu --noconfirm --needed git openssh base-devel python sudo
           # makepkg refuses to run as root — create a build user
@@ -103,9 +111,8 @@ jobs:
           echo 'build ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
           chown -R build:build "$GITHUB_WORKSPACE"
 
-      - name: Wait for release artifacts (build-all workflow runs in parallel)
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
+      - name: Wait for release artifacts
+        if: env.AUR_SSH_KEY != ''
         run: |
           for i in {1..30}; do
             URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/cryptographic-triangles_${VERSION}_amd64.deb"
@@ -120,8 +127,7 @@ jobs:
           exit 1
 
       - name: Download source .debs
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
+        if: env.AUR_SSH_KEY != ''
         run: |
           cd /tmp
           curl -fsSL -o full.deb "https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/cryptographic-triangles_${VERSION}_amd64.deb"
@@ -129,13 +135,13 @@ jobs:
           ls -la /tmp/*.deb
           sha256sum /tmp/full.deb /tmp/daemon.deb
 
-      - name: Update PKGBUILD with version + SHA256s (as build user)
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
+      - name: Update PKGBUILD with version + SHA256s
+        if: env.AUR_SSH_KEY != ''
         run: |
           cp "$GITHUB_WORKSPACE/packaging/aur/PKGBUILD" /tmp/PKGBUILD
           chown build:build /tmp/PKGBUILD /tmp/full.deb /tmp/daemon.deb
           sudo -u build bash -c '
+            set -e
             cd /tmp
             FULL_SHA=$(sha256sum full.deb | awk "{print \$1}")
             DAEMON_SHA=$(sha256sum daemon.deb | awk "{print \$1}")
@@ -154,33 +160,34 @@ jobs:
           with open("/tmp/PKGBUILD", "w") as f:
               f.write(content)
           PYEOF
+            echo "--- updated PKGBUILD (pkgver + sha256sums) ---"
             grep -E "^(pkgver|sha256sums)" /tmp/PKGBUILD
           '
 
-      - name: Generate .SRCINFO via makepkg (as build user)
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
+      - name: Generate .SRCINFO via makepkg
+        if: env.AUR_SSH_KEY != ''
         run: |
           cp /tmp/full.deb "/tmp/cryptographic-triangles_${VERSION}_amd64.deb"
           cp /tmp/daemon.deb "/tmp/cryptographic-triangles-daemon_${VERSION}_amd64.deb"
-          chown -R build:build /tmp/PKGBUILD /tmp/cryptographic-triangles-*.deb /tmp/.SRCINFO 2>/dev/null || true
+          chown build:build /tmp/PKGBUILD /tmp/cryptographic-triangles-*.deb
           sudo -u build bash -c '
             cd /tmp
             makepkg --printsrcinfo > .SRCINFO
+            echo "--- generated .SRCINFO ---"
             cat .SRCINFO
           '
 
       - name: Setup SSH key for AUR
-        if: ${{ secrets.AUR_SSH_KEY != '' }}
+        if: env.AUR_SSH_KEY != ''
         run: |
           mkdir -p /home/build/.ssh
-          printf '%s\n' "${{ secrets.AUR_SSH_KEY }}" > /home/build/.ssh/aur_key
+          printf '%s\n' "$AUR_SSH_KEY" > /home/build/.ssh/aur_key
           chmod 600 /home/build/.ssh/aur_key
           ssh-keyscan -t ed25519 aur.archlinux.org > /home/build/.ssh/known_hosts 2>/dev/null
           chown -R build:build /home/build/.ssh
 
       - name: Clone AUR repo
-        if: ${{ secrets.AUR_SSH_KEY != '' }}
+        if: env.AUR_SSH_KEY != ''
         run: |
           sudo -u build bash -c '
             cd /tmp
@@ -190,7 +197,7 @@ jobs:
           '
 
       - name: Stage updated files
-        if: ${{ secrets.AUR_SSH_KEY != '' }}
+        if: env.AUR_SSH_KEY != ''
         run: |
           cp /tmp/PKGBUILD /tmp/triangles-qt-bin/PKGBUILD
           cp /tmp/.SRCINFO /tmp/triangles-qt-bin/.SRCINFO
@@ -202,9 +209,7 @@ jobs:
           '
 
       - name: Commit and push to AUR
-        if: ${{ secrets.AUR_SSH_KEY != '' }}
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
+        if: env.AUR_SSH_KEY != ''
         run: |
           sudo -u build bash -c '
             cd /tmp/triangles-qt-bin
@@ -212,7 +217,7 @@ jobs:
             git config user.email "SamiAhmed7777@users.noreply.github.com"
             git add PKGBUILD .SRCINFO triangles-qt.desktop
             if git diff --cached --quiet; then
-              echo "No changes to commit"
+              echo "No changes to commit (AUR already at this version)"
               exit 0
             fi
             git commit -m "triangles-qt-bin '"$VERSION"'-1"
@@ -220,10 +225,11 @@ jobs:
               git push origin master
           '
 
-      - name: ⚠️ Skipped (AUR_SSH_KEY not set)
-        if: ${{ secrets.AUR_SSH_KEY == '' }}
+      - name: ✓ Summary
+        if: always()
         run: |
-          echo "::warning::AUR_SSH_KEY secret is not set on this repo. Add it at:"
-          echo "::warning::Settings → Secrets and variables → Actions → New repository secret"
-          echo "::warning::The key should be the contents of ~/.ssh/aur_key (the private key, not .pub)"
-          exit 1
+          if [ -z "$AUR_SSH_KEY" ]; then
+            echo "::notice::AUR job was skipped because AUR_SSH_KEY is not set."
+          else
+            echo "::notice::AUR distribution completed."
+          fi
