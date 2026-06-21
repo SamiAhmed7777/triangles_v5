@@ -50,6 +50,7 @@ private:
     void PruneHeaders();
     bool AddHeaderNode(const CBlock& header, const uint256& hashHeader);
     std::vector<uint256> GetDownloadPath(uint256 hashTip) const;
+    bool PathReachesChain(const std::vector<uint256>& vPath) const;
     void ContinueHeaders(CNode* pfrom, const uint256& hashTip);
 };
 
