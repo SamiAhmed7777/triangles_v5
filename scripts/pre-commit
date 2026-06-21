@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# .git/hooks/pre-commit — Cryptographic Triangles
+#
+# Auto-runs scripts/validate_onion_seeds.py against any staged file that
+# contains .onion addresses. Blocks the commit if any address fails v3
+# onion checksum validation.
+#
+# This is the primary defense against the "1-character .onion transposition
+# bug" that caused 4,842 Tor "No more HSDir" errors during the 2026-06-21
+# from-zero sync test. See scripts/validate_onion_seeds.py for the validator
+# and references/sync-security-audit-2026-06-21.md for the full story.
+#
+# The hook scans staged files for two patterns:
+#   1. Filename matches: triangles.conf, *.onion
+#   2. Content contains addnode= entries with .onion addresses
+#
+# To install:
+#   cp scripts/pre-commit .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+#
+# To bypass (in emergencies only — NEVER do this for normal commits):
+#   git commit --no-verify
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+VALIDATOR="${REPO_ROOT}/scripts/validate_onion_seeds.py"
+
+# Find the validator
+if [[ ! -x "$VALIDATOR" ]]; then
+    echo "pre-commit: WARNING: $VALIDATOR not found or not executable" >&2
+    echo "pre-commit: skipping v3 onion validation" >&2
+    echo "pre-commit: install with: chmod +x $VALIDATOR" >&2
+    exit 0
+fi
+
+# Two-pass detection:
+#   Pass 1: filename-based — files named triangles.conf or *.onion
+#   Pass 2: content-based — any file containing "addnode=" + .onion address
+
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR)
+
+# Pass 1: filename-based
+NAME_MATCHES=$(echo "$STAGED_FILES" | grep -E '(triangles\.conf$|\.onion$)' || true)
+
+# Pass 2: content-based — find staged files containing addnode= with .onion addresses
+CONTENT_MATCHES=""
+for f in $STAGED_FILES; do
+    if [[ -f "$f" ]] && grep -qE '^[[:space:]]*addnode=[a-z2-7]{56}\.onion' "$f" 2>/dev/null; then
+        CONTENT_MATCHES="$CONTENT_MATCHES $f"
+    fi
+done
+
+# Combine and dedupe
+ALL_MATCHES=$(printf "%s\n%s\n" "$NAME_MATCHES" "$CONTENT_MATCHES" | sort -u | grep -v '^$' || true)
+
+if [[ -z "$ALL_MATCHES" ]]; then
+    # Nothing to validate
+    exit 0
+fi
+
+# Filter to only files that exist (skip deletions)
+EXISTING_CONFIGS=""
+for f in $ALL_MATCHES; do
+    if [[ -f "$f" ]]; then
+        EXISTING_CONFIGS="$EXISTING_CONFIGS $f"
+    fi
+done
+
+if [[ -z "$EXISTING_CONFIGS" ]]; then
+    exit 0
+fi
+
+COUNT=$(echo $EXISTING_CONFIGS | wc -w)
+echo "pre-commit: validating $COUNT staged file(s) with .onion addresses..."
+
+# Build the validator command
+CMD="python3 \"$VALIDATOR\" --no-color --ci"
+if [[ -f "${REPO_ROOT}/src/onionseed.h" ]]; then
+    CMD="$CMD --against \"${REPO_ROOT}/src/onionseed.h\""
+fi
+
+# Run the validator
+if eval $CMD $EXISTING_CONFIGS; then
+    echo "pre-commit: v3 onion validation PASSED"
+    exit 0
+else
+    EXIT_CODE=$?
+    echo "" >&2
+    echo "pre-commit: v3 onion validation FAILED (exit $EXIT_CODE)" >&2
+    echo "" >&2
+    echo "  The commit was blocked because one or more .onion addresses failed" >&2
+    echo "  v3 hidden service checksum validation. This means the .onion address" >&2
+    echo "  has a typo or character transposition that Tor will reject at runtime" >&2
+    echo "  with 'ed25519 validation failed' / 'No more HSDir available to query'." >&2
+    echo "" >&2
+    echo "  Fix the .onion address in the affected file, then re-stage and commit." >&2
+    echo "" >&2
+    echo "  To inspect the failure in detail, run manually:" >&2
+    echo "    python3 $VALIDATOR --against ${REPO_ROOT}/src/onionseed.h \\" >&2
+    echo "      $EXISTING_CONFIGS" >&2
+    echo "" >&2
+    echo "  To bypass this check (DO NOT do this for normal commits):" >&2
+    echo "    git commit --no-verify" >&2
+    exit 1
+fi
