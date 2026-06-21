@@ -1,0 +1,88 @@
+# triangles.conf.example — Cryptographic Triangles daemon configuration
+#
+# Copy this to ~/.triangles/triangles.conf and customize for your node.
+# Run scripts/validate_onion_seeds.py against your config before starting
+# the daemon to catch any .onion address corruption.
+#
+# Run order for a fresh operator:
+#   1. cp contrib/triangles.conf.example ~/.triangles/triangles.conf
+#   2. Edit credentials, port numbers, addnode list as needed
+#   3. python3 scripts/validate_onion_seeds.py ~/.triangles/triangles.conf
+#   4. /usr/lib/cryptographic-triangles/trianglesd -daemon
+#
+# The pre-commit hook at scripts/pre-commit will auto-validate this file
+# on every commit if you install it via:
+#   cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+# ─── Network ─────────────────────────────────────────────────────────────────
+# port=24112 is the mainnet P2P default. Pick an alternate (e.g. 24118) for
+# test/parallel nodes to avoid clashing with production.
+port=24112
+listen=1
+discover=1
+
+# ─── RPC ─────────────────────────────────────────────────────────────────────
+# Bind RPC to localhost only. The triangles-cli tool connects here.
+rpcuser=trianglesrpc
+rpcpassword=CHANGE_ME_TO_A_STRONG_RANDOM_PASSWORD
+rpcport=19112
+rpcallowip=127.0.0.1
+server=1
+
+# ─── Tor (MANDATORY — Triangles is Tor-only) ─────────────────────────────────
+# Triangles peers are exclusively .onion addresses. Never use clearnet IPs
+# in addnode= entries. See:
+#   * src/onionseed.h — hardcoded seed list (source of truth)
+#   * src/test/onion_v3_tests.cpp — validates the hardcoded list at CI
+#   * scripts/validate_onion_seeds.py — validates your config at pre-commit
+#
+# proxy= can point at:
+#   * Embedded Tor:   127.0.0.1:19099 (started automatically by the daemon)
+#   * System Tor:     127.0.0.1:9050
+#   * Tor Browser:    127.0.0.1:9150
+proxy=127.0.0.1:19099
+
+# ─── Hardcoded seed nodes (src/onionseed.h, v3 onion only) ──────────────────
+# These 7 are the source-of-truth seeds. The C++ test suite validates
+# every one of them at build time.
+addnode=gxvrhv3qitnc6kobrhsrse46bmcfitnybapor3or3oczzuxn6hfzxyid.onion:24112
+addnode=i6tk7soznftvoibtskwlezviskiererhjndpsmrff4kaxw7jnd5izfqd.onion:24112
+addnode=nawqqoazk2hhaglygulpeg6kh7hsgnvi2fursdvpvkantu4ojj26taid.onion:24112
+addnode=vmepp7plxngv4qpyngbgtb6njwnmlwy4api64xnwkhaf6fm3qlqtpfad.onion:24112
+addnode=nsldmfujkiwsfha42ajp5zx7gz3ekwdk4nvowdpf56mayuxnzshuykqd.onion:24112
+addnode=on4noksywc7b6cdbbxsp535l7j4cugunvlyz3iyhf6sfcg2qzaoy3eqd.onion:24112
+addnode=3uyzltm5cy7xzunncp3d7ariw75erabdnj4l3cxwvsxb6h4orc7eiqad.onion:24112
+
+# ─── Dynamic seeds (fetched from seeds.cryptographic-triangles.org) ─────────
+# These are populated at runtime by the daemon from the HTTP seed list. You
+# can also pin them here as a fallback for offline operation. They MUST be
+# valid v3 onions — validate with scripts/validate_onion_seeds.py.
+# addnode=6ygpphp2qsucwvhwefv6h6ehvk6zjf7b7zdp4ggkzjjwe76cg6jwm7id.onion:24112
+# addnode=uddaxjbo3lh2zskg7w6gwln4ty5cel7q4c5jbx7fdtv6zf2j47gdlyad.onion:24112
+# addnode=el5sirhhleecuctpeeprelzubpqmoqivvra3rzlwbjttinxa4fq3wnid.onion:24112
+# addnode=sj5dhybnlp3v4y5niyc5unrnd6s43lyx5ibup7rolyosjbi2u2hsbvyd.onion:24112
+# addnode=i3kr5meha7se4ns3wss3h7v46m6uksfzv4wrohdqxpj6n35wyo2bvlid.onion:24112
+# addnode=odtiwh6d2mqweztjrp45g5ogf4ikwtl5gotpjcbtax2qzkztrqcqieid.onion:24112
+# addnode=jbpfhe7zw3qm67wy3j2ayysp3mnrjobopthnko3b3sgahqtecblwqmid.onion:24112
+
+# ─── Indexes ─────────────────────────────────────────────────────────────────
+# Required for getaddressbalance / getaddressutxos / getaddresstxids RPCs
+# and for the bootstrap server to serve UTXO snapshots. Costs ~5GB disk.
+txindex=1
+addressindex=1
+spentindex=1
+timestampindex=1
+
+# ─── Staking ─────────────────────────────────────────────────────────────────
+# Set staking=0 to disable stake mining (recommended for sync-test / archive
+# nodes that don't need to produce blocks).
+staking=1
+stakegen=1
+
+# ─── Performance ────────────────────────────────────────────────────────────
+# dbcache in MB. 512 is reasonable for sync nodes. 1024+ for archival nodes.
+dbcache=512
+
+# ─── Security ───────────────────────────────────────────────────────────────
+# Disable Tor — DO NOT REMOVE THIS. Triangles is Tor-only by design.
+notor=0
