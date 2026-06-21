@@ -346,6 +346,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Check CHOCO_API_KEY + CHOCO_SKIP_WACATAC
+        shell: bash
         run: |
           if [ -z "$CHOCO_API_KEY" ]; then
             echo "::warning::CHOCO_API_KEY not set — skipping Chocolatey push."
@@ -506,9 +507,8 @@ jobs:
           echo "Forking microsoft/winget-pkgs..."
           GH_REPO="SamiAhmed7777/winget-pkgs"
           if ! gh repo view "$GH_REPO" >/dev/null 2>&1; then
-            gh repo fork microsoft/winget-pkgs --fork --remote=false
+            gh repo fork microsoft/winget-pkgs --remote=false || true
           fi
-          gh repo sync "$GH_REPO" --source microsoft/winget-pkgs --branch master --force 2>&1 | tail -3 || true
           rm -rf winget-pkgs
           git clone --depth 1 "https://x-access-token:${WINGET_TOKEN}@github.com/${GH_REPO}.git" winget-pkgs
           cd winget-pkgs
