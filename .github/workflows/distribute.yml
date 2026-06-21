@@ -516,7 +516,7 @@ jobs:
           git config user.name "Sami Ahmed"
           git config user.email "SamiAhmed7777@users.noreply.github.com"
           
-          BRANCH="triangles-${VERSION}"
+          BRANCH="triangles-${VERSION}-${{ github.run_number }}"
           git checkout -b "$BRANCH"
           
           mkdir -p "$MANIFEST_DIR"
