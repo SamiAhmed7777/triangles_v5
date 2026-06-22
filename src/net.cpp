@@ -1742,10 +1742,78 @@ bool ThreadHTTPSeedFetch2(void* parg)
             return false;
         }
 
+        std::string headers = response.substr(0, headerEnd);
         std::string body = response.substr(headerEnd + 4);
 
-        // Parse one address per line: "address:port" or just "address"
+        // Some servers (e.g. Caddy / Let's Encrypt fronting the seed list) reply
+        // with Transfer-Encoding: chunked even on HTTP/1.1 + Connection: close. The
+        // body then carries hex chunk-size lines interleaved with the data; parsing
+        // it raw fuses a chunk marker onto an address and we lose most of the list
+        // (the classic "only 1 address" symptom). De-chunk first when present.
+        {
+            std::string h = headers;
+            for (char& c : h) c = (char)tolower((unsigned char)c);
+            if (h.find("transfer-encoding:") != std::string::npos &&
+                h.find("chunked") != std::string::npos)
+            {
+                std::string decoded;
+                size_t pos = 0;
+                while (pos < body.size()) {
+                    size_t eol = body.find("\r\n", pos);
+                    if (eol == std::string::npos) break;
+                    std::string sizeLine = body.substr(pos, eol - pos);
+                    size_t semi = sizeLine.find(';'); // strip chunk extensions
+                    if (semi != std::string::npos) sizeLine = sizeLine.substr(0, semi);
+                    unsigned long chunkSize = strtoul(sizeLine.c_str(), nullptr, 16);
+                    pos = eol + 2;
+                    if (chunkSize == 0) break;              // last chunk
+                    if (pos + chunkSize > body.size())
+                        chunkSize = body.size() - pos;       // defensive clamp
+                    decoded.append(body, pos, chunkSize);
+                    pos += chunkSize;
+                    if (pos + 2 <= body.size() && body.compare(pos, 2, "\r\n") == 0)
+                        pos += 2;                            // trailing CRLF after data
+                }
+                body.swap(decoded);
+            }
+        }
+
+        if (fDebug)
+            printf("HTTPS seed fetch: %d body bytes to parse\n", (int)body.size());
+
+        // Tolerant parse: accept one-per-line OR several addresses on one line
+        // (whitespace / comma / semicolon separated), and ignore inline '#' comments.
         int found = 0;
+
+        auto addSeed = [&](std::string addrStr) -> void {
+            while (!addrStr.empty() && (addrStr.back()=='\r' || addrStr.back()==' ' || addrStr.back()=='\t'))
+                addrStr.pop_back();
+            while (!addrStr.empty() && (addrStr.front()==' ' || addrStr.front()=='\t'))
+                addrStr.erase(addrStr.begin());
+            if (addrStr.empty())
+                return;
+
+            int port = GetDefaultPort();
+            size_t onionPos = addrStr.find(".onion:");
+            if (onionPos != std::string::npos) {
+                port = atoi(addrStr.substr(onionPos + 7).c_str());
+                addrStr = addrStr.substr(0, onionPos + 6); // keep ".onion"
+            } else if (addrStr.find(".onion") == std::string::npos) {
+                return; // Tor-native: skip non-.onion addresses
+            }
+            if (port <= 0 || port > 65535)
+                port = GetDefaultPort();
+
+            CService service(addrStr, port);
+            if (service.IsValid()) {
+                CAddress addr(service);
+                addr.nTime = GetTime() - 3*24*60*60; // 3 days ago
+                addrman.Add(addr, service);
+                printf("HTTPS seed: added %s:%d\n", addrStr.c_str(), port);
+                found++;
+            }
+        };
+
         std::istringstream lines(body);
         std::string line;
         while (std::getline(lines, line))
@@ -1753,51 +1821,23 @@ bool ThreadHTTPSeedFetch2(void* parg)
             if (fShutdown)
                 return false;
 
-            // Trim whitespace and carriage returns
-            while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
-                line.pop_back();
-            while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
-                line.erase(line.begin());
+            // Strip inline comments (everything from '#' onward)
+            size_t hashPos = line.find('#');
+            if (hashPos != std::string::npos)
+                line = line.substr(0, hashPos);
 
-            if (line.empty() || line[0] == '#')
-                continue;
-
-            // Parse address:port
-            std::string addrStr = line;
-            int port = GetDefaultPort();
-
-            // For .onion addresses, the last colon before port is after ".onion"
-            size_t onionPos = addrStr.find(".onion:");
-            if (onionPos != std::string::npos) {
-                port = atoi(addrStr.substr(onionPos + 7).c_str());
-                addrStr = addrStr.substr(0, onionPos + 6); // keep ".onion"
-            } else if (addrStr.find(".onion") == std::string::npos) {
-                // Tor-native: skip non-.onion addresses
-                continue;
-            }
-
-            if (port <= 0 || port > 65535)
-                port = GetDefaultPort();
-
-            CNetAddr parsed;
-            bool resolved = parsed.SetSpecial(addrStr);
-            if (!resolved) {
-                std::vector<CNetAddr> vIP;
-                if (LookupHost(addrStr.c_str(), vIP, 1, false) && !vIP.empty()) {
-                    parsed = vIP[0];
-                    resolved = true;
-                }
-            }
-            if (resolved) {
-                CAddress addr(CService(parsed, port));
-                addr.nTime = GetTime() - 3*24*60*60; // 3 days ago
-                addrman.Add(addr, CNetAddr("https-seed", true));
-                // Queue the first 8 seeds for immediate direct connection
-                if (found < 8) {
-                    std::string oneShotAddr = addrStr + ":" + std::to_string(port);
-                    AddOneShot(oneShotAddr);
-                }
-                found++;
+            // Split on whitespace / comma / semicolon so multiple addresses on
+            // one line are all captured.
+            size_t start = 0;
+            while (start <= line.size()) {
+                size_t sep = line.find_first_of(" \t,;", start);
+                std::string tok = (sep == std::string::npos)
+                    ? line.substr(start)
+                    : line.substr(start, sep - start);
+                if (!tok.empty())
+                    addSeed(tok);
+                if (sep == std::string::npos) break;
+                start = sep + 1;
             }
         }
 

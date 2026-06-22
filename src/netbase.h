@@ -29,6 +29,7 @@ enum Network
 };
 
 extern int nConnectTimeout;
+extern int nSocksNegotiationTimeout;
 extern bool fNameLookup;
 
 /** IP address (IPv6, or IPv4 using mapped IPv6 range (::FFFF:0:0/96)) */
