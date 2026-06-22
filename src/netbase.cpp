@@ -21,6 +21,13 @@ static proxyType proxyInfo[NET_MAX];
 static proxyType nameproxyInfo;
 static CCriticalSection cs_proxyInfos;
 int nConnectTimeout = 5000;
+// Bound for the SOCKS5 negotiation over Tor (ms). The recv() calls in Socks5()
+// wait for Tor to build a circuit and fetch the v3 hidden-service descriptor for
+// the target .onion; with no timeout a dead/slow onion blocks the connecting
+// thread (holding an outbound slot) until Tor's own ~120s SocksTimeout fires.
+// Configurable via -torconnecttimeout. Default 60s: long enough for a healthy
+// onion to answer, short enough that bad peers don't starve a from-zero node.
+int nSocksNegotiationTimeout = 60000;
 bool fNameLookup = false;
 
 static const unsigned char pchIPv4[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff };
@@ -222,6 +229,24 @@ bool static Socks5(string strDest, int port, SOCKET& hSocket)
     {
         closesocket(hSocket);
         return error("Hostname too long");
+    }
+
+    // Bound the blocking SOCKS5 handshake so a slow/dead .onion can't stall this
+    // thread (and hold an outbound connection slot) waiting on Tor. A timeout makes
+    // the recv() below return < expected, which the existing checks treat as a
+    // clean failure so the connector moves on to the next peer.
+    {
+#ifdef WIN32
+        DWORD tv = (DWORD)nSocksNegotiationTimeout;
+        setsockopt(hSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+        setsockopt(hSocket, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+#else
+        struct timeval tv;
+        tv.tv_sec  = nSocksNegotiationTimeout / 1000;
+        tv.tv_usec = (nSocksNegotiationTimeout % 1000) * 1000;
+        setsockopt(hSocket, SOL_SOCKET, SO_RCVTIMEO, (const void*)&tv, sizeof(tv));
+        setsockopt(hSocket, SOL_SOCKET, SO_SNDTIMEO, (const void*)&tv, sizeof(tv));
+#endif
     }
     char pszSocks5Init[] = "\5\1\0";
     if (fDebug)
