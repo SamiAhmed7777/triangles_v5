@@ -506,7 +506,7 @@ std::string HelpMessage()
         "  -dbcache=<n>           " + _("Set database cache size in megabytes (default: 25)") + "\n" +
         "  -dblogsize=<n>         " + _("Set database disk log size in megabytes (default: 100)") + "\n" +
         "  -timeout=<n>           " + _("Specify connection timeout in milliseconds (default: 5000)") + "\n" +
-        "  -torconnecttimeout=<n> " + _("Max time (ms) to wait for Tor to reach a peer .onion before giving up (default: 60000, range 5000-180000)") + "\n" +
+        "  -torconnecttimeout=<n> " + _("Max time (ms) for the SOCKS5 handshake with the Tor proxy (send+recv of SOCKS5 init/auth/connect). Bounds how long a dead/slow .onion can stall the connector thread (default: 60000, range 5000-180000)") + "\n" +
         //"  -proxy=<ip:port>       " + _("Connect through socks proxy") + "\n" +
         //"  -socks=<n>             " + _("Select the version of socks proxy to use (4-5, default: 5)") + "\n" +
         "  -tor=<ip:port>         " + _("Use proxy to reach tor hidden services (default: same as -proxy)") + "\n"
@@ -782,13 +782,18 @@ bool AppInit2()
     }
 
     // SOCKS5/Tor negotiation timeout. Separate from -timeout (which only covers
-    // the instant local connect to the Tor SOCKS proxy); this bounds how long we
-    // wait for Tor to reach the target .onion before giving up on that peer.
+    // the instant local connect to the Tor SOCKS proxy); this bounds the
+    // SOCKS5 handshake (send+recv of init/auth/connect). On a dead/slow .onion
+    // the recv() in Socks5() would otherwise block until Tor's own ~120s
+    // SocksTimeout fires, holding an outbound connection slot.
     if (mapArgs.count("-torconnecttimeout"))
     {
         int nTorTimeout = GetArg("-torconnecttimeout", 60000);
-        if (nTorTimeout >= 5000 && nTorTimeout <= 180000)
+        if (IsValidSocksNegotiationTimeout(nTorTimeout))
             nSocksNegotiationTimeout = nTorTimeout;
+        else
+            InitWarning("Ignoring -torconnecttimeout=" + mapArgs["-torconnecttimeout"] +
+                        ": out of range (5000..180000 ms), using default 60000");
     }
 
     if (mapArgs.count("-paytxfee"))

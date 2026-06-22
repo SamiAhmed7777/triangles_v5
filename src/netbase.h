@@ -32,6 +32,75 @@ extern int nConnectTimeout;
 extern int nSocksNegotiationTimeout;
 extern bool fNameLookup;
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// v5.9.22 hardening: pure helper functions for the HTTPS seed-list path.
+// Extracted from net.cpp ThreadHTTPSeedFetch2 so they can be unit-tested
+// without the SSL/Tor network stack. All functions are side-effect free and
+// operate on std::string/std::vector<std::string> only.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Result of dechunking an HTTP/1.1 chunked body. The daemon used to silently
+ * treat malformed framing as a zero-length chunk, which dropped the entire
+ * seed list. This enum lets the caller distinguish each failure mode and
+ * surface it in logs.
+ */
+enum DechunkResult {
+    DECHUNK_OK = 0,              // success
+    DECHUNK_EMPTY,               // body is empty
+    DECHUNK_NO_CHUNK_TERMINATOR, // missing CRLF after a chunk-size line
+    DECHUNK_INVALID_HEX,         // chunk-size line is not valid hex
+    DECHUNK_OVERSIZE_CHUNK,      // declared chunk size exceeds remaining input
+    DECHUNK_MISSING_DATA_CRLF,   // CRLF missing after a chunk's data
+};
+
+/**
+ * Decode an HTTP/1.1 Transfer-Encoding: chunked body.
+ *
+ *   chunked-body  = *chunk last-chunk trailer-part CRLF
+ *   chunk         = chunk-size [ chunk-ext ] CRLF chunk-data CRLF
+ *   chunk-size    = 1*HEXDIG
+ *   last-chunk    = 1*("0") [ chunk-ext ] CRLF
+ *   chunk-ext     = *( ";" chunk-ext-name [ "=" chunk-ext-val ] )
+ *
+ * @param[in]  body     the raw body bytes after the header terminator
+ * @param[out] decoded  the dechunked payload on success
+ * @return status code (DECHUNK_OK or one of the failure modes)
+ *
+ * The implementation is intentionally strict: a malformed hex digit, a
+ * missing CRLF, or a chunk whose declared size is larger than the remaining
+ * input all return an explicit error code rather than silently clamping.
+ * Chunk extensions ("a;foo=bar") are preserved (stripped from the size
+ * line) so legitimate servers that attach metadata to chunks are still
+ * accepted.
+ */
+int DechunkTransferEncoding(const std::string& body, std::string& decoded);
+
+/**
+ * Parse a tolerant HTTPS seed-list body into individual host entries.
+ *
+ * Accepted per line:
+ *   - one or more addresses separated by whitespace, commas, or semicolons
+ *   - inline "#" comments (everything after '#' is dropped)
+ *   - blank lines
+ *   - CRLF or LF line endings
+ *
+ * Each returned entry is the address string (e.g. "abcd...onion:24112" or
+ * "abcd...onion"). Empty/whitespace-only entries are omitted. The result is
+ * a list of candidate strings suitable for CNetAddr/CService validation
+ * downstream.
+ */
+std::vector<std::string> ParseSeedListBody(const std::string& body);
+
+/**
+ * Validate the -torconnecttimeout / nSocksNegotiationTimeout value.
+ *
+ * Accepts 5000..180000 ms inclusive. Returns true for in-range, false for
+ * out-of-range. This is the central policy so callers and tests stay in
+ * sync; do not duplicate the literal numbers elsewhere.
+ */
+bool IsValidSocksNegotiationTimeout(int nMs);
+
 /** IP address (IPv6, or IPv4 using mapped IPv6 range (::FFFF:0:0/96)) */
 class CNetAddr
 {

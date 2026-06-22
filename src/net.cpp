@@ -1750,6 +1750,10 @@ bool ThreadHTTPSeedFetch2(void* parg)
         // body then carries hex chunk-size lines interleaved with the data; parsing
         // it raw fuses a chunk marker onto an address and we lose most of the list
         // (the classic "only 1 address" symptom). De-chunk first when present.
+        //
+        // v5.9.22 hardening: the parser is now strict and reports a distinct
+        // failure code for each kind of malformed framing. See DechunkResult in
+        // netbase.h and the unit tests in src/test/http_seed_tests.cpp.
         {
             std::string h = headers;
             for (char& c : h) c = (char)tolower((unsigned char)c);
@@ -1757,22 +1761,20 @@ bool ThreadHTTPSeedFetch2(void* parg)
                 h.find("chunked") != std::string::npos)
             {
                 std::string decoded;
-                size_t pos = 0;
-                while (pos < body.size()) {
-                    size_t eol = body.find("\r\n", pos);
-                    if (eol == std::string::npos) break;
-                    std::string sizeLine = body.substr(pos, eol - pos);
-                    size_t semi = sizeLine.find(';'); // strip chunk extensions
-                    if (semi != std::string::npos) sizeLine = sizeLine.substr(0, semi);
-                    unsigned long chunkSize = strtoul(sizeLine.c_str(), nullptr, 16);
-                    pos = eol + 2;
-                    if (chunkSize == 0) break;              // last chunk
-                    if (pos + chunkSize > body.size())
-                        chunkSize = body.size() - pos;       // defensive clamp
-                    decoded.append(body, pos, chunkSize);
-                    pos += chunkSize;
-                    if (pos + 2 <= body.size() && body.compare(pos, 2, "\r\n") == 0)
-                        pos += 2;                            // trailing CRLF after data
+                int rc = DechunkTransferEncoding(body, decoded);
+                if (rc != DECHUNK_OK) {
+                    const char* reason = "unknown";
+                    switch (rc) {
+                        case DECHUNK_EMPTY:               reason = "empty body"; break;
+                        case DECHUNK_NO_CHUNK_TERMINATOR: reason = "missing chunk terminator (CRLF)"; break;
+                        case DECHUNK_INVALID_HEX:         reason = "malformed chunk-size (not valid hex)"; break;
+                        case DECHUNK_OVERSIZE_CHUNK:      reason = "chunk size exceeds remaining input (truncated)"; break;
+                        case DECHUNK_MISSING_DATA_CRLF:   reason = "missing CRLF after chunk data"; break;
+                        default:                          reason = "unknown"; break;
+                    }
+                    printf("HTTPS seed fetch: malformed chunked transfer encoding (%s) from %s\n",
+                           reason, seedHost.c_str());
+                    return false;
                 }
                 body.swap(decoded);
             }
@@ -1783,7 +1785,11 @@ bool ThreadHTTPSeedFetch2(void* parg)
 
         // Tolerant parse: accept one-per-line OR several addresses on one line
         // (whitespace / comma / semicolon separated), and ignore inline '#' comments.
+        // v5.9.22: the splitting logic is now a pure function in netbase.cpp so
+        // we can unit-test every line format. The CNetAddr/CService/addrman
+        // validation stays here because it touches globals.
         int found = 0;
+        int skipped = 0;
 
         auto addSeed = [&](std::string addrStr) -> void {
             while (!addrStr.empty() && (addrStr.back()=='\r' || addrStr.back()==' ' || addrStr.back()=='\t'))
@@ -1811,38 +1817,34 @@ bool ThreadHTTPSeedFetch2(void* parg)
                 addrman.Add(addr, service);
                 printf("HTTPS seed: added %s:%d\n", addrStr.c_str(), port);
                 found++;
+            } else {
+                skipped++;
             }
         };
 
-        std::istringstream lines(body);
-        std::string line;
-        while (std::getline(lines, line))
+        // Use the pure helper to split the body. If it returns nothing, that
+        // means the body was entirely comments / blank lines / whitespace —
+        // distinct failure mode worth logging separately from "no valid
+        // addresses after parsing".
+        std::vector<std::string> tokens = ParseSeedListBody(body);
+        if (tokens.empty()) {
+            printf("HTTPS seed fetch: parsed response contained zero valid addresses from %s\n", seedHost.c_str());
+            return false;
+        }
+
+        for (const std::string& tok : tokens)
         {
             if (fShutdown)
                 return false;
-
-            // Strip inline comments (everything from '#' onward)
-            size_t hashPos = line.find('#');
-            if (hashPos != std::string::npos)
-                line = line.substr(0, hashPos);
-
-            // Split on whitespace / comma / semicolon so multiple addresses on
-            // one line are all captured.
-            size_t start = 0;
-            while (start <= line.size()) {
-                size_t sep = line.find_first_of(" \t,;", start);
-                std::string tok = (sep == std::string::npos)
-                    ? line.substr(start)
-                    : line.substr(start, sep - start);
-                if (!tok.empty())
-                    addSeed(tok);
-                if (sep == std::string::npos) break;
-                start = sep + 1;
-            }
+            addSeed(tok);
         }
 
         printf("%d addresses found from HTTPS seed list (%s)\n", found, seedHost.c_str());
-        return found > 0;
+        if (found == 0) {
+            printf("HTTPS seed fetch: parsed response contained zero valid addresses from %s\n", seedHost.c_str());
+            return false;
+        }
+        return true;
 
     } catch (std::exception& e) {
         printf("HTTPS seed fetch failed: %s\n", e.what());

@@ -12,6 +12,12 @@
 #include <sys/fcntl.h>
 #endif
 
+#include <cstdlib>
+#include <cctype>
+#include <cerrno>
+#include <limits>
+#include <sstream>
+
 #include "strlcpy.h"
 
 using namespace std;
@@ -1311,4 +1317,152 @@ void CService::print() const
 void CService::SetPort(unsigned short portIn)
 {
     port = portIn;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v5.9.22 hardening: pure helper functions for the HTTPS seed-list path.
+// See netbase.h for the contract. These are intentionally free of SSL/Tor
+// dependencies so they can be unit-tested in isolation.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+bool IsValidSocksNegotiationTimeout(int nMs)
+{
+    // Range bounds match the documented -torconnecttimeout contract. 5000ms
+    // is the lower edge that still tolerates a slow SOCKS handshake over a
+    // congested link; 180000ms (3 min) is the upper edge to prevent a stuck
+    // thread from holding an outbound connection slot indefinitely. These
+    // constants are duplicated in src/init.cpp's HelpMessage text and the
+    // test suite — keep all three in sync.
+    return nMs >= 5000 && nMs <= 180000;
+}
+
+int DechunkTransferEncoding(const std::string& body, std::string& decoded)
+{
+    decoded.clear();
+    if (body.empty())
+        return DECHUNK_EMPTY;
+
+    // HTTP chunked framing requires every chunk-size line to be terminated
+    // by CRLF. We walk the body one chunk at a time and validate each piece.
+    // The previous implementation silently dropped malformed chunks and
+    // treated them as the last-chunk marker, which lost the entire seed list
+    // for any non-conforming server. This version returns an explicit error
+    // code for each failure mode.
+    size_t pos = 0;
+    const size_t n = body.size();
+    bool sawLastChunk = false;
+
+    while (pos < n) {
+        // Find end of chunk-size line. Required: CRLF.
+        size_t eol = body.find("\r\n", pos);
+        if (eol == std::string::npos)
+            return DECHUNK_NO_CHUNK_TERMINATOR;
+
+        std::string sizeLine = body.substr(pos, eol - pos);
+        pos = eol + 2; // consume CRLF
+
+        // Strip chunk extensions per RFC 7230 §4.1.1: ";name[=value]" after
+        // the hex size. Extensions are part of the framing protocol, not
+        // data, so we drop them here.
+        size_t semi = sizeLine.find(';');
+        std::string hexSize = (semi == std::string::npos) ? sizeLine : sizeLine.substr(0, semi);
+
+        // Strict hex validation: every character must be [0-9A-Fa-f]. Empty
+        // size lines (e.g. a stray CRLF) are rejected as malformed, not
+        // silently treated as 0. strtoul alone would also accept leading
+        // whitespace, '+', and '-' which we don't want.
+        if (hexSize.empty())
+            return DECHUNK_INVALID_HEX;
+        for (size_t i = 0; i < hexSize.size(); ++i) {
+            if (!isxdigit(static_cast<unsigned char>(hexSize[i])))
+                return DECHUNK_INVALID_HEX;
+        }
+
+        // strtoul returns ULONG_MAX on overflow. We also need to guard
+        // against chunks larger than the remaining input, which the old
+        // code clamped silently. Use strtoull so we can detect overflow
+        // without truncation surprises on 32-bit builds.
+        errno = 0;
+        char* endp = nullptr;
+        unsigned long long chunkSize = strtoull(hexSize.c_str(), &endp, 16);
+        if (errno == ERANGE || chunkSize > std::numeric_limits<size_t>::max())
+            return DECHUNK_INVALID_HEX;
+        if (endp == hexSize.c_str())
+            return DECHUNK_INVALID_HEX;
+
+        if (chunkSize == 0) {
+            // Last-chunk: payload is empty, trailer part (which we ignore)
+            // follows and is terminated by a final CRLF on its own line.
+            sawLastChunk = true;
+            break;
+        }
+
+        // Bounds check before reading the chunk data. Catching this
+        // explicitly (rather than clamping) is what lets callers
+        // distinguish "truncated network read" from "server sent us junk".
+        if (chunkSize > n - pos)
+            return DECHUNK_OVERSIZE_CHUNK;
+
+        decoded.append(body, pos, static_cast<size_t>(chunkSize));
+        pos += static_cast<size_t>(chunkSize);
+
+        // Per RFC 7230 each chunk's data must be followed by a CRLF. We
+        // tolerate the final chunk missing its trailing CRLF (some clients
+        // do this when the connection is being closed anyway), but for any
+        // non-final chunk a missing CRLF is a hard framing error.
+        if (pos + 1 < n && body[pos] == '\r' && body[pos + 1] == '\n') {
+            pos += 2;
+        } else if (pos >= n) {
+            // End of input immediately after chunk data — no CRLF, but
+            // nothing left to misframe. Reject to be strict.
+            return DECHUNK_MISSING_DATA_CRLF;
+        } else {
+            return DECHUNK_MISSING_DATA_CRLF;
+        }
+    }
+
+    if (!sawLastChunk) {
+        // Body ended without a last-chunk marker. Treat as malformed
+        // rather than accepting a truncated body.
+        return DECHUNK_NO_CHUNK_TERMINATOR;
+    }
+
+    return DECHUNK_OK;
+}
+
+std::vector<std::string> ParseSeedListBody(const std::string& body)
+{
+    std::vector<std::string> out;
+    std::istringstream lines(body);
+    std::string line;
+    while (std::getline(lines, line)) {
+        // Strip inline '#' comments. Per common seed-list convention, the
+        // first '#' to end-of-line is comment.
+        size_t hashPos = line.find('#');
+        if (hashPos != std::string::npos)
+            line = line.substr(0, hashPos);
+
+        // Split on whitespace, comma, or semicolon so multiple addresses
+        // on one line are all captured. CR/LF are already consumed by
+        // std::getline but a trailing CR (LF-only line endings) is trimmed
+        // implicitly by skipping it as a separator below.
+        size_t start = 0;
+        while (start <= line.size()) {
+            size_t sep = line.find_first_of(" \t,;", start);
+            std::string tok = (sep == std::string::npos)
+                ? line.substr(start)
+                : line.substr(start, sep - start);
+            // Trim CR and any leftover whitespace from the token. The
+            // 'sep' loop above eats spaces/tabs but a bare CR survives.
+            while (!tok.empty() && (tok.back() == '\r' || tok.back() == ' ' || tok.back() == '\t'))
+                tok.pop_back();
+            while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t'))
+                tok.erase(tok.begin());
+            if (!tok.empty())
+                out.push_back(tok);
+            if (sep == std::string::npos) break;
+            start = sep + 1;
+        }
+    }
+    return out;
 }
