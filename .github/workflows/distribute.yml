@@ -493,8 +493,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
           SHA: ${{ steps.sha.outputs.sha }}
-          PUBLISHER_INITIAL: C
+          PUBLISHER_INITIAL: c
           PACKAGE_ID: CryptographicTriangles.TrianglesQt
+          PACKAGE_SHORT: TrianglesQt
           INSTALLER_URL: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/Cryptographic-Triangles-${VERSION}-win-x64-setup.exe
         run: |
           set -e
@@ -502,7 +503,10 @@ jobs:
           which gh >/dev/null 2>&1 || (curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null && sudo apt update && sudo apt install -y gh jq)
           
           VERSION="$VERSION"
-          MANIFEST_DIR="manifests/$PUBLISHER_INITIAL/CryptographicTriangles/$PACKAGE_ID/$VERSION"
+          # Path convention (winget-pkgs): lowercase first letter of publisher,
+          # then publisher folder (PascalCase), then short package folder name.
+          # Example: manifests/c/CryptographicTriangles/TrianglesQt/5.9.20/
+          MANIFEST_DIR="manifests/$PUBLISHER_INITIAL/CryptographicTriangles/$PACKAGE_SHORT/$VERSION"
           
           # 1. Clone the winget-pkgs repo (Sami's fork) — auto-create fork if needed
           echo "Forking microsoft/winget-pkgs..."
