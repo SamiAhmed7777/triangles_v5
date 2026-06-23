@@ -519,7 +519,7 @@ jobs:
           PUBLISHER_INITIAL: c
           PACKAGE_ID: CryptographicTriangles.TrianglesQt
           PACKAGE_SHORT: TrianglesQt
-          INSTALLER_URL: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/Cryptographic-Triangles-${VERSION}-win-x64-setup.exe
+          INSTALLER_URL: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${{ env.VERSION }}/Cryptographic-Triangles-${{ env.VERSION }}-win-x64-setup.exe
         run: |
           set -e
           # Install gh + jq if missing
@@ -575,7 +575,7 @@ jobs:
           SCHEMA_BASE="https://raw.githubusercontent.com/microsoft/winget-cli/master/schemas/JSON/manifests/v1.12.0"
 
           cat > "$MANIFEST_DIR/${PACKAGE_ID}.yaml" <<EOF
-          # yaml-language-server: $schema=${SCHEMA_BASE}/manifest.version.1.12.0.json
+          # yaml-language-server: \$schema=${SCHEMA_BASE}/manifest.version.1.12.0.json
           PackageIdentifier: ${PACKAGE_ID}
           PackageVersion: ${VERSION}
           DefaultLocale: en-US
@@ -584,7 +584,7 @@ jobs:
           EOF
 
           cat > "$MANIFEST_DIR/${PACKAGE_ID}.locale.en-US.yaml" <<EOF
-          # yaml-language-server: $schema=${SCHEMA_BASE}/manifest.defaultLocale.1.12.0.json
+          # yaml-language-server: \$schema=${SCHEMA_BASE}/manifest.defaultLocale.1.12.0.json
           PackageIdentifier: ${PACKAGE_ID}
           PackageVersion: ${VERSION}
           PackageLocale: en-US
@@ -604,7 +604,7 @@ jobs:
           EOF
 
           cat > "$MANIFEST_DIR/${PACKAGE_ID}.installer.yaml" <<EOF
-          # yaml-language-server: $schema=${SCHEMA_BASE}/manifest.installer.1.12.0.json
+          # yaml-language-server: \$schema=${SCHEMA_BASE}/manifest.installer.1.12.0.json
           PackageIdentifier: ${PACKAGE_ID}
           PackageVersion: ${VERSION}
           InstallModes:
