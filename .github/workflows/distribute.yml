@@ -557,22 +557,34 @@ jobs:
           git checkout -b "$BRANCH"
           
           mkdir -p "$MANIFEST_DIR"
-          
-          # 2. Generate the three manifest files
+
+          # 2. Generate the three manifest files (winget-pkgs schema 1.12.0)
+          #
+          # Schema rules (see doc/manifest/schema/1.12.0/*.md and
+          # doc/ValidationFailureGuide.md):
+          #   - version file: PackageIdentifier, PackageVersion, DefaultLocale
+          #     (NOT PackageLocale — that's the old field name), ManifestType
+          #     "version", ManifestVersion "1.12.0"
+          #   - defaultLocale file: Publisher, PackageName, License,
+          #     ShortDescription are REQUIRED (no Publisher in version file)
+          #   - installer file: InstallModes array (not "InstallerMode:
+          #     interactive" — that's the old field name); ManifestVersion 1.12.0
+          #   - All files: include # yaml-language-server: $schema=... comment
+          #     for editor + validator support
+
+          SCHEMA_BASE="https://raw.githubusercontent.com/microsoft/winget-cli/master/schemas/JSON/manifests/v1.12.0"
+
           cat > "$MANIFEST_DIR/${PACKAGE_ID}.yaml" <<EOF
+          # yaml-language-server: $schema=${SCHEMA_BASE}/manifest.version.1.12.0.json
           PackageIdentifier: ${PACKAGE_ID}
           PackageVersion: ${VERSION}
-          PackageLocale: en-US
-          Publisher: Cryptographic Triangles
-          PublisherUrl: https://cryptographic-triangles.org
-          PackageName: Cryptographic Triangles Qt Wallet
-          License: MIT
-          ShortDescription: Privacy-focused cryptocurrency wallet with PoS staking, Tor v3, and encrypted messaging.
+          DefaultLocale: en-US
           ManifestType: version
-          ManifestVersion: 1.6.0
+          ManifestVersion: 1.12.0
           EOF
-          
+
           cat > "$MANIFEST_DIR/${PACKAGE_ID}.locale.en-US.yaml" <<EOF
+          # yaml-language-server: $schema=${SCHEMA_BASE}/manifest.defaultLocale.1.12.0.json
           PackageIdentifier: ${PACKAGE_ID}
           PackageVersion: ${VERSION}
           PackageLocale: en-US
@@ -588,25 +600,25 @@ jobs:
             Originally launched in July 2014, featuring the unique Hash9 algorithm
             (13-step hash cascade).
           ManifestType: defaultLocale
-          ManifestVersion: 1.6.0
+          ManifestVersion: 1.12.0
           EOF
-          
+
           cat > "$MANIFEST_DIR/${PACKAGE_ID}.installer.yaml" <<EOF
+          # yaml-language-server: $schema=${SCHEMA_BASE}/manifest.installer.1.12.0.json
           PackageIdentifier: ${PACKAGE_ID}
           PackageVersion: ${VERSION}
-          PackageLocale: en-US
-          InstallerType: exe
-          InstallerScope: user
-          InstallerMode: interactive
+          InstallModes:
+            - interactive
+            - silent
           Installers:
             - Architecture: x64
               InstallerType: exe
               InstallerUrl: ${INSTALLER_URL}
               InstallerSha256: ${SHA}
           ManifestType: installer
-          ManifestVersion: 1.6.0
+          ManifestVersion: 1.12.0
           EOF
-          
+
           git add "$MANIFEST_DIR"
           git commit -m "${PACKAGE_ID} version ${VERSION}"
           git push origin "$BRANCH"
