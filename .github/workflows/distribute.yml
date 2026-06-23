@@ -488,6 +488,29 @@ jobs:
           echo "sha=$SHA" >> $GITHUB_OUTPUT
           echo "WinGet installer SHA256: $SHA"
 
+      - name: "Pre-flight check for existing failed WinGet PRs"
+        if: env.WINGET_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          set -e
+          # Don't pile up PRs if previous ones still have author-action-needed flags.
+          # winget-pkgs moderators can read repeated unfixed failures as spam.
+          # Skip the PR for this release if any existing SamiAhmed7777 PR against
+          # microsoft/winget-pkgs has a blocker label.
+          echo "Checking existing open PRs from SamiAhmed7777 on microsoft/winget-pkgs..."
+          BLOCKING=$(gh api -X GET \
+            'repos/microsoft/winget-pkgs/issues?state=open&labels=PullRequest-Error,Needs-Author-Feedback&per_page=30' \
+            --jq '.[] | select(.user.login=="SamiAhmed7777") | "#\(.number) [\(.state)] \(.title)"' \
+            || echo "")
+          if [ -n "$BLOCKING" ]; then
+            echo "::error::Existing WinGet PR(s) with blocker labels — fix or close those first:"
+            echo "$BLOCKING"
+            echo "::error::Aborting this WinGet submission to avoid piling up failed PRs."
+            exit 1
+          fi
+          echo "✓ No blocker-labelled PRs found — safe to submit."
+
       - name: Fork + update WinGet manifest + open PR
         if: env.WINGET_TOKEN != ''
         env:
@@ -501,7 +524,17 @@ jobs:
           set -e
           # Install gh + jq if missing
           which gh >/dev/null 2>&1 || (curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null && sudo apt update && sudo apt install -y gh jq)
-          
+
+          # Skip if a PR for THIS version already exists (avoid duplicate submissions).
+          echo "Checking for existing PR for version ${VERSION}..."
+          if gh api 'repos/microsoft/winget-pkgs/pulls?state=open&per_page=30' \
+              --jq ".[] | select(.head.ref | startswith(\"triangles-${VERSION}-\")) | .number" \
+              | grep -q .; then
+            echo "::notice::PR for v${VERSION} already exists — skipping to avoid duplicate."
+            exit 0
+          fi
+          echo "✓ No existing PR for v${VERSION}."
+
           VERSION="$VERSION"
           # Path convention (winget-pkgs): lowercase first letter of publisher,
           # then publisher folder (PascalCase), then short package folder name.
