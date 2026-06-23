@@ -540,6 +540,10 @@ jobs:
           # then publisher folder (PascalCase), then short package folder name.
           # Example: manifests/c/CryptographicTriangles/TrianglesQt/5.9.20/
           MANIFEST_DIR="manifests/$PUBLISHER_INITIAL/CryptographicTriangles/$PACKAGE_SHORT/$VERSION"
+
+          # TrianglesQt is built with NSIS (Nullsoft). Standard silent flag is /S.
+          # If the installer tech ever changes, update InstallerSwitches here.
+          NSIS_SILENT="/S"
           
           # 1. Clone the winget-pkgs repo (Sami's fork) — auto-create fork if needed
           echo "Forking microsoft/winget-pkgs..."
@@ -575,7 +579,7 @@ jobs:
           SCHEMA_BASE="https://raw.githubusercontent.com/microsoft/winget-cli/master/schemas/JSON/manifests/v1.12.0"
 
           cat > "$MANIFEST_DIR/${PACKAGE_ID}.yaml" <<EOF
-          # yaml-language-server: \$schema=${SCHEMA_BASE}/manifest.version.1.12.0.json
+          # yaml-language-server: \$schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json
           PackageIdentifier: ${PACKAGE_ID}
           PackageVersion: ${VERSION}
           DefaultLocale: en-US
@@ -584,7 +588,7 @@ jobs:
           EOF
 
           cat > "$MANIFEST_DIR/${PACKAGE_ID}.locale.en-US.yaml" <<EOF
-          # yaml-language-server: \$schema=${SCHEMA_BASE}/manifest.defaultLocale.1.12.0.json
+          # yaml-language-server: \$schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
           PackageIdentifier: ${PACKAGE_ID}
           PackageVersion: ${VERSION}
           PackageLocale: en-US
@@ -604,12 +608,15 @@ jobs:
           EOF
 
           cat > "$MANIFEST_DIR/${PACKAGE_ID}.installer.yaml" <<EOF
-          # yaml-language-server: \$schema=${SCHEMA_BASE}/manifest.installer.1.12.0.json
+          # yaml-language-server: \$schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
           PackageIdentifier: ${PACKAGE_ID}
           PackageVersion: ${VERSION}
           InstallModes:
             - interactive
             - silent
+          InstallerSwitches:
+            Silent: /S
+            SilentWithProgress: /S
           Installers:
             - Architecture: x64
               InstallerType: exe
