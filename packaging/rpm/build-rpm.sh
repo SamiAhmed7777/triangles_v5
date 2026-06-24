@@ -4,7 +4,7 @@
 # Install build tools: sudo dnf install rpm-build rpmdevtools
 set -e
 
-VERSION="5.7.6"
+VERSION="5.9.24"
 RELEASE_URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}"
 
 echo "Building RPM for Triangles v${VERSION}..."

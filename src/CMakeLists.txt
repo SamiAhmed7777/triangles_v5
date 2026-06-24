@@ -40,6 +40,7 @@ target_include_directories(json_compat INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/js
 set(CORE_SOURCES
     addrman.cpp
     bootstrap.cpp
+    checkpointpublisher.cpp
     checkpoints.cpp
     crypter.cpp
     hdwallet.cpp
@@ -483,6 +484,9 @@ if(BUILD_TESTS)
     file(GLOB TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/test/*.cpp")
     # Exclude miner_tests.cpp (never ported from Bitcoin)
     list(FILTER TEST_SOURCES EXCLUDE REGEX "miner_tests\\.cpp$")
+    # Exclude the standalone chaindb test driver — it gets its own target
+    # because it needs to run without the TestingSetup global fixture.
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "chaindb_equivalence_tests_main\\.cpp$")
 
     add_executable(test_triangles
         ${TEST_SOURCES}
@@ -507,4 +511,28 @@ if(BUILD_TESTS)
     )
 
     add_test(NAME triangles_unit_tests COMMAND test_triangles --log_level=test_suite)
+
+    # ── Standalone chaindb equivalence tests ─────────────────────────────────
+    # Runs without the TestingSetup global fixture (which would otherwise
+    # open the real chain DB and lock it for the process). Sets a fresh
+    # temp -datadir via its own global fixture, then runs the
+    # chaindb_equivalence_tests suite.
+    add_executable(test_chaindb_equivalence
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/chaindb_equivalence_tests_main.cpp"
+        # wallet.cpp provides the CWallet symbols that triangles_common
+        # (txdb-rocksdb, net, etc.) references, even though the chaindb
+        # tests themselves don't use the wallet.
+        wallet.cpp
+    )
+    target_include_directories(test_chaindb_equivalence PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test"
+        "${CMAKE_CURRENT_SOURCE_DIR}/leveldb/include"
+    )
+    target_link_libraries(test_chaindb_equivalence PRIVATE
+        triangles_common
+        Boost::unit_test_framework
+    )
+    add_test(NAME chaindb_equivalence_tests
+             COMMAND test_chaindb_equivalence --log_level=test_suite)
 endif()

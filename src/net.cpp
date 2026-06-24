@@ -11,6 +11,7 @@
 #include "addrman.h"
 #include "ui_interface.h"
 #include "onionseed.h"
+#include "tor/onion_v3.h"
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -1444,6 +1445,39 @@ void ThreadOnionSeed(void* parg)
     // Load hardcoded .onion seeds and queue them for immediate direct connection
     static const char *(*strOnionSeed)[1] = fTestNet ? strTestNetOnionSeed : strMainNetOnionSeed;
     int found = 0;
+
+    // Defense-in-depth (2026-06-22): Validate every hardcoded seed against the
+    // v3 onion checksum BEFORE we hand it to Tor. The btb6/gtb6 incident
+    // (4,842 "No more HSDir" errors over a 12h from-zero sync test) was caused
+    // by a single-character corruption that Tor rejected with a cryptic
+    // "ed25519 validation failed" warning. Catching it here gives the operator
+    // a clear, actionable error at startup with no wasted network/CPU.
+    // See references/onion-corruption-ci-defense.md (CI Layers 2-3) for the
+    // static-analysis side of this defense.
+    {
+        int nInvalid = 0;
+        int nTotal = 0;
+        std::string strFirstBad;
+        for (unsigned int si = 0; strOnionSeed[si][0] != nullptr; si++) {
+            nTotal++;
+            if (!CTorV3Service::ValidateOnionAddress(strOnionSeed[si][0])) {
+                if (strFirstBad.empty()) strFirstBad = strOnionSeed[si][0];
+                nInvalid++;
+            }
+        }
+        if (nInvalid > 0) {
+            std::string strErr = strprintf(
+                "ThreadOnionSeed() : %d of %d hardcoded .onion seed(s) failed v3 "
+                "checksum validation. First bad address: %s. "
+                "This is the btb6/gtb6 class of bug (see references/onion-corruption-ci-defense.md). "
+                "Fix src/onionseed.h before starting the daemon — Tor would "
+                "have wasted hours producing cryptic 'ed25519 validation failed' "
+                "warnings otherwise.",
+                nInvalid, nTotal, strFirstBad.c_str());
+            printf("ERROR: %s\n", strErr.c_str());
+            throw runtime_error(strErr);
+        }
+    }
 
     for (unsigned int seed_idx = 0; strOnionSeed[seed_idx][0] != nullptr; seed_idx++) {
         CNetAddr parsed;

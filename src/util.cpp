@@ -1077,22 +1077,25 @@ std::filesystem::path GetDefaultDataDir()
 #endif
 }
 
+// File-scope cache for GetDataDir() so ResetDataDirCache() can clear it.
+namespace {
+    std::filesystem::path s_pathCached[2];
+    CCriticalSection s_csPathCached;
+    bool s_cachedPath[2] = {false, false};
+}
+
 const std::filesystem::path &GetDataDir(bool fNetSpecific)
 {
     namespace fs = std::filesystem;
 
-    static fs::path pathCached[2];
-    static CCriticalSection csPathCached;
-    static bool cachedPath[2] = {false, false};
-
-    fs::path &path = pathCached[fNetSpecific];
+    std::filesystem::path &path = s_pathCached[fNetSpecific];
 
     // This can be called during exceptions by printf, so we cache the
     // value so we don't have to do memory allocations after that.
-    if (cachedPath[fNetSpecific])
+    if (s_cachedPath[fNetSpecific])
         return path;
 
-    LOCK(csPathCached);
+    LOCK(s_csPathCached);
 
     if (mapArgs.count("-datadir")) {
         path = fs::absolute(mapArgs["-datadir"]);
@@ -1108,8 +1111,20 @@ const std::filesystem::path &GetDataDir(bool fNetSpecific)
 
     fs::create_directory(path);
 
-    cachedPath[fNetSpecific]=true;
+    s_cachedPath[fNetSpecific]=true;
     return path;
+}
+
+// Test-only: invalidate the cached data dir so a subsequent GetDataDir() call
+// re-reads mapArgs["-datadir"]. Required for unit tests that need to switch
+// the active datadir after a previous fixture has already resolved it.
+void ResetDataDirCache()
+{
+    LOCK(s_csPathCached);
+    s_pathCached[0] = std::filesystem::path{};
+    s_pathCached[1] = std::filesystem::path{};
+    s_cachedPath[0] = false;
+    s_cachedPath[1] = false;
 }
 
 std::filesystem::path GetConfigFile()

@@ -88,3 +88,15 @@ bench-results.csv
 /build-latest/
 /build-bench/
 /.qmake.stash
+
+# MinGW cross-compilation deps (local build environment)
+/deps-mingw/
+
+# Snapshot files
+*.utx
+
+# Merge artifacts
+*.orig
+
+# Dev patches
+*.patch

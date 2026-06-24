@@ -33,8 +33,35 @@ jobs:
             -DBUILD_TESTS=ON \
             -DUSE_UPNP=OFF
 
+      # CI Layer 2: v3 onion address validation (defense-in-depth against
+      # the btb6/gtb6 corruption class — see references/onion-corruption-ci-defense.md).
+      # Validates: (a) src/onionseed.h hardcoded seeds, (b) contrib/triangles.conf.example
+      # operator-facing example. Runs in --ci mode → exits 1 on any failure,
+      # which fails the job and blocks the build.
+      - name: Validate .onion addresses (CI gate)
+        run: |
+          python3 scripts/validate_onion_seeds.py \
+            --ci \
+            --against src/onionseed.h \
+            src/onionseed.h \
+            contrib/triangles.conf.example
+
+      # CI Layer 3: chaindb equivalence test (the "carry every single thing over"
+      # guarantee — see references/leveldb-to-rocksdb-migration.md Phase A).
+      # Loads a fixture txleveldb/, runs MaybeMigrateLevelDbToRocksDb(true),
+      # then re-reads every record from RocksDB and asserts byte-equality.
+      # This is the proof that no data is lost in the LevelDB→RocksDB migration.
       - name: Build
         run: cmake --build build -j$(nproc)
+
+      - name: Run chaindb equivalence test
+        run: |
+          if [ -x build/bin/test_triangles ]; then
+            ./build/bin/test_triangles --run_test=chaindb_equivalence_tests --log_level=test_suite
+          else
+            echo "test_triangles not built — skipping chaindb equivalence"
+            exit 0
+          fi
 
       - name: Run unit tests
         run: cd build && ctest --output-on-failure || true

@@ -1,5 +1,5 @@
 Name:           triangles
-Version:        5.7.6
+Version:        5.9.24
 Release:        1%{?dist}
 Summary:        Cryptographic Triangles (TRI) cryptocurrency wallet
 License:        MIT

@@ -6,6 +6,7 @@
 
 #include "util.h"
 #include "onionseed.h"
+#include "tor/onion_v3.h"
 
 #include <openssl/evp.h>
 #include <openssl/sha.h>
@@ -213,6 +214,38 @@ BOOST_AUTO_TEST_CASE(onion_v3_audit_summary)
     }
     BOOST_CHECK_EQUAL(nInvalid, 0);
     BOOST_CHECK_EQUAL((size_t)nValid, n);
+}
+
+// Defense-in-depth test (2026-06-22): verifies that a 1-character
+// transposition in ANY of the hardcoded seeds is detected by the bulk
+// validator the same way the daemon's startup-time check in
+// net.cpp:ThreadOnionSeed does. This is the contract: if this test passes,
+// the daemon would correctly throw at startup with a clear error instead
+// of letting Tor produce 4,842 cryptic "No more HSDir" warnings.
+//
+// We test against the PRODUCTION validator (CTorV3Service::ValidateOnionAddress)
+// because that's what ThreadOnionSeed actually calls. The IsValidV3Onion
+// helper below has a pre-existing bug in its base32 decoder and is not
+// what production uses — see the 2026-06-22 review for details.
+BOOST_AUTO_TEST_CASE(onion_v3_bulk_validator_detects_corruption)
+{
+    // Use the well-known btb6/gtb6 incident as the test vector.
+    const std::string kValid = "vmepp7plxngv4qpyngbgtb6njwnmlwy4api64xnwkhaf6fm3qlqtpfad.onion";
+    const std::string kCorrupt = "vmepp7plxngv4qpyngbbtb6njwnmlwy4api64xnwkhaf6fm3qlqtpfad.onion";
+
+    // Sanity: the two differ in exactly one character
+    BOOST_CHECK_EQUAL(kValid.size(), kCorrupt.size());
+    int nDiff = 0;
+    for (size_t i = 0; i < kValid.size(); i++) {
+        if (kValid[i] != kCorrupt[i]) nDiff++;
+    }
+    BOOST_CHECK_EQUAL(nDiff, 1);
+
+    // The PRODUCTION validator (which ThreadOnionSeed uses) must accept the
+    // valid one and reject the corrupt one. This is the same call path
+    // ThreadOnionSeed exercises on startup.
+    BOOST_CHECK(CTorV3Service::ValidateOnionAddress(kValid));
+    BOOST_CHECK(!CTorV3Service::ValidateOnionAddress(kCorrupt));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

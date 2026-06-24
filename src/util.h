@@ -218,6 +218,7 @@ void FileCommit(FILE *fileout);
 bool RenameOver(std::filesystem::path src, std::filesystem::path dest);
 std::filesystem::path GetDefaultDataDir();
 const std::filesystem::path &GetDataDir(bool fNetSpecific = true);
+void ResetDataDirCache();
 std::filesystem::path GetConfigFile();
 std::filesystem::path GetPidFile();
 #ifndef WIN32

@@ -80,6 +80,12 @@ public:
 
     bool IsReadOnly() const { return fReadOnly; }
 
+    // Raw byte-level accessors for testing and migration utilities.
+    // The templated Read<>/Write<> above are the normal API; these bypass
+    // serialization for migration parity tests.
+    bool WriteRawPublic(const std::string& key, const std::string& value) { return WriteRaw(key, value); }
+    bool ReadRawPublic(const std::string& key, std::string& value) const { return ReadRaw(key, value); }
+
     // ── Schema versioning ────────────────────────────────────────────────────
     bool ReadVersion(int& nVersion);
     bool WriteVersion(int nVersion);
