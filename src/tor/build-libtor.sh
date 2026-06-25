@@ -98,7 +98,13 @@ $s =~ s/ac_cv_func_\$\{ac_func\}/$p4_repl/g;
 # ${ac_cv_func_vsnprintf+x} is the standard parameter-expansion
 # test (returns 'x' if set, empty otherwise).
 my $p5_repl = q{if eval "[ -n \"\${$as_ac_var+x}\" ]"};
-$s =~ s/if eval test x\$\{ac_cv_func_(.+?)\+y\} = xyes/$p5_repl/g;
+# The \{ in the pattern is correct (perl still treats it as literal {) but
+# Perl 5.36+ emits an "Unescaped left brace" warning. Disable warnings
+# locally around just this s/// to keep CI logs clean.
+{
+  local $SIG{__WARN__} = sub { warn @_ unless $_[0] =~ /Unescaped left brace/ };
+  $s =~ s/if eval test x\${ac_cv_func_(.+?)\+y\} = xyes/$p5_repl/g;
+}
 
 if ($s ne $before) {
   open(my $out, ">", "configure") or die "write: $!";
