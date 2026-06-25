@@ -11,9 +11,9 @@ fi
 
 cd "$TOR_SRC_DIR"
 
-if [[ ! -x "./configure" ]]; then
-  echo "Running autogen.sh"
-  ./autogen.sh
+if [[ ! -x "./configure" ]] || [[ "${AUTORECONF_FORCE:-0}" == "1" ]]; then
+  echo "Running autoreconf with -W no-error (autogen.sh -W all,error is too strict for autoconf 2.73+)"
+  autoreconf -i -f -W no-error
 fi
 
 echo "Configuring Tor static library build from: $TOR_SRC_DIR"

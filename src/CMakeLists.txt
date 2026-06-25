@@ -181,6 +181,16 @@ if(USE_TOR_EMBEDDED)
     # OpenSSL objects that duplicate the DLL import lib already linked above.
     # These GNU ld options are not supported on macOS (which uses lld) —
     # guard with NOT APPLE so the build still works on macOS.
+    # On macOS, the libevent/openssl/zlib install paths are not on the
+    # default linker search path. Pull them in from the standard
+    # homebrew locations so -levent / -lssl / -lssl etc. resolve.
+    if(APPLE)
+        target_link_directories(triangles_common PUBLIC
+            /opt/homebrew/opt/libevent/lib
+            /opt/homebrew/opt/openssl@3/lib
+            /opt/homebrew/opt/zlib/lib
+        )
+    endif()
     if(NOT APPLE)
         target_link_libraries(triangles_common PUBLIC
             -Wl,--allow-multiple-definition
