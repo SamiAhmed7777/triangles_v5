@@ -413,6 +413,21 @@ bool AppInit(int argc, char* argv[])
         }
         ReadConfigFile(mapArgs, mapMultiArgs);
 
+        // AUDIT: If notorious=1 or -notor was set in triangles.conf, scream
+        // loudly.  This is the silent path that put DNS2 on a 5+ day clearnet
+        // fork in 2026-06-23 — operator flipped it for troubleshooting, never
+        // reverted it, and the daemon happily started in clearnet-only mode.
+        // We refuse to proceed unless -recovery-mode=1 is ALSO set, even if
+        // the flag was set in the config file rather than on the command line.
+        if (mapArgs.count("-notor") && !GetBoolArg("-recovery-mode", false)) {
+            return InitError(strprintf(_(
+                "-notor=1 found in triangles.conf or command line.  Triangles is "
+                "Tor-native; running without Tor is unsafe and produces silent "
+                "clearnet forks (see 2026-06-23 DNS2 incident).  If this is an "
+                "explicit recovery operation, pass -recovery-mode=1 on the command "
+                "line (in addition to the config file setting) to acknowledge.")));
+        }
+
         if (mapArgs.count("-?") || mapArgs.count("--help"))
         {
             // First part of help message is specific to trianglesd / RPC client
@@ -1496,11 +1511,26 @@ bool AppInit2()
             fUseUPnP = false;
             #endif
         } else if (GetBoolArg("-notor", false)) {
-            // -notor: user explicitly disabled Tor.  Allow the daemon to start
-            // in clearnet-only mode (useful for diagnostics, benchmarking, and
-            // recovery).  .onion connectivity will not be available.
-            printf("NOTICE: Tor disabled via -notor. Running in clearnet-only mode.\n");
+            // -notor: explicit clearnet mode.  Triangles is Tor-native and
+            // running without Tor is unsafe for normal operation — it can
+            // produce silent clearnet forks (see 2026-06-23 DNS2 incident,
+            // 5+ days on a parallel chain because -notor=1 was left on after
+            // troubleshooting).  The flag is preserved for explicit recovery
+            // workflows (e.g. dumputxoset-from-clearnet when bootstrapping
+            // a new node) but requires an additional -recovery-mode=1
+            // confirmation flag so it cannot be flipped by accident.
+            if (!GetBoolArg("-recovery-mode", false)) {
+                return InitError(strprintf(_(
+                    "-notor requires -recovery-mode=1 confirmation.  Triangles is Tor-native; "
+                    "running without Tor is unsafe and produces silent clearnet forks.  "
+                    "If you need clearnet mode for bootstrap recovery or diagnostics, "
+                    "pass BOTH -notor=1 -recovery-mode=1 on the command line.")));
+            }
+            printf("WARNING: Tor disabled via -notor AND -recovery-mode=1 set.  "
+                   "Running in clearnet-only mode.\n");
             printf("  .onion connections will NOT be available.\n");
+            printf("  This mode is for RECOVERY ONLY — exit and restart without these\n"
+                   "  flags as soon as the recovery operation completes.\n");
             SetReachable(NET_IPV4, true);
             SetReachable(NET_IPV6, true);
             SetReachable(NET_TOR, false);

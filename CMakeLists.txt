@@ -54,7 +54,20 @@ option(USE_IPV6           "Enable IPv6 support"                              ON)
 option(USE_QRCODE         "Enable QR code generation via libqrencode"        OFF)
 option(USE_DBUS           "Enable D-Bus notifications (Linux only)"          ON)
 option(USE_ZMQ            "Enable ZMQ publisher support"                     OFF)
-option(USE_TOR_EMBEDDED   "Enable embedded Tor library linking"              OFF)
+# Triangles is Tor-native.  Tor is REQUIRED — disabling it at build time is
+# not a supported configuration.  The 2026-06-23 DNS2 clearnet-fork incident
+# (5+ days on a parallel chain because someone flipped -notor=1 for
+# troubleshooting and never reverted it) motivated this.  We keep the option
+# for legacy recovery workflows, but default it ON and abort the build if
+# anyone explicitly disables it.
+option(USE_TOR_EMBEDDED   "Enable embedded Tor library linking"              ON)
+if(DEFINED USE_TOR_EMBEDDED AND NOT USE_TOR_EMBEDDED)
+    message(FATAL_ERROR
+        "USE_TOR_EMBEDDED=OFF is not supported. Triangles is Tor-native. "
+        "If you need clearnet mode for bootstrap recovery, build with "
+        "USE_TOR_EMBEDDED=ON and pass -notor=1 -recovery-mode=1 at runtime "
+        "instead.")
+endif()
 option(USE_O3             "Use -O3 optimization instead of -O2"              OFF)
 option(ENABLE_PIE         "Build position-independent executables"           OFF)
 option(ENABLE_STATIC      "Prefer static linking (Linux release builds)"     OFF)

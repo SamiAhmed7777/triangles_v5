@@ -63,6 +63,26 @@ jobs:
           fi
           echo "$DOCKERHUB_TOKEN" | docker login -u samiahmed7777 --password-stdin
 
+      - name: Wait for release artifacts
+        run: |
+          # The Dockerfile downloads the daemon .deb from the release URL.
+          # On tag-push the release is created first, but the assets get
+          # uploaded a few seconds/minutes later by the build job — without
+          # this wait, the Docker build races and fails with curl 22 / 404
+          # (saw this on v5.9.24 run #24, dist #24, Docker Hub job
+          # step #5 — release was published 8 min after the workflow fired).
+          for i in {1..30}; do
+            URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/cryptographic-triangles-daemon_${VERSION}_amd64.deb"
+            if curl -fsSL --head "$URL" >/dev/null 2>&1; then
+              echo "✓ Release .deb available: $URL"
+              exit 0
+            fi
+            echo "  waiting for release v${VERSION} daemon .deb... ($i/30)"
+            sleep 20
+          done
+          echo "::error::Release v${VERSION} daemon .deb never became available after 10 minutes"
+          exit 1
+
       - name: Build and push
         run: |
           if [ -z "$DOCKERHUB_TOKEN" ]; then exit 0; fi
