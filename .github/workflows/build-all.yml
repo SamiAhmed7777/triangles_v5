@@ -34,7 +34,15 @@ jobs:
             -DUSE_UPNP=OFF
 
       - name: Build libtor (embedded Tor static lib)
-        run: bash src/tor/build-libtor.sh
+        # USE_TOR_EMBEDDED defaults to ON and the daemon/Qt GUI both
+        # link -ltor. The Tor source is a git submodule but libtor.a
+        # is NOT built by cmake. build-libtor.sh defaults to /mingw64
+        # paths which don't exist on the ubuntu-22.04 runner; pass
+        # /usr where libevent-dev/libssl-dev/zlib1g-dev install.
+        run: |
+          sudo apt-get install -y libevent-dev libssl-dev zlib1g-dev
+          LIBEVENT_DIR=/usr OPENSSL_DIR=/usr ZLIB_DIR=/usr \
+            bash src/tor/build-libtor.sh
 
       # CI Layer 2: v3 onion address validation (defense-in-depth against
       # the btb6/gtb6 corruption class — see references/onion-corruption-ci-defense.md).
@@ -110,7 +118,15 @@ jobs:
             -DUSE_UPNP=OFF
 
       - name: Build libtor (embedded Tor static lib)
-        run: bash src/tor/build-libtor.sh
+        # USE_TOR_EMBEDDED defaults to ON and the daemon/Qt GUI both
+        # link -ltor. The Tor source is a git submodule but libtor.a
+        # is NOT built by cmake. build-libtor.sh defaults to /mingw64
+        # paths which don't exist on the ubuntu-22.04 runner; pass
+        # /usr where libevent-dev/libssl-dev/zlib1g-dev install.
+        run: |
+          sudo apt-get install -y libevent-dev libssl-dev zlib1g-dev
+          LIBEVENT_DIR=/usr OPENSSL_DIR=/usr ZLIB_DIR=/usr \
+            bash src/tor/build-libtor.sh
 
       - name: Build
         run: cmake --build build-san -j$(nproc)
@@ -166,6 +182,11 @@ jobs:
             -DBUILD_TESTS=OFF \
             -DUSE_UPNP=ON \
             -DUSE_QRCODE=OFF
+
+      - name: Build libtor (embedded Tor static lib)
+        # Windows Qt GUI also transitively links -ltor via triangles_common.
+        # msys2 default install puts everything in /mingw64.
+        run: bash src/tor/build-libtor.sh
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -308,13 +329,9 @@ jobs:
             -DUSE_UPNP=ON
 
       - name: Build libtor (embedded Tor static lib)
-        # USE_TOR_EMBEDDED defaults to ON and trianglesd.exe links
-        # against src/tor/tor-src/src/libtor.a. The Tor source is a
-        # git submodule but the static lib is NOT built by cmake.
-        # We have to run src/tor/build-libtor.sh before the main
-        # build. Without this step the Windows daemon build fails
-        # at link time with "cannot find -ltor" (v5.9.25-fork-
-        # detection run #466).
+        # Windows: msys2 default install puts everything in /mingw64,
+        # which is exactly the script's default. Just invoke it.
+        # See v5.9.25-fork-detection run #466 for why this is needed.
         run: bash src/tor/build-libtor.sh
 
       - name: Build
@@ -378,6 +395,15 @@ jobs:
             -DBUILD_DAEMON=OFF \
             -DBUILD_TESTS=OFF \
             -DUSE_UPNP=ON
+
+      - name: Build libtor (embedded Tor static lib)
+        # Linux Qt GUI also transitively links -ltor via triangles_common.
+        # build-libtor.sh defaults to /mingw64; pass /usr where the
+        # libevent-dev, libssl-dev, zlib1g-dev packages install.
+        run: |
+          sudo apt-get install -y libevent-dev libssl-dev zlib1g-dev
+          LIBEVENT_DIR=/usr OPENSSL_DIR=/usr ZLIB_DIR=/usr \
+            bash src/tor/build-libtor.sh
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -499,7 +525,15 @@ jobs:
             -DUSE_UPNP=ON
 
       - name: Build libtor (embedded Tor static lib)
-        run: bash src/tor/build-libtor.sh
+        # USE_TOR_EMBEDDED defaults to ON and the daemon/Qt GUI both
+        # link -ltor. The Tor source is a git submodule but libtor.a
+        # is NOT built by cmake. build-libtor.sh defaults to /mingw64
+        # paths which don't exist on the ubuntu-22.04 runner; pass
+        # /usr where libevent-dev/libssl-dev/zlib1g-dev install.
+        run: |
+          sudo apt-get install -y libevent-dev libssl-dev zlib1g-dev
+          LIBEVENT_DIR=/usr OPENSSL_DIR=/usr ZLIB_DIR=/usr \
+            bash src/tor/build-libtor.sh
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -558,6 +592,17 @@ jobs:
             -DMINIUPNPC_INCLUDE_PATH=/opt/homebrew/opt/miniupnpc/include \
             -DMINIUPNPC_LIB_PATH=/opt/homebrew/opt/miniupnpc/lib \
             -DQt5_DIR=/opt/homebrew/opt/qt@5/lib/cmake/Qt5
+
+      - name: Build libtor (embedded Tor static lib)
+        # macOS Qt GUI also transitively links -ltor via triangles_common.
+        # macOS Qt is built with @rpath embedded, so libtor needs to be
+        # at the configured TOR_SOURCE_ROOT location.
+        run: |
+          brew install libevent openssl@3
+          LIBEVENT_DIR=/opt/homebrew/opt/libevent \
+            OPENSSL_DIR=/opt/homebrew/opt/openssl@3 \
+            ZLIB_DIR=/opt/homebrew/opt/zlib \
+            bash src/tor/build-libtor.sh
 
       - name: Build
         run: cmake --build build -j$(sysctl -n hw.ncpu)

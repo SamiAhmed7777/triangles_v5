@@ -179,14 +179,24 @@ if(USE_TOR_EMBEDDED)
     # and its dependencies.
     # Use --allow-multiple-definition because libtor.a may pull in static
     # OpenSSL objects that duplicate the DLL import lib already linked above.
+    # These GNU ld options are not supported on macOS (which uses lld) —
+    # guard with NOT APPLE so the build still works on macOS.
+    if(NOT APPLE)
+        target_link_libraries(triangles_common PUBLIC
+            -Wl,--allow-multiple-definition
+            -Wl,--start-group
+        )
+    endif()
     target_link_libraries(triangles_common PUBLIC
-        -Wl,--allow-multiple-definition
-        -Wl,--start-group
         -ltor
         -levent -levent_core -levent_extra -levent_openssl
         -lssl -lcrypto -lz -llzma -lzstd
-        -Wl,--end-group
     )
+    if(NOT APPLE)
+        target_link_libraries(triangles_common PUBLIC
+            -Wl,--end-group
+        )
+    endif()
     if(WIN32)
         target_link_libraries(triangles_common PUBLIC iphlpapi shlwapi crypt32)
     endif()
