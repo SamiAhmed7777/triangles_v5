@@ -28,6 +28,11 @@
 #include <memory>
 #include <thread>
 #include <vector>
+
+// Forward declaration: InitError / InitWarning are defined further down
+// in this file but referenced by AppInit (line ~423) before the definition.
+static bool InitError(const std::string& str);
+static bool InitWarning(const std::string& str);
 #include <filesystem>
 #include <fstream>
 #include <boost/interprocess/sync/file_lock.hpp>
@@ -420,12 +425,12 @@ bool AppInit(int argc, char* argv[])
         // We refuse to proceed unless -recovery-mode=1 is ALSO set, even if
         // the flag was set in the config file rather than on the command line.
         if (mapArgs.count("-notor") && !GetBoolArg("-recovery-mode", false)) {
-            return InitError(strprintf(_(
+            return InitError(_(
                 "-notor=1 found in triangles.conf or command line.  Triangles is "
                 "Tor-native; running without Tor is unsafe and produces silent "
                 "clearnet forks (see 2026-06-23 DNS2 incident).  If this is an "
                 "explicit recovery operation, pass -recovery-mode=1 on the command "
-                "line (in addition to the config file setting) to acknowledge.")));
+                "line (in addition to the config file setting) to acknowledge."));
         }
 
         if (mapArgs.count("-?") || mapArgs.count("--help"))
@@ -1520,11 +1525,11 @@ bool AppInit2()
             // a new node) but requires an additional -recovery-mode=1
             // confirmation flag so it cannot be flipped by accident.
             if (!GetBoolArg("-recovery-mode", false)) {
-                return InitError(strprintf(_(
+                return InitError(_(
                     "-notor requires -recovery-mode=1 confirmation.  Triangles is Tor-native; "
                     "running without Tor is unsafe and produces silent clearnet forks.  "
                     "If you need clearnet mode for bootstrap recovery or diagnostics, "
-                    "pass BOTH -notor=1 -recovery-mode=1 on the command line.")));
+                    "pass BOTH -notor=1 -recovery-mode=1 on the command line."));
             }
             printf("WARNING: Tor disabled via -notor AND -recovery-mode=1 set.  "
                    "Running in clearnet-only mode.\n");
