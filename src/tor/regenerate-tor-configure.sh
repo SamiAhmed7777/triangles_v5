@@ -111,10 +111,29 @@ if [[ -x /tmp/bash44/bin/bash ]]; then
 fi
 
 OUT="$ROOT_DIR/configure.vendored"
+AUX_DIR="$ROOT_DIR/configure-aux"
 cp -f ./configure "$OUT"
 chmod +x "$OUT"
+
+# Vendor the auxiliary files alongside configure. autoreconf -i
+# normally generates these in the source dir; we need them in the
+# submodule checkout too because build-libtor.sh skips autoreconf.
+mkdir -p "$AUX_DIR"
+AUX_FILES=(ar-lib compile config.guess config.sub depcomp install-sh missing test-driver)
+MISSING_AUX=0
+for f in "${AUX_FILES[@]}"; do
+  if [[ -f "$f" ]]; then
+    cp -f "$f" "$AUX_DIR/$f"
+    chmod +x "$AUX_DIR/$f"
+  else
+    echo "WARNING: auxiliary file $f not found after autoreconf" >&2
+    MISSING_AUX=1
+  fi
+done
+
 echo
 echo "Wrote $OUT ($(wc -c < "$OUT") bytes)"
+echo "Vendored ${#AUX_FILES[@]} auxiliary files to $AUX_DIR"
 if [[ $WARN -ne 0 ]]; then
   echo
   echo "DO NOT COMMIT this file — it has parse hazards. See warnings above." >&2

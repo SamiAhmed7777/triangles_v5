@@ -26,10 +26,21 @@ cd "$TOR_SRC_DIR"
 # To force a fresh autoreconf on the runner instead (legacy behavior):
 #   AUTORECONF_FORCE=1 bash src/tor/build-libtor.sh
 VENDORED_CONFIGURE="$ROOT_DIR/configure.vendored"
+VENDORED_AUX_DIR="$ROOT_DIR/configure-aux"
 if [[ -f "$VENDORED_CONFIGURE" ]] && [[ "${AUTORECONF_FORCE:-0}" != "1" ]]; then
   echo "Using vendored configure from $VENDORED_CONFIGURE"
   cp -f "$VENDORED_CONFIGURE" "./configure"
   chmod +x "./configure"
+  # configure looks for auxiliary files (ar-lib, config.guess,
+  # config.sub, compile, depcomp, install-sh, missing, test-driver)
+  # in the same directory as itself. autoreconf -i normally creates
+  # them, but we skipped autoreconf — so vendor them alongside.
+  if [[ -d "$VENDORED_AUX_DIR" ]]; then
+    cp -f "$VENDORED_AUX_DIR"/* ./
+    chmod +x ./ar-lib ./compile ./config.guess ./config.sub \
+             ./depcomp ./install-sh ./missing ./test-driver 2>/dev/null || true
+    echo "Vendored $(ls "$VENDORED_AUX_DIR" | wc -l) auxiliary files"
+  fi
 elif [[ "${AUTORECONF_FORCE:-0}" == "1" ]] || [[ ! -x "./configure" ]]; then
   echo "Running autoreconf with -W no-error (autogen.sh -W all,error is too strict for autoconf 2.73+)"
   # Prefer autoconf 2.71 when available. autoreconf 2.73 emits
