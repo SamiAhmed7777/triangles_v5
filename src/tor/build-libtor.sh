@@ -11,7 +11,26 @@ fi
 
 cd "$TOR_SRC_DIR"
 
-if [[ ! -x "./configure" ]] || [[ "${AUTORECONF_FORCE:-0}" == "1" ]]; then
+# Prefer the vendored configure (../configure.vendored, committed to
+# this repo). It was generated with autoconf 2.71 on Linux, which emits
+# a known-good bash/dash-compatible script that does NOT contain:
+#   - backtick command substitutions (Patch 1)
+#   - the `${ac_cv_func_${ac_func}+y}` nested-expansion form (Patches 4/5)
+#   - the `printf "%s\n" "ac_cv_func_$ac_func" | $as_tr_sh` form (Patches 2/3)
+# Skipping autoreconf on the CI runner eliminates the entire
+# MSYS2/autoconf-wrapper/dash/bash interaction that was producing
+# `${ac_cv_func_ RtlSecureZeroMemory+y}: bad substitution` at line 2220.
+#
+# To regenerate (Linux only — needs autoconf 2.71):
+#   bash src/tor/regenerate-tor-configure.sh
+# To force a fresh autoreconf on the runner instead (legacy behavior):
+#   AUTORECONF_FORCE=1 bash src/tor/build-libtor.sh
+VENDORED_CONFIGURE="$ROOT_DIR/configure.vendored"
+if [[ -f "$VENDORED_CONFIGURE" ]] && [[ "${AUTORECONF_FORCE:-0}" != "1" ]]; then
+  echo "Using vendored configure from $VENDORED_CONFIGURE"
+  cp -f "$VENDORED_CONFIGURE" "./configure"
+  chmod +x "./configure"
+elif [[ "${AUTORECONF_FORCE:-0}" == "1" ]] || [[ ! -x "./configure" ]]; then
   echo "Running autoreconf with -W no-error (autogen.sh -W all,error is too strict for autoconf 2.73+)"
   # Prefer autoconf 2.71 when available. autoreconf 2.73 emits
   # configure patterns that bash on MSYS2/MINGW64 chokes on even
