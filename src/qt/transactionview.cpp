@@ -435,7 +435,7 @@ void TransactionView::abandonTransaction()
     }
 
     // Refresh the transactions table
-    model->getTransactionTableModel()->refresh();
+    model->getTransactionTableModel()->refreshWallet();
 }
 
 QWidget *TransactionView::createDateRangeWidget()

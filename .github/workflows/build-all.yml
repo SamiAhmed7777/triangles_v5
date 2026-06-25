@@ -33,6 +33,9 @@ jobs:
             -DBUILD_TESTS=ON \
             -DUSE_UPNP=OFF
 
+      - name: Build libtor (embedded Tor static lib)
+        run: bash src/tor/build-libtor.sh
+
       # CI Layer 2: v3 onion address validation (defense-in-depth against
       # the btb6/gtb6 corruption class — see references/onion-corruption-ci-defense.md).
       # Validates: (a) src/onionseed.h hardcoded seeds, (b) contrib/triangles.conf.example
@@ -105,6 +108,9 @@ jobs:
             -DBUILD_DAEMON=ON \
             -DBUILD_TESTS=ON \
             -DUSE_UPNP=OFF
+
+      - name: Build libtor (embedded Tor static lib)
+        run: bash src/tor/build-libtor.sh
 
       - name: Build
         run: cmake --build build-san -j$(nproc)
@@ -301,6 +307,16 @@ jobs:
             -DBUILD_TESTS=OFF \
             -DUSE_UPNP=ON
 
+      - name: Build libtor (embedded Tor static lib)
+        # USE_TOR_EMBEDDED defaults to ON and trianglesd.exe links
+        # against src/tor/tor-src/src/libtor.a. The Tor source is a
+        # git submodule but the static lib is NOT built by cmake.
+        # We have to run src/tor/build-libtor.sh before the main
+        # build. Without this step the Windows daemon build fails
+        # at link time with "cannot find -ltor" (v5.9.25-fork-
+        # detection run #466).
+        run: bash src/tor/build-libtor.sh
+
       - name: Build
         run: |
           cmake --build build -j$(nproc)
@@ -481,6 +497,9 @@ jobs:
             -DBUILD_CLI=ON \
             -DBUILD_TESTS=OFF \
             -DUSE_UPNP=ON
+
+      - name: Build libtor (embedded Tor static lib)
+        run: bash src/tor/build-libtor.sh
 
       - name: Build
         run: cmake --build build -j$(nproc)
