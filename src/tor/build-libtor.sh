@@ -17,7 +17,12 @@ if [[ ! -x "./configure" ]] || [[ "${AUTORECONF_FORCE:-0}" == "1" ]]; then
 fi
 
 echo "Configuring Tor static library build from: $TOR_SRC_DIR"
-./configure \
+# autoconf 2.73's generated ./configure uses backtick command substitution
+# inside variable assignments (e.g. `as_ac_var=\`printf ... | sed ...\``)
+# which dash/MSYS2's /bin/sh rejects with a syntax error. Force bash
+# explicitly so the same script works on Windows MSYS2 and macOS/Linux.
+export CONFIG_SHELL="${CONFIG_SHELL:-$(command -v bash)}"
+"$CONFIG_SHELL" ./configure \
   --enable-static-tor \
   --disable-module-relay \
   --disable-module-dirauth \
