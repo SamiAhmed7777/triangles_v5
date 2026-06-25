@@ -49,6 +49,16 @@ public:
 
     std::unique_ptr<CTxDBIteratorBase> NewIterator() const override;
 
+    // ─── Test-only friend accessor ──────────────────────────────────────────
+    // test_chaindb_runtime exercises the protected raw methods (ReadRaw /
+    // WriteRaw / EraseRaw / ExistsRaw) directly to verify the wrapper layer
+    // that the daemon uses at runtime when launched with -chaindb=rocksdb.
+    // We don't widen the public API just for the test — instead the test
+    // declares a ChainDbRuntimeTestAccessor struct that this class befriends,
+    // giving it the same access the class itself has. White-box test pattern,
+    // zero impact on production callers.
+    friend struct ChainDbRuntimeTestAccessor;
+
 protected:
     bool ReadRaw(const std::string& key, std::string& value) const override;
     bool WriteRaw(const std::string& key, const std::string& value) override;

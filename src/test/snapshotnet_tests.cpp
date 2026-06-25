@@ -24,11 +24,15 @@
 //
 // Build: see src/test/CMakeLists.txt target `snapshotnet_tests`.
 
+#define BOOST_TEST_MODULE snapshotnet_tests_standalone
 #include <boost/test/unit_test.hpp>
 
 #include "../snapshotnet.h"
 #include "../checkpoints.h"
 #include "../util.h"
+#include "../uint256.h"
+#include "../wallet.h"
+#include "../ui_interface.h"
 
 #include <openssl/sha.h>
 
@@ -53,9 +57,21 @@ namespace fs = std::filesystem;
 extern uint64_t nLocalServices;
 extern int nBestHeight;
 
+// wallet.cpp pulls in main.cpp's references to these globals via the
+// CWallet API. They have to be DEFINED (not just declared) for the linker
+// to be happy. Stub values are fine — snapshotnet doesn't touch any of them.
+CWallet* pwalletMain = nullptr;
+CClientUIInterface uiInterface;
+bool fConfChange = false;
+bool fEnforceCanonical = false;
+unsigned int nNodeLifespan = 0;
+unsigned int nDerivationMethodIndex = 0;
+bool fUseFastIndex = false;
+enum Checkpoints::CPMode CheckpointsMode = Checkpoints::STRICT;
+
+void StartShutdown() { /* no-op for tests */ }
+
 namespace {
-// No-op CClientUIInterface is already defined in util.h headers we include.
-// pwalletMain isn't touched by snapshotnet, so we don't need to stub it.
 
 // Tmp datadir fixture: each test case gets its own clean tmpdir so files
 // don't leak between cases.
@@ -131,7 +147,7 @@ BOOST_AUTO_TEST_CASE(available_snapshot_roundtrip)
     using namespace SnapshotNet;
     AvailableSnapshot a;
     a.height = 2205000;
-    a.fileHash = uint256S("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff");
+    a.fileHash = uint256("0x00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff");
     a.totalSize = 12345678LL;
 
     CDataStream s(SER_NETWORK, PROTOCOL_VERSION);

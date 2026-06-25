@@ -290,8 +290,16 @@ bool CRocksTxDB::ExistsRaw(const std::string& key) const
 
     if (activeBatch) {
         bool deleted = false;
-        if (ScanBatch(key, &unused, &deleted) && !deleted)
-            return true;
+        bool inBatch = ScanBatch(key, &unused, &deleted);
+        if (inBatch) {
+            // Key is in the pending batch — present iff not marked deleted.
+            // Critically, a delete marker must shadow the underlying DB's
+            // version of the key (otherwise reads inside an open batch would
+            // still see the stale pre-erase value, defeating the whole point
+            // of the batch). Mirror ReadRaw's deleted==true → return false.
+            return !deleted;
+        }
+        // Not in the pending batch — fall through to underlying DB.
     }
 
     rocksdb::Status status = pdb->Get(rocksdb::ReadOptions(), key, &unused);
