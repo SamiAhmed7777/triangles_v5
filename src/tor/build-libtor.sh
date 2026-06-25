@@ -13,31 +13,108 @@ cd "$TOR_SRC_DIR"
 
 if [[ ! -x "./configure" ]] || [[ "${AUTORECONF_FORCE:-0}" == "1" ]]; then
   echo "Running autoreconf with -W no-error (autogen.sh -W all,error is too strict for autoconf 2.73+)"
-  autoreconf -i -f -W no-error
-
-  # autoconf 2.73 generates ./configure with backtick command
-  # substitutions inside variable assignments such as
-  #   as_ac_var=`printf '%s\n' "ac_cv_func_$ac_func" | sed "$as_sed_sh"`
-  # bash on MSYS2/MINGW64 parses this with a syntax error at the
-  # nested backticks with quoted $-vars. autoconf 2.71 doesn't
-  # generate this pattern, but pinning the MSYS2 autoconf version
-  # is fragile (meta-package pulls whatever's current). Convert
-  # all `var=\`cmd\`` assignments to `var=$(cmd)` form, which is
-  # POSIX-ly equivalent and nests cleanly.
-  if grep -qE '^[ \t]*[A-Za-z_][A-Za-z0-9_]*=`[^`]*`[ \t]*$' configure; then
-    echo "Patching generated configure: \`...\` -> \$(...) in assignments"
-    # Match leading whitespace, identifier, =, single backtick,
-    # any chars except backtick, single backtick, optional whitespace.
-    perl -i -pe 's/^([ \t]*[A-Za-z_][A-Za-z0-9_]*=)`([^`]*)`([ \t]*)$/$1\$($2)$3/' configure \
-      || echo "perl not available, falling back to sed"
+  # Prefer autoconf 2.71 when available. autoreconf 2.73 emits
+  # configure patterns that bash on MSYS2/MINGW64 chokes on even
+  # after the patches below. autoreconf 2.71 emits clean backtick
+  # assignments; it is installed as a side effect of
+  # mingw-w64-x86_64-autotools on MSYS2 but autoconf-wrapper still
+  # picks 2.73 unless we call the versioned binary directly.
+  if command -v autoreconf-2.71 >/dev/null 2>&1; then
+    AUTORECONF=autoreconf-2.71
+  else
+    AUTORECONF=autoreconf
   fi
+  "$AUTORECONF" -i -f -W no-error
+
+  # Apply both configure patches via a single perl script. We write
+  # the script to /tmp first to avoid the quoting nightmare of nested
+  # single quotes inside bash single-quoted strings.
+  #
+  # CRITICAL perl replacement gotchas (cost me several iterations):
+  #   - `$(` in the replacement source is parsed by perl as `$$` (process
+  #     ID). Use `\$(` to emit a literal `$(`.
+  #   - `\n` in the replacement source is parsed by perl as a newline.
+  #     Use `\\n` to emit a literal backslash-n.
+  # We avoid these entirely by building replacement strings with
+  # sprintf() and %s placeholders, so perl never sees the dollar
+  # signs or backslashes that would trigger interpolation.
+  cat > /tmp/patch-tor-configure.pl <<'PERL_EOF'
+use strict;
+use warnings;
+local $/;
+open(my $fh, "<", "configure") or die "open: $!";
+my $s = <$fh>;
+close($fh);
+my $before = $s;
+
+# Patch 1: convert single-line backtick assignments.
+#   `var=`cmd``  ->  `var=$(cmd)`
+# Exclude newlines from the content class so we don't greedily match
+# multi-line backtick command substitutions (which would break their
+# internal paren balance). sprintf here is safe — $1/$2/$3 are backrefs.
+$s =~ s/^([ \t]*[A-Za-z_][A-Za-z0-9_]*=)`([^`\n]*)`([ \t]*$)/sprintf('%s$(%s)%s', $1, $2, $3)/egm;
+
+# Patch 2 + 3 (combined): AC_CHECK_FUNCS printf format and as_tr_sh.
+# Replace:
+#   $(printf "%s\n" "ac_cv_func_$ac_func" ...)  ->
+#   $(printf '%s\n' "ac_cv_func_$ac_func" | sed 's/[^a-zA-Z0-9_]/_/g')
+# Uses sprintf with chr() to build the replacement text WITHOUT
+# triggering perl's $VAR interpolation or \n newline interpretation.
+# The only $ in sprintf's format string is via chr(36) = '$', which
+# perl doesn't interpret.
+my $DOLLAR = chr(36);
+my $BSLASH_N = '\\n';  # 2 chars: backslash + n; perl sees this literally
+# Use single-dollar $ac_func (not ${ac_func}) so the value is fully
+# resolved at assignment time. Otherwise the downstream autoconf
+# pattern `${$as_ac_var+y}` becomes `${ac_cv_func_${ac_func}+y}`
+# which bash cannot parse (nested ${} inside ${}).
+my $p23_repl = sprintf(
+  'ac_cv_func_%s%s',
+  $DOLLAR, 'ac_func'
+);
+$s =~ s{\$\(printf "%s\\n" "ac_cv_func_\$ac_func"[^)]*\)}{$p23_repl}g;
+$s =~ s{\$\(printf '%s\\n' "ac_cv_func_\$ac_func"[^)]*\)}{$p23_repl}g;
+
+# Patch 4: replace literal ${ac_func} (curly-brace form) in the
+# AC_CHECK_FUNCS cache check with single-dollar $ac_func. MSYS2's
+# autoconf 2.71 generates code like
+#     if eval test \${ac_cv_func_${ac_func}+y}
+# which bash can't parse (nested ${} inside ${+y}), emitting
+#     ${ac_cv_func_ RtlSecureZeroMemory+y}: bad substitution
+# (bash expands the inner ${ac_func} before displaying the error,
+# hence the space). Switching to single-dollar form fixes this.
+my $p4_repl = sprintf('ac_cv_func_%s%s', $DOLLAR, 'ac_func');
+$s =~ s/ac_cv_func_\$\{ac_func\}/$p4_repl/g;
+
+# Patch 5: rewrite the bash-incompatible cache-check pattern
+#     if eval test x${ac_cv_func_${ac_func}+y} = xyes
+# to the bash-compatible form using indirect expansion:
+#     if eval "[ -n \"\${$as_ac_var+x}\" ]"
+# bash 4.4 on MSYS2 cannot parse ${VAR1${VAR2}+y} OR ${VAR1$VAR2+y}
+# at script-load time, regardless of eval. The replacement uses
+# ${$as_ac_var+x} where bash's `!` indirect prefix looks up the
+# variable whose name is the VALUE of $as_ac_var. With eval, the
+# inner $as_ac_var is expanded to e.g. ac_cv_func_vsnprintf, then
+# ${ac_cv_func_vsnprintf+x} is the standard parameter-expansion
+# test (returns 'x' if set, empty otherwise).
+my $p5_repl = q{if eval "[ -n \"\${$as_ac_var+x}\" ]"};
+$s =~ s/if eval test x\$\{ac_cv_func_(.+?)\+y\} = xyes/$p5_repl/g;
+
+if ($s ne $before) {
+  open(my $out, ">", "configure") or die "write: $!";
+  print $out $s;
+  close($out);
+}
+PERL_EOF
+  perl /tmp/patch-tor-configure.pl \
+    && echo "Patched configure (backtick + printf format + as_tr_sh)" \
+    || echo "perl patch failed (continuing)"
 fi
 
 echo "Configuring Tor static library build from: $TOR_SRC_DIR"
-# Even after the perl patch above, the configure script's shebang
-# is `#!/bin/sh` and MSYS2's /bin/sh is dash. Force bash so any
-# remaining edge cases (nested quoting, $RANDOM usage, etc.) parse
-# the same way on every platform.
+# Even after the patches above, the configure script's shebang is
+# `#!/bin/sh` and MSYS2's /bin/sh is dash. Force bash so any
+# remaining edge cases parse the same way on every platform.
 export CONFIG_SHELL="${CONFIG_SHELL:-$(command -v bash)}"
 "$CONFIG_SHELL" ./configure \
   --enable-static-tor \

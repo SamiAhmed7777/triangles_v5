@@ -576,9 +576,14 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install cmake ninja qt@5 openssl@3 boost berkeley-db@5 leveldb rocksdb libevent miniupnpc
+          brew install cmake ninja qt@5 openssl@3 boost berkeley-db@5 leveldb rocksdb libevent miniupnpc zstd
 
       - name: Configure
+        # Add -L/opt/homebrew/lib to the link line so rocksdb's
+        # transitive -lzstd resolves. /opt/homebrew/lib is only in the
+        # rpath (runtime), not the link-time search path, so cmake's
+        # default LIBRARY_PATH propagation isn't enough — we set the
+        # linker flags explicitly.
         run: |
           export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
           cmake -B build -G Ninja \
@@ -595,14 +600,17 @@ jobs:
             -DEVENT_LIB_PATH=/opt/homebrew/opt/libevent/lib \
             -DMINIUPNPC_INCLUDE_PATH=/opt/homebrew/opt/miniupnpc/include \
             -DMINIUPNPC_LIB_PATH=/opt/homebrew/opt/miniupnpc/lib \
-            -DQt5_DIR=/opt/homebrew/opt/qt@5/lib/cmake/Qt5
+            -DQt5_DIR=/opt/homebrew/opt/qt@5/lib/cmake/Qt5 \
+            -DCMAKE_LIBRARY_PATH=/opt/homebrew/lib \
+            -DCMAKE_EXE_LINKER_FLAGS="-L/opt/homebrew/lib" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-L/opt/homebrew/lib"
 
       - name: Build libtor (embedded Tor static lib)
         # macOS Qt GUI also transitively links -ltor via triangles_common.
         # macOS Qt is built with @rpath embedded, so libtor needs to be
         # at the configured TOR_SOURCE_ROOT location.
         run: |
-          brew install libevent openssl@3 autoconf automake libtool zlib
+          brew install libevent openssl@3 autoconf automake libtool zlib zstd
           export PATH="/opt/homebrew/opt/automake/bin:/opt/homebrew/opt/libtool/bin:$PATH"
           LIBEVENT_DIR=/opt/homebrew/opt/libevent \
             OPENSSL_DIR=/opt/homebrew/opt/openssl@3 \
