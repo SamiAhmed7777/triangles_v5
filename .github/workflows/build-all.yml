@@ -161,7 +161,9 @@ jobs:
             mingw-w64-x86_64-miniupnpc
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-rocksdb
-            mingw-w64-x86_64-autotools
+            mingw-w64-x86_64-autoconf
+            mingw-w64-x86_64-automake
+            mingw-w64-x86_64-autoconf2.13
             mingw-w64-x86_64-libtool
 
       - name: Set VERSION
@@ -319,6 +321,10 @@ jobs:
             mingw-w64-x86_64-miniupnpc
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-rocksdb
+            mingw-w64-x86_64-autoconf
+            mingw-w64-x86_64-automake
+            mingw-w64-x86_64-autoconf2.13
+            mingw-w64-x86_64-libtool
 
       - name: Configure
         run: |
@@ -600,7 +606,8 @@ jobs:
         # macOS Qt is built with @rpath embedded, so libtor needs to be
         # at the configured TOR_SOURCE_ROOT location.
         run: |
-          brew install libevent openssl@3
+          brew install libevent openssl@3 autoconf automake libtool
+          export PATH="/opt/homebrew/opt/automake/bin:/opt/homebrew/opt/libtool/bin:$PATH"
           LIBEVENT_DIR=/opt/homebrew/opt/libevent \
             OPENSSL_DIR=/opt/homebrew/opt/openssl@3 \
             ZLIB_DIR=/opt/homebrew/opt/zlib \

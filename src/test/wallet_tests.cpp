@@ -316,7 +316,7 @@ BOOST_AUTO_TEST_CASE(abandon_unknown_txid_returns_false)
     // Pick a hash that we know is not in the test wallet
     uint256 hash;
     hash.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
-    BOOST_CHECK(!wallet.AbandonTransaction(hash));
+    BOOST_CHECK(!wallet_tests::wallet.AbandonTransaction(hash));
 }
 
 BOOST_AUTO_TEST_CASE(abandon_not_from_me_returns_false)
@@ -325,10 +325,10 @@ BOOST_AUTO_TEST_CASE(abandon_not_from_me_returns_false)
     // wallet_tests). Grab the first mapWallet entry — it has fDebit=0
     // because add_coin() only sets fIsFromMe if we asked, so by default
     // the tx is not from us.
-    BOOST_CHECK(!wallet.mapWallet.empty());
-    if (!wallet.mapWallet.empty()) {
-        uint256 hash = wallet.mapWallet.begin()->first;
-        BOOST_CHECK(!wallet.AbandonTransaction(hash));
+    BOOST_CHECK(!wallet_tests::wallet.mapWallet.empty());
+    if (!wallet_tests::wallet.mapWallet.empty()) {
+        uint256 hash = wallet_tests::wallet.mapWallet.begin()->first;
+        BOOST_CHECK(!wallet_tests::wallet.AbandonTransaction(hash));
     }
 }
 
