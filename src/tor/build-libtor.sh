@@ -30,8 +30,10 @@ echo "Configuring Tor static library build from: $TOR_SRC_DIR"
   --with-openssl-dir="${OPENSSL_DIR:-/mingw64}" \
   --with-zlib-dir="${ZLIB_DIR:-/mingw64}"
 
-echo "Building Tor"
-make -j"${NPROC:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
+echo "Building Tor (libtor.a only — skip the helper tools like tor-resolve"
+echo "and tor-print-ed-signing-cert that pull in extra static OpenSSL and"
+echo "are not needed by Triangles)"
+make -j"${NPROC:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}" libtor.a
 
 echo
 echo "Build finished. Inspect these locations for static libraries:"
