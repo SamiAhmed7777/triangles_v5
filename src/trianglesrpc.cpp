@@ -332,6 +332,7 @@ static const CRPCCommand vRPCCommands[] =
     { "checkwallet",            &checkwallet,            false,  true},
     { "repairwallet",           &repairwallet,           false,  true},
     { "resendtx",               &resendtx,               false,  true},
+    { "abandontransaction",     &abandontransaction,     true,   true},
     { "makekeypair",            &makekeypair,            false,  true},
 
     { "smsgenable",             &smsgenable,             false,  false},

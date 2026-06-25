@@ -453,6 +453,15 @@ AddressTableModel *WalletModel::getAddressTableModel()
     return addressTableModel;
 }
 
+bool WalletModel::abandonTransaction(const QString &hash)
+{
+    if (!wallet)
+        return false;
+    uint256 txHash;
+    txHash.SetHex(hash.toStdString());
+    return wallet->AbandonTransaction(txHash);
+}
+
 TransactionTableModel *WalletModel::getTransactionTableModel()
 {
     return transactionTableModel;

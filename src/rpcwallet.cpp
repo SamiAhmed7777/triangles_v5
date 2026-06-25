@@ -1822,6 +1822,24 @@ Value repairwallet(const Array& params, bool fHelp)
     return result;
 }
 
+// triangles: mark an in-wallet transaction as abandoned
+Value abandontransaction(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "abandontransaction \"txid\"\n"
+            "<txid> is the transaction ID of the wallet transaction to abandon.\n"
+            "Mark an in-wallet transaction as abandoned. This frees its inputs so they can be re-spent.\n"
+            "Only unconfirmed transactions that belong to this wallet can be abandoned.");
+
+    uint256 hash;
+    hash.SetHex(params[0].get_str());
+    if (!pwalletMain->AbandonTransaction(hash))
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Transaction not eligible for abandonment");
+
+    return Value::null;
+}
+
 // triangles: resend unconfirmed wallet transactions
 Value resendtx(const Array& params, bool fHelp)
 {

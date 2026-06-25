@@ -68,6 +68,7 @@ public:
     OptionsModel *getOptionsModel();
     AddressTableModel *getAddressTableModel();
     TransactionTableModel *getTransactionTableModel();
+    bool abandonTransaction(const QString &hash);
 
     qint64 getBalance() const;
     qint64 getStake() const;

@@ -192,6 +192,7 @@ public:
     bool AddToWallet(const CWalletTx& wtxIn);
     bool AddToWalletIfInvolvingMe(const CTransaction& tx, const CBlock* pblock, bool fUpdate = false, bool fFindBlock = false);
     bool EraseFromWallet(uint256 hash);
+    bool AbandonTransaction(const uint256& hashTx);
     void WalletUpdateSpent(const CTransaction& prevout, bool fBlock = false);
     int ScanForWalletTransactions(CBlockIndex* pindexStart, bool fUpdate = false);
     bool ScanForWalletTransactionsFromIndex(CBlockIndex* pindexStart, bool fUpdate, int* pnFound = nullptr);

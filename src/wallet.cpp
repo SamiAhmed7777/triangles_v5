@@ -733,6 +733,56 @@ bool CWallet::EraseFromWallet(uint256 hash)
     return true;
 }
 
+// triangles: mark an in-wallet transaction as abandoned, freeing its inputs
+// for re-spending. Use for stuck or conflicted transactions that will never
+// confirm. Returns false if the transaction is not eligible (already
+// confirmed, not in this wallet, or not from us).
+bool CWallet::AbandonTransaction(const uint256& hashTx)
+{
+    LOCK2(cs_main, cs_wallet);
+
+    if (!mapWallet.count(hashTx))
+        return false;
+
+    CWalletTx& wtx = mapWallet[hashTx];
+
+    // Cannot abandon a transaction that is already in the main chain
+    if (wtx.GetDepthInMainChain() > 0)
+        return false;
+
+    // Only allow abandoning transactions that involve this wallet
+    if (!wtx.IsFromMe())
+        return false;
+
+    // Find descendant wallet txs (those spending this tx's outputs) so the
+    // caller can refresh the UI. The descendants are not modified here; they
+    // will simply stop being marked as having a valid parent.
+    std::set<uint256> sDescendants;
+    for (unsigned int i = 0; i < wtx.vout.size(); i++) {
+        if (!IsMine(wtx.vout[i]))
+            continue;
+        for (std::map<uint256, CWalletTx>::iterator it = mapWallet.begin(); it != mapWallet.end(); ++it) {
+            CWalletTx& candidate = it->second;
+            if (candidate.GetHash() == hashTx)
+                continue;
+            for (const CTxIn& txin : candidate.vin) {
+                if (txin.prevout.hash == hashTx && txin.prevout.n == i) {
+                    sDescendants.insert(candidate.GetHash());
+                    break;
+                }
+            }
+        }
+    }
+
+    // Erase the original tx from the wallet and the wallet DB. This releases
+    // the inputs (vfSpent was tracked on the wtx) and resolves the conflict.
+    bool fErased = EraseFromWallet(hashTx);
+
+    LogPrintf("CWallet::AbandonTransaction: %s abandoned (%u descendant(s) noted)\n",
+              hashTx.ToString().c_str(), sDescendants.size());
+    return fErased;
+}
+
 
 bool CWallet::IsMine(const CTxIn &txin) const
 {
