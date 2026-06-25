@@ -14,13 +14,30 @@ cd "$TOR_SRC_DIR"
 if [[ ! -x "./configure" ]] || [[ "${AUTORECONF_FORCE:-0}" == "1" ]]; then
   echo "Running autoreconf with -W no-error (autogen.sh -W all,error is too strict for autoconf 2.73+)"
   autoreconf -i -f -W no-error
+
+  # autoconf 2.73 generates ./configure with backtick command
+  # substitutions inside variable assignments such as
+  #   as_ac_var=`printf '%s\n' "ac_cv_func_$ac_func" | sed "$as_sed_sh"`
+  # bash on MSYS2/MINGW64 parses this with a syntax error at the
+  # nested backticks with quoted $-vars. autoconf 2.71 doesn't
+  # generate this pattern, but pinning the MSYS2 autoconf version
+  # is fragile (meta-package pulls whatever's current). Convert
+  # all `var=\`cmd\`` assignments to `var=$(cmd)` form, which is
+  # POSIX-ly equivalent and nests cleanly.
+  if grep -qE '^[ \t]*[A-Za-z_][A-Za-z0-9_]*=`[^`]*`[ \t]*$' configure; then
+    echo "Patching generated configure: \`...\` -> \$(...) in assignments"
+    # Match leading whitespace, identifier, =, single backtick,
+    # any chars except backtick, single backtick, optional whitespace.
+    perl -i -pe 's/^([ \t]*[A-Za-z_][A-Za-z0-9_]*=)`([^`]*)`([ \t]*)$/$1\$($2)$3/' configure \
+      || echo "perl not available, falling back to sed"
+  fi
 fi
 
 echo "Configuring Tor static library build from: $TOR_SRC_DIR"
-# autoconf 2.73's generated ./configure uses backtick command substitution
-# inside variable assignments (e.g. `as_ac_var=\`printf ... | sed ...\``)
-# which dash/MSYS2's /bin/sh rejects with a syntax error. Force bash
-# explicitly so the same script works on Windows MSYS2 and macOS/Linux.
+# Even after the perl patch above, the configure script's shebang
+# is `#!/bin/sh` and MSYS2's /bin/sh is dash. Force bash so any
+# remaining edge cases (nested quoting, $RANDOM usage, etc.) parse
+# the same way on every platform.
 export CONFIG_SHELL="${CONFIG_SHELL:-$(command -v bash)}"
 "$CONFIG_SHELL" ./configure \
   --enable-static-tor \
