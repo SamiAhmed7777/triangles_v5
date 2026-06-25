@@ -138,11 +138,14 @@ mkdir -p "$INPUT_DIR"
 INPUT_FILES=(
   Makefile.in
   Doxyfile.in
+  orconfig.h.in
   contrib/operator-tools/tor.logrotate.in
   src/config/torrc.sample.in
   src/config/torrc.minimal.in
   scripts/maint/checkOptionDocs.pl.in
   warning_flags.in
+  contrib/win32build/tor.nsi.in
+  contrib/win32build/tor-mingw.nsi.in
 )
 MISSING_INPUT=0
 for f in "${INPUT_FILES[@]}"; do
