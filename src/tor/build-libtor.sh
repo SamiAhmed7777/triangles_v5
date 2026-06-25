@@ -27,6 +27,7 @@ cd "$TOR_SRC_DIR"
 #   AUTORECONF_FORCE=1 bash src/tor/build-libtor.sh
 VENDORED_CONFIGURE="$ROOT_DIR/configure.vendored"
 VENDORED_AUX_DIR="$ROOT_DIR/configure-aux"
+VENDORED_INPUT_DIR="$ROOT_DIR/configure-input"
 if [[ -f "$VENDORED_CONFIGURE" ]] && [[ "${AUTORECONF_FORCE:-0}" != "1" ]]; then
   echo "Using vendored configure from $VENDORED_CONFIGURE"
   cp -f "$VENDORED_CONFIGURE" "./configure"
@@ -40,6 +41,16 @@ if [[ -f "$VENDORED_CONFIGURE" ]] && [[ "${AUTORECONF_FORCE:-0}" != "1" ]]; then
     chmod +x ./ar-lib ./compile ./config.guess ./config.sub \
              ./depcomp ./install-sh ./missing ./test-driver 2>/dev/null || true
     echo "Vendored $(ls "$VENDORED_AUX_DIR" | wc -l) auxiliary files"
+  fi
+  # configure also reads AC_CONFIG_FILES inputs (Makefile.in,
+  # Doxyfile.in, torrc.sample.in, etc.) from the source tree.
+  # automake normally generates these from *.am files. Since we
+  # skipped autoreconf, vendor the .in files too. We preserve the
+  # directory structure (e.g. src/config/torrc.sample.in) because
+  # configure looks for them at their original paths.
+  if [[ -d "$VENDORED_INPUT_DIR" ]]; then
+    cp -rf "$VENDORED_INPUT_DIR"/. ./
+    echo "Vendored $(find "$VENDORED_INPUT_DIR" -type f | wc -l) configure input files"
   fi
 elif [[ "${AUTORECONF_FORCE:-0}" == "1" ]] || [[ ! -x "./configure" ]]; then
   echo "Running autoreconf with -W no-error (autogen.sh -W all,error is too strict for autoconf 2.73+)"

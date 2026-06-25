@@ -131,9 +131,35 @@ for f in "${AUX_FILES[@]}"; do
   fi
 done
 
+# Vendor AC_CONFIG_FILES inputs (Makefile.in, *.in). automake
+# generates these from Makefile.am / *.am sources.
+INPUT_DIR="$ROOT_DIR/configure-input"
+mkdir -p "$INPUT_DIR"
+INPUT_FILES=(
+  Makefile.in
+  Doxyfile.in
+  contrib/operator-tools/tor.logrotate.in
+  src/config/torrc.sample.in
+  src/config/torrc.minimal.in
+  scripts/maint/checkOptionDocs.pl.in
+  warning_flags.in
+)
+MISSING_INPUT=0
+for f in "${INPUT_FILES[@]}"; do
+  if [[ -f "$f" ]]; then
+    dest="$INPUT_DIR/$f"
+    mkdir -p "$(dirname "$dest")"
+    cp -f "$f" "$dest"
+  else
+    echo "WARNING: configure input file $f not found after autoreconf" >&2
+    MISSING_INPUT=1
+  fi
+done
+
 echo
 echo "Wrote $OUT ($(wc -c < "$OUT") bytes)"
 echo "Vendored ${#AUX_FILES[@]} auxiliary files to $AUX_DIR"
+echo "Vendored ${#INPUT_FILES[@]} configure input files to $INPUT_DIR"
 if [[ $WARN -ne 0 ]]; then
   echo
   echo "DO NOT COMMIT this file — it has parse hazards. See warnings above." >&2
