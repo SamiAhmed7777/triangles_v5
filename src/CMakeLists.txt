@@ -555,4 +555,46 @@ if(BUILD_TESTS)
     )
     add_test(NAME chaindb_equivalence_tests
              COMMAND test_chaindb_equivalence --log_level=test_suite)
+
+    # ── Standalone snapshotnet P2P tests ────────────────────────────────────
+    # Same rationale as test_chaindb_equivalence: snapshotnet needs filesystem
+    # and threading globals and its own tmp datadir fixture, which would
+    # conflict with test_triangles' heavy TestingSetup. Runs independently.
+    add_executable(test_snapshotnet
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/snapshotnet_tests.cpp"
+        wallet.cpp
+    )
+    target_include_directories(test_snapshotnet PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test"
+        "${CMAKE_CURRENT_SOURCE_DIR}/leveldb/include"
+    )
+    target_link_libraries(test_snapshotnet PRIVATE
+        triangles_common
+        Boost::unit_test_framework
+    )
+    add_test(NAME snapshotnet_tests
+             COMMAND test_snapshotnet --log_level=test_suite)
+
+    # ── Standalone chaindb runtime tests (CRocksTxDB wrapper layer) ─────────
+    # Exercises MakeChainDB / WipeChainDataDir / IsRocksDbChainBackend and
+    # the CRocksTxDB write/read/batch/iterator wrapper — the same code path
+    # the daemon uses when launched with `-chaindb=rocksdb`. The
+    # chaindb_equivalence_tests (above) only verify the byte-copy migration
+    # via the raw leveldb/rocksdb APIs; this one verifies the wrapper class.
+    add_executable(test_chaindb_runtime
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/chaindb_runtime_tests.cpp"
+        wallet.cpp
+    )
+    target_include_directories(test_chaindb_runtime PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test"
+        "${CMAKE_CURRENT_SOURCE_DIR}/leveldb/include"
+    )
+    target_link_libraries(test_chaindb_runtime PRIVATE
+        triangles_common
+        Boost::unit_test_framework
+    )
+    add_test(NAME chaindb_runtime_tests
+             COMMAND test_chaindb_runtime --log_level=test_suite)
 endif()

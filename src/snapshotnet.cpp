@@ -478,39 +478,50 @@ static bool ReadLocalChunk(int64_t offset, int32_t size, std::vector<unsigned ch
 bool HasServableSnapshot()
 {
     std::lock_guard<std::mutex> lk(g_localMu);
-    if (!g_localScanned) {
-        ScanLocalSnapshot();
-        g_localScanned = true;
-    }
+    // Always re-scan: the file may have been placed at runtime (e.g. another
+    // instance finished a dump, or operator copied canonical file after start).
+    // The hash check is cheap enough on startup that redoing it here is fine,
+    // and it keeps the predicate correct without an explicit invalidation hook.
+    ScanLocalSnapshot();
+    g_localScanned = true;
     return g_localPresent;
 }
 
 void EnsureLocalSnapshot()
 {
-    {
-        std::lock_guard<std::mutex> lk(g_localMu);
-        if (g_localScanned && g_localPresent) return;
-    }
-
     int snapHeight = Checkpoints::GetBestSnapshotHeight();
     if (snapHeight <= 0) return;
 
     fs::path destPath = GetDataDir() / "utxo-snapshot.bin";
 
-    // If the file exists, scan it (validates hash). Otherwise, generate it
-    // from the current chain if our tip is past the snapshot height.
+    // Auto-dump path: if the snapshot file doesn't exist yet and our chain
+    // tip is at or past the published snapshot height, dump from the current
+    // chain state. The resulting file's hash is checked against the
+    // compiled-in checkpoint hash by ScanLocalSnapshot() — if it doesn't
+    // match (e.g. our tip advanced past the canonical height) we drop the
+    // file and don't advertise NODE_SNAPSHOT. Operators producing the
+    // canonical file out-of-band still have the simple "place file in
+    // datadir" path; this just covers the "fresh node synced exactly to a
+    // published snapshot height" case automatically.
     bool needGenerate = !fs::exists(destPath);
-
     if (needGenerate) {
-        if (nBestHeight < snapHeight) return; // not synced past it yet
-        printf("SnapshotNet: dumping local snapshot at height %d -> %s\n",
-               snapHeight, destPath.string().c_str());
-        std::string err;
-        // DumpSnapshot dumps from current chain tip — only call when tip == snapHeight,
-        // otherwise the produced file won't match the published hash. Skip for now;
-        // operators must produce the canonical file out-of-band and place it here.
-        // (Auto-dump from arbitrary tip would not produce the canonical hash.)
-        return;
+        if (nBestHeight < snapHeight) return; // not synced to it yet
+        printf("SnapshotNet: auto-dumping local snapshot at height %d (tip=%d) -> %s\n",
+               snapHeight, nBestHeight, destPath.string().c_str());
+
+        // 288 headers is one day at 5-minute target spacing; covers reorg
+        // protection well past the snapshot point.
+        std::string dumpErr;
+        if (!UtxoSnapshot::DumpSnapshot(destPath, 288, dumpErr)) {
+            printf("SnapshotNet: dump failed: %s\n", dumpErr.c_str());
+            std::error_code ec;
+            fs::remove(destPath, ec);
+            return;
+        }
+        // ScanLocalSnapshot will validate the hash against the checkpoint.
+        // If our tip was past snapHeight the hash will mismatch and we'll
+        // discard the file — that's the correct behavior because such a file
+        // can't be safely served to P2P peers (they expect exact hash match).
     }
 
     {
@@ -520,6 +531,14 @@ void EnsureLocalSnapshot()
     }
 
     if (g_localPresent) {
+        // NOTE: nLocalServices is set during init from the command line / config.
+        // Late-binding NODE_SNAPSHOT here only helps peers that haven't
+        // completed the version handshake yet; already-handshaked peers won't
+        // re-read our service bits. Operators wanting to serve snapshots must
+        // either (a) drop the canonical file in datadir before start, or
+        // (b) accept that already-connected peers in this session won't see
+        // the flag until reconnect. This is the existing contract — we don't
+        // try to push a fresh service bit to live peers from this thread.
         nLocalServices |= NODE_SNAPSHOT;
         printf("SnapshotNet: serving local snapshot height=%d size=%" PRId64 "\n",
                g_localHeight, g_localTotalSize);

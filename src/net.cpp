@@ -12,6 +12,7 @@
 #include "ui_interface.h"
 #include "onionseed.h"
 #include "tor/onion_v3.h"
+#include "snapshotnet.h"
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -2550,6 +2551,17 @@ void StartNode(void* parg)
 {
     // Make this thread recognisable as the startup thread
     RenameThread("Triangles-start");
+
+    // If a canonical UTXO snapshot file is already present at startup,
+    // advertise NODE_SNAPSHOT to peers BEFORE the first outbound connection.
+    // EnsureLocalSnapshot() also sets this flag post-IBD, but at that point
+    // already-connected peers have already cached our version message and
+    // won't re-read our service bits — so for the "place canonical file in
+    // datadir before launch" operator workflow this pre-handshake OR is the
+    // load-bearing one.
+    if (!fClient) {
+        SnapshotNet::EnsureLocalSnapshot();
+    }
 
     if (semOutbound == nullptr) {
         // initialize semaphore — use -maxoutbound if specified, else default
