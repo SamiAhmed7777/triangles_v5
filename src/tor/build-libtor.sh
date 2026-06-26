@@ -58,12 +58,16 @@ if [[ -f "$VENDORED_CONFIGURE" ]] && [[ "${AUTORECONF_FORCE:-0}" != "1" ]]; then
     # CRITICAL: set every vendored file's mtime to "now+1s" so it's
     # strictly NEWER than configure.ac, acinclude.m4, and m4/*.m4
     # (which were just checked out from git and have older mtimes).
-    # Without this, `make` would try to regenerate aclocal.m4 by
-    # invoking aclocal, which is missing on CI runners.
+    # Also include ./configure in the list — the Makefile has an
+    # automake rule that regenerates configure via autoconf if
+    # configure.ac is newer. Without touching ./configure, make
+    # would invoke autoconf on the runner, which emits the
+    # MSYS2-incompatible backtick patterns we just went out of our
+    # way to vendor a clean version of.
     NEWMTIME=$(date -d 'now + 1 second' '+%Y%m%d%H%M.%S' 2>/dev/null \
                || date -v+1S '+%Y%m%d%H%M.%S' 2>/dev/null \
                || stat -c %y aclocal.m4 | awk '{print $1, $2}')
-    VENDORED_FILES=(aclocal.m4
+    VENDORED_FILES=(configure aclocal.m4
                     Makefile.in Doxyfile.in orconfig.h.in warning_flags.in
                     src/config/torrc.sample.in src/config/torrc.minimal.in
                     contrib/operator-tools/tor.logrotate.in
