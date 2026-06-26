@@ -55,11 +55,24 @@ if [[ -f "$VENDORED_CONFIGURE" ]] && [[ "${AUTORECONF_FORCE:-0}" != "1" ]]; then
   # dependency check sees an up-to-date file and skips regeneration.
   if [[ -d "$VENDORED_INPUT_DIR" ]]; then
     cp -rf "$VENDORED_INPUT_DIR"/. ./
-    # Make the vendored files appear newer than the source files
-    # (configure.ac, acinclude.m4, m4/*.m4) so make's dependency
-    # tracking doesn't try to regenerate anything.
-    find "$VENDORED_INPUT_DIR" -type f -exec touch -r "$VENDORED_INPUT_DIR/aclocal.m4" {} +
-    touch -r "$VENDORED_INPUT_DIR/aclocal.m4" aclocal.m4
+    # CRITICAL: set every vendored file's mtime to "now+1s" so it's
+    # strictly NEWER than configure.ac, acinclude.m4, and m4/*.m4
+    # (which were just checked out from git and have older mtimes).
+    # Without this, `make` would try to regenerate aclocal.m4 by
+    # invoking aclocal, which is missing on CI runners.
+    NEWMTIME=$(date -d 'now + 1 second' '+%Y%m%d%H%M.%S' 2>/dev/null \
+               || date -v+1S '+%Y%m%d%H%M.%S' 2>/dev/null \
+               || stat -c %y aclocal.m4 | awk '{print $1, $2}')
+    VENDORED_FILES=(aclocal.m4
+                    Makefile.in Doxyfile.in orconfig.h.in warning_flags.in
+                    src/config/torrc.sample.in src/config/torrc.minimal.in
+                    contrib/operator-tools/tor.logrotate.in
+                    contrib/win32build/tor.nsi.in
+                    contrib/win32build/tor-mingw.nsi.in
+                    scripts/maint/checkOptionDocs.pl.in)
+    for vf in "${VENDORED_FILES[@]}"; do
+      [[ -f "$vf" ]] && touch -t "$NEWMTIME" "$vf"
+    done
     echo "Vendored $(find "$VENDORED_INPUT_DIR" -type f | wc -l) configure input files"
   fi
 elif [[ "${AUTORECONF_FORCE:-0}" == "1" ]] || [[ ! -x "./configure" ]]; then
