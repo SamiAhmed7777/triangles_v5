@@ -146,6 +146,7 @@ INPUT_FILES=(
   warning_flags.in
   contrib/win32build/tor.nsi.in
   contrib/win32build/tor-mingw.nsi.in
+  aclocal.m4
 )
 MISSING_INPUT=0
 for f in "${INPUT_FILES[@]}"; do
