@@ -43,10 +43,19 @@ make install-shared PREFIX="${INSTALL_PREFIX}"
 
 ldconfig
 
-# Sanity: installed library should be loadable and export the version
-# macros we look for at configure time.
-if ! ldconfig -p | grep -q "librocksdb.so.${ROCKSDB_VERSION}"; then
-    echo "!!! ldconfig did not pick up librocksdb.so.${ROCKSDB_VERSION}" >&2
+# Sanity: installed library should be on disk and registered with ldconfig.
+# ldconfig strips the patch version from its output, so we check both:
+#   1. File exists at the versioned path (definitive).
+#   2. ldconfig shows a matching major.minor (sanity for runtime linker).
+ROCKSDB_MAJOR_MINOR="${ROCKSDB_VERSION%.*}"
+if [ ! -f "${INSTALL_PREFIX}/lib/librocksdb.so.${ROCKSDB_VERSION}" ]; then
+    echo "!!! librocksdb.so.${ROCKSDB_VERSION} not found at ${INSTALL_PREFIX}/lib/" >&2
+    ls -l "${INSTALL_PREFIX}/lib/librocksdb"* 2>&1 || true
+    exit 1
+fi
+if ! ldconfig -p | grep -q "librocksdb.so.${ROCKSDB_MAJOR_MINOR}"; then
+    echo "!!! ldconfig did not register librocksdb.so.${ROCKSDB_MAJOR_MINOR}" >&2
+    ldconfig -p | grep -i rocksdb >&2 || true
     exit 1
 fi
 
