@@ -56,7 +56,7 @@ PC_FILE="${INSTALL_PREFIX}/lib/pkgconfig/rocksdb.pc"
 if [ -f "${PC_FILE}" ]; then
     sed -i \
         -e "s|-isystem third-party/gtest-1.8.1/fused-src|-I${INSTALL_PREFIX}/include|g" \
-        -e "s|-isystem \\${prefix}/third-party/gtest-1.8.1/fused-src|-I${INSTALL_PREFIX}/include|g" \
+        -e "s|-isystem \\\${prefix}/third-party/gtest-1.8.1/fused-src|-I${INSTALL_PREFIX}/include|g" \
         "${PC_FILE}"
 fi
 
