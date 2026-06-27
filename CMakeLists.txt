@@ -134,6 +134,29 @@ if(NOT TARGET RocksDB::rocksdb AND NOT TARGET PkgConfig::RocksDB)
     message(STATUS "Found RocksDB (manual probe): ${ROCKSDB_LIBRARY}")
 endif()
 
+# Triangles uses RocksDB features that only exist in 7.4+ (XXH3 per-block
+# checksum, type 4). Building against an older RocksDB produces a binary
+# whose smsgDB Open() fails on any SST file written by RocksDB 7.4+ —
+# instead of just bailing, src/smessage.cpp::SecMsgDB::Open now
+# quarantines the offending file and recovers. We still prefer to fail
+# loudly here so this drift doesn't sneak back in unnoticed.
+if(RocksDB_VERSION AND RocksDB_VERSION VERSION_LESS "7.4.0")
+    message(FATAL_ERROR
+        "Triangles requires RocksDB >= 7.4.0 (got ${RocksDB_VERSION}). "
+        "Older versions cannot read smsgDB files written by RocksDB 7.4+. "
+        "On Debian/Ubuntu: install librocksdb-dev >= 7.4 from a backports "
+        "repo or build RocksDB from source into /usr/local.")
+elseif(NOT RocksDB_VERSION AND NOT TARGET RocksDB::rocksdb)
+    # Manual-probe path (e.g. Ubuntu 22.04's librocksdb-dev ships no CMake
+    # config / pkg-config metadata). We can't see the version, so warn
+    # instead of failing — the runtime self-heal in SecMsgDB::Open covers
+    # the gap, but this drift is what made the bug recur in the first place.
+    message(WARNING
+        "Could not determine RocksDB version (manual-probe path). "
+        "Triangles prefers RocksDB >= 7.4.0; older versions are recovered "
+        "at runtime via SecMsgDB::Open's quarantine fallback.")
+endif()
+
 # libsecp256k1 — vendored as a git submodule under src/secp256k1. Provides
 # ECDSA signing/verification, pubkey recovery (via the recovery module), and
 # ECDH for secure messaging. Configure the submodule's build for our needs:
