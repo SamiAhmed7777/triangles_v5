@@ -19,6 +19,7 @@
 #include "tor/tor_embedded.h"
 #include "tor/onion_v3.h"
 #include "tor/tor_process.h"
+#include "i2p/i2p_embedded.h"
 #ifdef ENABLE_ZMQ
 #include "zmqpublishnotifier.h"
 #endif
@@ -341,6 +342,7 @@ void Shutdown(void* parg)
         // NOW safe to destroy Tor state - all threads have stopped
         ShutdownTorV3();
         StopEmbeddedTor();
+        StopEmbeddedI2P();
 
 #ifdef ENABLE_ZMQ
         if (pzmqNotifier)
@@ -533,7 +535,11 @@ std::string HelpMessage()
         "  -notor                 " + _("Disable Tor - run in clearnet-only mode (no .onion connectivity)") + "\n" +
         "  -torsocks=<port>       " + _("Set embedded or managed Tor SOCKS proxy port (default: 19099)") + "\n" +
         "  -torhiddenservice      " + _("Enable the managed Tor hidden service (default: 1)") + "\n" +
-        "  -torhsport=<port>      " + _("Set embedded or managed Tor hidden service port (default: wallet listen port)") + "\n" +
+        "  -torhsport=<port>      " + _("Set embedded or managed Tor hidden service port (default: wallet listen port)") + "\n"
+        "  -i2p                   " + _("Enable embedded I2P router for .b32.i2p connectivity (default: 1)") + "\n"
+        "  -i2psocks=<port>       " + _("Set embedded I2P SOCKS proxy port (default: 19100)") + "\n"
+        "  -i2psam=<port>         " + _("Set embedded I2P SAM bridge port (default: 7656)") + "\n"
+        "  -i2phsport=<port>      " + _("Set I2P server tunnel forward port (default: wallet listen port)") + "\n" +
         //"  -dns                   " + _("Allow DNS lookups for -addnode, -seednode and -connect") + "\n" +
         "  -port=<port>           " + _("Listen for connections on <port> (default: 24112 or testnet: 24111)") + "\n" +
         "  -maxconnections=<n>    " + _("Maintain at most <n> connections to peers (default: 125)") + "\n" +
@@ -1544,6 +1550,47 @@ bool AppInit2()
             if (torError.empty())
                 torError = "No detailed Tor startup error was recorded.";
             return InitError(strprintf(_("Tor failed to start. Triangles requires Tor to operate.\n\nDetails: %s"), torError.c_str()));
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // Embedded I2P (i2pd) startup
+        //
+        // I2P runs as a co-equal anonymity network alongside Tor. When Tor
+        // starts successfully (tor-native mode), I2P provides an alternative
+        // anonymous transport via .b32.i2p destinations. When Tor is disabled
+        // (-notor recovery mode), I2P is still started to maintain anonymity.
+        //
+        // I2P's SOCKS proxy (default 19100) handles outbound .i2p connections.
+        // A server tunnel forwards incoming I2P connections to the P2P port.
+        // ════════════════════════════════════════════════════════════════
+        if (torStarted || GetBoolArg("-notor", false)) {
+            uiInterface.InitMessage(_("Starting embedded I2P router..."));
+            int64_t nI2PStart = GetTimeMillis();
+            bool i2pStarted = StartEmbeddedI2P();
+            StartupPerfLog("i2p_start", GetTimeMillis() - nI2PStart,
+                           strprintf("started=%d", i2pStarted));
+
+            if (i2pStarted) {
+                int i2pSocksPort = CI2PEmbedded::GetInstance()->GetSocksPort();
+                CService i2pProxyAddr("127.0.0.1", i2pSocksPort);
+
+                // Route I2P traffic through i2pd's SOCKS proxy
+                SetProxy(NET_I2P, i2pProxyAddr, 5);
+                SetReachable(NET_I2P, true);
+
+                printf("I2P-NATIVE MODE: I2P router running\n");
+                printf("  SOCKS proxy at 127.0.0.1:%d for .b32.i2p connections\n",
+                       i2pSocksPort);
+                printf("  Dual-network anonymity: Tor (.onion) + I2P (.b32.i2p)\n");
+            } else {
+                // I2P failure is non-fatal — Tor-only operation continues.
+                // The daemon still works with .onion peers.
+                std::string i2pError = CI2PEmbedded::GetInstance()->GetStartupError();
+                printf("WARNING: Embedded I2P did not start. Running Tor-only.\n");
+                if (!i2pError.empty())
+                    printf("  I2P error: %s\n", i2pError.c_str());
+                SetReachable(NET_I2P, false);
+            }
         }
 
         // Initialize Tor V3 identity (Ed25519 keys, onion address)

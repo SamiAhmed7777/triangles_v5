@@ -86,6 +86,7 @@ set(CORE_SOURCES
     tor/onion_v3.cpp
     tor/tor_process.cpp
     tor/tor_embedded.cpp
+    i2p/i2p_embedded.cpp
 )
 
 # Scrypt assembly — platform-specific
@@ -113,6 +114,7 @@ target_include_directories(triangles_common PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/json"
     "${CMAKE_CURRENT_SOURCE_DIR}/tor"
+    "${CMAKE_CURRENT_SOURCE_DIR}/i2p"
     "${CMAKE_BINARY_DIR}/generated"       # for build.h
 )
 
@@ -209,6 +211,48 @@ if(USE_TOR_EMBEDDED)
     endif()
     if(WIN32)
         target_link_libraries(triangles_common PUBLIC iphlpapi shlwapi crypt32)
+    endif()
+endif()
+
+# Optional: Embedded I2P (i2pd)
+if(USE_I2P_EMBEDDED)
+    if(I2P_SOURCE_ROOT STREQUAL "")
+        set(I2P_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/i2p/i2pd-src")
+    endif()
+    if(NOT EXISTS "${I2P_SOURCE_ROOT}/libi2pd/Crypto.h")
+        message(FATAL_ERROR
+            "USE_I2P_EMBEDDED=ON but i2pd source not found at ${I2P_SOURCE_ROOT}.\n"
+            "Run: git submodule update --init --recursive\n"
+            "Or set -DI2P_SOURCE_ROOT=/path/to/i2pd")
+    endif()
+    target_compile_definitions(triangles_common PUBLIC ENABLE_I2P_EMBEDDED)
+    target_include_directories(triangles_common PUBLIC
+        "${I2P_SOURCE_ROOT}"
+        "${I2P_SOURCE_ROOT}/libi2pd"
+        "${I2P_SOURCE_ROOT}/libi2pd_client"
+        "${I2P_SOURCE_ROOT}/i18n"
+    )
+    # i2pd builds as two static libraries: libi2pd.a (core router) and
+    # libi2pd_client.a (SAM, SOCKS, tunnels, client context). Both are needed.
+    # We link them with --start-group to resolve circular deps with Boost/SSL.
+    if(NOT APPLE)
+        target_link_libraries(triangles_common PUBLIC
+            -Wl,--allow-multiple-definition
+            -Wl,--start-group
+        )
+    endif()
+    target_link_libraries(triangles_common PUBLIC
+        "${I2P_SOURCE_ROOT}/libi2pd.a"
+        "${I2P_SOURCE_ROOT}/libi2pdclient.a"
+        "${I2P_SOURCE_ROOT}/libi2pdlang.a"
+        Boost::program_options Boost::thread Boost::chrono
+        OpenSSL::SSL OpenSSL::Crypto
+        ZLIB::ZLIB
+    )
+    if(NOT APPLE)
+        target_link_libraries(triangles_common PUBLIC
+            -Wl,--end-group
+        )
     endif()
 endif()
 

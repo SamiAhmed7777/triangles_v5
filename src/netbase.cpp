@@ -591,6 +591,33 @@ bool ConnectSocketByName(CService &addr, SOCKET& hSocketRet, const char *pszDest
 
     SOCKET hSocket = INVALID_SOCKET;
 
+    // I2P routing: .b32.i2p destinations go through i2pd's SOCKS proxy, not
+    // the Tor name proxy. This is the key routing decision for dual-network
+    // anonymity — Tor handles .onion, i2pd handles .b32.i2p.
+    bool isI2PDest = (strDest.size() > 7 &&
+                      strDest.substr(strDest.size() - 7, 7) == ".b32.i2p");
+
+    if (isI2PDest) {
+        // Route through the I2P SOCKS proxy
+        proxyType i2pProxy;
+        if (GetProxy(NET_I2P, i2pProxy)) {
+            addr = CService("0.0.0.0:0");
+            printf("ConnectSocketByName(): routing .b32.i2p via I2P SOCKS proxy\n");
+            if (!ConnectSocketDirectly(i2pProxy.first, hSocket, nTimeout))
+                return false;
+            // i2pd's SOCKS proxy accepts .b32.i2p domain names via SOCKS5 ATYP=domain
+            if (!Socks5(strDest, port, hSocket)) {
+                printf("ConnectSocketByName(): I2P SOCKS5 handshake failed\n");
+                return false;
+            }
+            printf("ConnectSocketByName(): connected via I2P SOCKS5\n");
+            hSocketRet = hSocket;
+            return true;
+        }
+        // No I2P proxy configured — fall through to nameproxy (will likely fail)
+        printf("ConnectSocketByName(): WARNING - .b32.i2p dest but no I2P proxy set\n");
+    }
+
     proxyType nameproxy;
     GetNameProxy(nameproxy);
 
@@ -672,14 +699,26 @@ bool CNetAddr::SetSpecial(const std::string &strName)
         m_is_tor_v3 = false;
         return true;
     }
-    if (strName.size()>11 && strName.substr(strName.size() - 11, 11) == ".oc.b32.i2p") {
-        std::vector<unsigned char> vchAddr = DecodeBase32(strName.substr(0, strName.size() - 11).c_str());
-        if (vchAddr.size() != 16-sizeof(pchGarliCat))
-            return false;
-        memcpy(ip, pchOnionCat, sizeof(pchGarliCat));
-        for (unsigned int i=0; i<16-sizeof(pchGarliCat); i++)
-            ip[i + sizeof(pchGarliCat)] = vchAddr[i];
-        return true;
+    // Standard I2P b32 address: <52 base32 chars>.b32.i2p
+    // (SHA-256 hash of destination key, base32-encoded)
+    if (strName.size()>7 && strName.substr(strName.size() - 7, 7) == ".b32.i2p") {
+        std::string b32Part = strName.substr(0, strName.size() - 7);
+        std::vector<unsigned char> vchAddr = DecodeBase32(b32Part.c_str());
+        if (vchAddr.size() == 32) {
+            // Standard 32-byte I2P destination hash
+            memcpy(ip, pchGarliCat, sizeof(pchGarliCat));
+            // Store as many bytes as fit (16 - prefix_size)
+            for (unsigned int i = 0; i < 16 - sizeof(pchGarliCat) && i < vchAddr.size(); i++)
+                ip[i + sizeof(pchGarliCat)] = vchAddr[i];
+            return true;
+        }
+        // Also handle the legacy .oc.b32.i2p format (10 bytes)
+        if (vchAddr.size() == 16 - sizeof(pchGarliCat)) {
+            memcpy(ip, pchGarliCat, sizeof(pchGarliCat));
+            for (unsigned int i = 0; i < 16 - sizeof(pchGarliCat); i++)
+                ip[i + sizeof(pchGarliCat)] = vchAddr[i];
+            return true;
+        }
     }
     return false;
 }
@@ -910,7 +949,7 @@ std::string CNetAddr::ToStringIP() const
     if (IsTor())
         return EncodeBase32(&ip[6], 10) + ".onion";
     if (IsI2P())
-        return EncodeBase32(&ip[6], 10) + ".oc.b32.i2p";
+        return EncodeBase32(&ip[6], 10) + ".b32.i2p";
     CService serv(*this, 0);
 #ifdef USE_IPV6
     struct sockaddr_storage sockaddr;

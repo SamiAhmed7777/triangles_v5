@@ -4,3 +4,6 @@
 [submodule "src/secp256k1"]
 	path = src/secp256k1
 	url = https://github.com/bitcoin-core/secp256k1
+[submodule "src/i2p/i2pd-src"]
+	path = src/i2p/i2pd-src
+	url = https://github.com/PurpleI2P/i2pd.git

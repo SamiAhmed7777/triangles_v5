@@ -72,6 +72,12 @@ option(USE_O3             "Use -O3 optimization instead of -O2"              OFF
 option(ENABLE_PIE         "Build position-independent executables"           OFF)
 option(ENABLE_STATIC      "Prefer static linking (Linux release builds)"     OFF)
 
+# Embedded I2P (i2pd) — runs an I2P router in-process alongside Tor.
+# When enabled, Triangles supports dual-network anonymity: Tor (.onion) +
+# I2P (.b32.i2p). Disabled by default until seed nodes are deployed.
+option(USE_I2P_EMBEDDED   "Enable embedded I2P (i2pd) library linking"       OFF)
+set(I2P_SOURCE_ROOT   "" CACHE PATH "Path to i2pd source tree (for USE_I2P_EMBEDDED)")
+
 # Cache variables for custom dependency paths
 set(BDB_INCLUDE_PATH "" CACHE PATH "Path to Berkeley DB headers")
 set(BDB_LIB_PATH     "" CACHE PATH "Path to Berkeley DB libraries")
@@ -207,6 +213,7 @@ message(STATUS "  QR code:            ${USE_QRCODE}")
 message(STATUS "  D-Bus:              ${USE_DBUS}")
 message(STATUS "  ZMQ:                ${USE_ZMQ}")
 message(STATUS "  Embedded Tor:       ${USE_TOR_EMBEDDED}")
+message(STATUS "  Embedded I2P:       ${USE_I2P_EMBEDDED}")
 message(STATUS "  Static linking:     ${ENABLE_STATIC}")
 message(STATUS "  ccache:             ${CCACHE_PROGRAM}")
 message(STATUS "  Unity build:        ${ENABLE_UNITY_BUILD}")

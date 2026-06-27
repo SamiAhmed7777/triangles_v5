@@ -496,11 +496,13 @@ CNode* FindNode(const CService& addr)
 
 CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
 {
-    // TOR-NATIVE: Reject all non-.onion addresses
+    // TOR+I2P NATIVE: Reject all clearnet (non-.onion, non-.b32.i2p) addresses
     std::string addrStr = pszDest ? std::string(pszDest) : addrConnect.ToStringIP();
-    if (addrStr.find(".onion") == std::string::npos) {
+    bool isOnion = (addrStr.find(".onion") != std::string::npos);
+    bool isI2P = (addrStr.find(".i2p") != std::string::npos);
+    if (!isOnion && !isI2P) {
         if (fDebug)
-            printf("ConnectNode(): REJECTED non-onion address: %s (Tor-native mode)\n", addrStr.c_str());
+            printf("ConnectNode(): REJECTED clearnet address: %s (Tor/I2P native mode)\n", addrStr.c_str());
         return nullptr;
     }
 
@@ -1836,11 +1838,16 @@ bool ThreadHTTPSeedFetch2(void* parg)
 
             int port = GetDefaultPort();
             size_t onionPos = addrStr.find(".onion:");
+            size_t i2pPos = addrStr.find(".i2p:");
             if (onionPos != std::string::npos) {
                 port = atoi(addrStr.substr(onionPos + 7).c_str());
                 addrStr = addrStr.substr(0, onionPos + 6); // keep ".onion"
-            } else if (addrStr.find(".onion") == std::string::npos) {
-                return; // Tor-native: skip non-.onion addresses
+            } else if (i2pPos != std::string::npos) {
+                port = atoi(addrStr.substr(i2pPos + 5).c_str());
+                // keep the ".i2p" suffix
+            } else if (addrStr.find(".onion") == std::string::npos &&
+                       addrStr.find(".i2p") == std::string::npos) {
+                return; // Tor/I2P-native: skip clearnet addresses
             }
             if (port <= 0 || port > 65535)
                 port = GetDefaultPort();
