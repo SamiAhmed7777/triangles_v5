@@ -41,6 +41,25 @@ make -j"${JOBS}" shared_lib PORTABLE=1 USE_RTTI=1 \
 
 make install-shared PREFIX="${INSTALL_PREFIX}"
 
+# Scrub the rocksdb.pc that install-shared just wrote. RocksDB's
+# Makefile unconditionally appends `-isystem third-party/gtest-1.8.1/
+# fused-src` to Cflags, which is a RELATIVE path baked in from the build
+# directory. Modern CMake (>= 3.27) refuses to consume imported targets
+# with non-existent relative paths in INTERFACE_INCLUDE_DIRECTORIES,
+# so pkg_check_modules(rocksdb) on a Triangles configure errors out
+# with: 'Imported target "PkgConfig::RocksDB" includes non-existent
+# path "third-party/gtest-1.8.1/fused-src"'.
+#
+# Replace the bad flag with the absolute include dir so pkg-config
+# consumers see a path that actually exists on disk.
+PC_FILE="${INSTALL_PREFIX}/lib/pkgconfig/rocksdb.pc"
+if [ -f "${PC_FILE}" ]; then
+    sed -i \
+        -e "s|-isystem third-party/gtest-1.8.1/fused-src|-I${INSTALL_PREFIX}/include|g" \
+        -e "s|-isystem \\${prefix}/third-party/gtest-1.8.1/fused-src|-I${INSTALL_PREFIX}/include|g" \
+        "${PC_FILE}"
+fi
+
 ldconfig
 
 # Sanity: installed library should be on disk and registered with ldconfig.
