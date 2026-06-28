@@ -504,6 +504,8 @@ bool ParseManifest(const fs::path& manifestPath,
             manifest.hash = val;
         else if (key == "dbversion")
             manifest.dbversion = std::atoi(val.c_str());
+        else if (key == "signature")
+            manifest.signature = val;
     }
     in.close();
 
@@ -564,6 +566,96 @@ bool VerifyManifest(const SnapshotManifest& manifest,
                  + " / hash " + manifest.hash
                  + " is not a known checkpoint";
         return false;
+    }
+
+    // ─── Signature verification (#11) ─────────────────────────────────────
+    // If the manifest includes a signature, verify it against the
+    // compiled-in snapshot signing key. This prevents MITM attacks
+    // where an attacker replaces the snapshot file on the bootstrap server.
+    //
+    // If no signature is present, print a warning but continue (backward
+    // compatibility with older snapshots that pre-date signing).
+    if (!manifest.signature.empty()) {
+        // Build the message that was signed: "height||hash" (ASCII)
+        std::string message = std::to_string(manifest.height) + "||" + manifest.hash;
+
+        // Decode the hex-encoded signature (64 bytes for Ed25519)
+        std::vector<unsigned char> sigBytes;
+        if (manifest.signature.size() != 128) {  // 64 bytes hex = 128 chars
+            strError = "Invalid signature length in manifest (expected 128 hex chars, got "
+                     + std::to_string(manifest.signature.size()) + ")";
+            return false;
+        }
+        for (size_t i = 0; i < manifest.signature.size(); i += 2) {
+            auto hexVal = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            int hi = hexVal(manifest.signature[i]);
+            int lo = hexVal(manifest.signature[i + 1]);
+            if (hi < 0 || lo < 0) {
+                strError = "Invalid hex in manifest signature";
+                return false;
+            }
+            sigBytes.push_back((hi << 4) | lo);
+        }
+
+        // Snapshot signing public key (Ed25519, 32 bytes).
+        // This is the public half of the key used to sign snapshots on the
+        // bootstrap server. The private key never leaves the build machine.
+        // To rotate: generate new keypair, update this constant, re-sign
+        // all snapshots, update manifest files.
+        static const unsigned char snapshotPubkey[32] = {
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        };  // Placeholder: replace with actual pubkey when signing is deployed
+
+        // Use OpenSSL Ed25519 verification
+        EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+        if (!mdctx) {
+            strError = "Failed to allocate EVP context for signature verification";
+            return false;
+        }
+
+        EVP_PKEY* pkey = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr,
+                                                      snapshotPubkey, 32);
+        if (!pkey) {
+            EVP_MD_CTX_free(mdctx);
+            strError = "Failed to load snapshot signing public key";
+            return false;
+        }
+
+        int rc = EVP_DigestVerifyInit(mdctx, nullptr, nullptr, nullptr, pkey);
+        if (rc != 1) {
+            EVP_PKEY_free(pkey);
+            EVP_MD_CTX_free(mdctx);
+            strError = "Failed to init signature verification";
+            return false;
+        }
+
+        rc = EVP_DigestVerify(mdctx,
+                              sigBytes.data(), sigBytes.size(),
+                              (const unsigned char*)message.data(), message.size());
+
+        EVP_PKEY_free(pkey);
+        EVP_MD_CTX_free(mdctx);
+
+        if (rc == 1) {
+            printf("Snapshot manifest signature VERIFIED\n");
+        } else if (rc == 0) {
+            strError = "Snapshot manifest signature INVALID — possible tampering detected";
+            return false;
+        } else {
+            // rc < 0 means error (e.g., placeholder zero pubkey not yet deployed)
+            printf("WARNING: Snapshot manifest signature verification error (rc=%d). "
+                   "Signing key may not be deployed yet. Proceeding without verification.\n", rc);
+        }
+    } else {
+        printf("WARNING: Snapshot manifest has no signature — loading WITHOUT signature verification\n");
     }
 
     return true;

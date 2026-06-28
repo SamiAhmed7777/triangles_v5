@@ -53,6 +53,7 @@ namespace Bootstrap {
         int height;            // block height of the snapshot tip
         std::string hash;      // block hash at that height (hex, no 0x prefix)
         int dbversion;         // DATABASE_VERSION the txleveldb was built with
+        std::string signature; // Ed25519 signature of (height || hash), hex-encoded (empty if unsigned)
     };
 
     // Parse a snapshot.manifest file into a SnapshotManifest struct.
