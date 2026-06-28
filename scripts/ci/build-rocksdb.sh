@@ -57,6 +57,8 @@ if [ -f "${PC_FILE}" ]; then
     sed -i \
         -e "s|-isystem third-party/gtest-1.8.1/fused-src|-I${INSTALL_PREFIX}/include|g" \
         -e "s|-isystem \\\${prefix}/third-party/gtest-1.8.1/fused-src|-I${INSTALL_PREFIX}/include|g" \
+        -e 's|-std=c++17 ||g' \
+        -e 's|-std=c++17$||g' \
         "${PC_FILE}"
 fi
 
