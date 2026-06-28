@@ -196,12 +196,16 @@ jobs:
             -DBUILD_DAEMON=OFF \
             -DBUILD_TESTS=OFF \
             -DUSE_UPNP=ON \
-            -DUSE_QRCODE=OFF
+            -DUSE_QRCODE=OFF \
+            -DUSE_I2P_EMBEDDED=ON
 
       - name: Build libtor (embedded Tor static lib)
         # Windows Qt GUI also transitively links -ltor via triangles_common.
         # msys2 default install puts everything in /mingw64.
         run: bash src/tor/build-libtor.sh
+
+      - name: Build libi2pd (embedded I2P static lib)
+        run: bash src/i2p/build-libi2pd.sh
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -342,13 +346,17 @@ jobs:
             -DBUILD_DAEMON=ON \
             -DBUILD_CLI=ON \
             -DBUILD_TESTS=OFF \
-            -DUSE_UPNP=ON
+            -DUSE_UPNP=ON \
+            -DUSE_I2P_EMBEDDED=ON
 
       - name: Build libtor (embedded Tor static lib)
         # Windows: msys2 default install puts everything in /mingw64,
         # which is exactly the script's default. Just invoke it.
         # See v5.9.25-fork-detection run #466 for why this is needed.
         run: bash src/tor/build-libtor.sh
+
+      - name: Build libi2pd (embedded I2P static lib)
+        run: bash src/i2p/build-libi2pd.sh
 
       - name: Build
         run: |
@@ -414,7 +422,8 @@ jobs:
             -DBUILD_QT=ON \
             -DBUILD_DAEMON=OFF \
             -DBUILD_TESTS=OFF \
-            -DUSE_UPNP=ON
+            -DUSE_UPNP=ON \
+            -DUSE_I2P_EMBEDDED=ON
 
       - name: Build libtor (embedded Tor static lib)
         # Linux Qt GUI also transitively links -ltor via triangles_common.
@@ -424,6 +433,9 @@ jobs:
           sudo apt-get install -y libevent-dev libssl-dev zlib1g-dev
           LIBEVENT_DIR=/usr OPENSSL_DIR=/usr ZLIB_DIR=/usr \
             bash src/tor/build-libtor.sh
+
+      - name: Build libi2pd (embedded I2P static lib)
+        run: bash src/i2p/build-libi2pd.sh
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -546,7 +558,8 @@ jobs:
             -DBUILD_DAEMON=ON \
             -DBUILD_CLI=ON \
             -DBUILD_TESTS=OFF \
-            -DUSE_UPNP=ON
+            -DUSE_UPNP=ON \
+            -DUSE_I2P_EMBEDDED=ON
 
       - name: Build libtor (embedded Tor static lib)
         # USE_TOR_EMBEDDED defaults to ON and the daemon/Qt GUI both
@@ -558,6 +571,9 @@ jobs:
           sudo apt-get install -y libevent-dev libssl-dev zlib1g-dev
           LIBEVENT_DIR=/usr OPENSSL_DIR=/usr ZLIB_DIR=/usr \
             bash src/tor/build-libtor.sh
+
+      - name: Build libi2pd (embedded I2P static lib)
+        run: bash src/i2p/build-libi2pd.sh
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -612,6 +628,7 @@ jobs:
             -DBUILD_DAEMON=OFF \
             -DBUILD_TESTS=OFF \
             -DUSE_UPNP=ON \
+            -DUSE_I2P_EMBEDDED=ON \
             -DBOOST_ROOT=/opt/homebrew/opt/boost \
             -DBDB_INCLUDE_PATH=/opt/homebrew/opt/berkeley-db@5/include \
             -DBDB_LIB_PATH=/opt/homebrew/opt/berkeley-db@5/lib \
@@ -648,6 +665,10 @@ jobs:
             OPENSSL_DIR=/opt/homebrew/opt/openssl@3 \
             ZLIB_DIR=/opt/homebrew/opt/zlib \
             bash src/tor/build-libtor.sh
+
+      - name: Build libi2pd (embedded I2P static lib)
+        # HOMEBREW=1 tells the i2pd Makefile to use Homebrew paths.
+        run: HOMEBREW=1 bash src/i2p/build-libi2pd.sh
 
       - name: Build
         run: cmake --build build -j$(sysctl -n hw.ncpu)
