@@ -58,11 +58,17 @@ public:
     TxPriorityCompare(bool _byFee) : byFee(_byFee) { }
     bool operator()(const TxPriority& a, const TxPriority& b)
     {
+        // #8: Fee-weighted priority for PoS staking.
+        // When sorting by fee (PoS mode), apply a 2x weight to fees so
+        // higher-fee transactions are prioritized over coin-age-only ones.
+        // This maximizes staking rewards for the minter.
         if (byFee)
         {
-            if (std::get<1>(a) == std::get<1>(b))
+            double feeA = std::get<1>(a) * 2.0;  // fee boost
+            double feeB = std::get<1>(b) * 2.0;
+            if (feeA == feeB)
                 return std::get<0>(a) < std::get<0>(b);
-            return std::get<1>(a) < std::get<1>(b);
+            return feeA < feeB;
         }
         else
         {

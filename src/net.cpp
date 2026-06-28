@@ -13,6 +13,7 @@
 #include "onionseed.h"
 #include "tor/onion_v3.h"
 #include "snapshotnet.h"
+#include "i2p/i2pseed.h"
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -40,7 +41,9 @@ extern "C" {
 // int tor_main(int argc, char *argv[]);
 }
 
-static const int MAX_OUTBOUND_CONNECTIONS = 8;  // reduced from 16 for Tor-only small networks
+// Configurable max outbound connections. Set from -maxoutboundconnections
+// during network init (StartNode). Default 8, configurable range 4-32.
+static int MAX_OUTBOUND_CONNECTIONS = 8;
 
 void ThreadMessageHandler2(void* parg);
 void ThreadSocketHandler2(void* parg);
@@ -329,6 +332,86 @@ bool IsReachable(const CNetAddr& addr)
     LOCK(cs_mapLocalHost);
     enum Network net = addr.GetNetwork();
     return vfReachable[net] && !vfLimited[net];
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Cross-network Tor ↔ I2P peer discovery helpers
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Check whether a CAddress refers to an I2P (.b32.i2p) endpoint.
+ * Returns true if the string representation of the address contains ".i2p".
+ */
+bool IsI2PAddr(const CAddress& addr)
+{
+    std::string addrStr = addr.ToStringIP();
+    return (addrStr.find(".i2p") != std::string::npos);
+}
+
+/**
+ * Check whether a CAddress refers to a Tor (.onion) endpoint.
+ */
+static bool IsOnionAddr(const CAddress& addr)
+{
+    std::string addrStr = addr.ToStringIP();
+    return (addrStr.find(".onion") != std::string::npos);
+}
+
+/**
+ * Cross-network address relay: when an 'addr' message is received from a
+ * peer on one anonymity network, this function bridges addresses belonging
+ * to the *other* network to the appropriate peers.
+ *
+ *   - .b32.i2p addresses received from any peer → relay to I2P-connected peers
+ *   - .onion addresses received from any peer    → relay to Tor-connected peers
+ *
+ * This breaks the isolation between Tor and I2P peer sets so that a Tor
+ * node can learn about I2P peers and vice versa.
+ */
+void RelayCrossNetworkAddr(const std::vector<CAddress>& vAddr)
+{
+    bool hasI2P = false;
+    bool hasOnion = false;
+    for (const CAddress& addr : vAddr) {
+        if (IsI2PAddr(addr))   hasI2P = true;
+        if (IsOnionAddr(addr)) hasOnion = true;
+    }
+    if (!hasI2P && !hasOnion)
+        return;
+
+    LOCK(cs_vNodes);
+    for (CNode* pnode : vNodes) {
+        if (pnode->fDisconnect)
+            continue;
+        std::string peerAddr = pnode->addr.ToStringIP();
+        bool peerIsI2P   = (peerAddr.find(".i2p")   != std::string::npos);
+        bool peerIsOnion = (peerAddr.find(".onion") != std::string::npos);
+
+        for (const CAddress& addr : vAddr) {
+            // Bridge I2P addresses to I2P peers
+            if (hasI2P && IsI2PAddr(addr) && peerIsI2P) {
+                pnode->PushAddress(addr);
+            }
+            // Bridge .onion addresses to Tor peers
+            if (hasOnion && IsOnionAddr(addr) && peerIsOnion) {
+                pnode->PushAddress(addr);
+            }
+            // Cross-bridge: also push I2P addresses to Tor peers and
+            // .onion addresses to I2P peers so each network learns about
+            // the other's peers.
+            if (hasI2P && IsI2PAddr(addr) && peerIsOnion) {
+                pnode->PushAddress(addr);
+            }
+            if (hasOnion && IsOnionAddr(addr) && peerIsI2P) {
+                pnode->PushAddress(addr);
+            }
+        }
+    }
+
+    if (fDebug && (hasI2P || hasOnion))
+        printf("RelayCrossNetworkAddr: bridged %s%s%s addresses across networks\n",
+               hasOnion ? ".onion " : "", hasI2P ? ".i2p " : "",
+               (hasOnion && hasI2P) ? "(both)" : "");
 }
 
 bool GetMyExternalIP2(const CService& addrConnect, const char* pszGet, const char* pszKeyword, CNetAddr& ipRet)
@@ -1156,6 +1239,16 @@ void ThreadSocketHandler2(void* parg)
                             break;
                         }
                     }
+                    // Also check I2P seed addresses
+                    if (!fIsSeed) {
+                        static const char *(*strI2PSeedCheck)[1] = fTestNet ? strTestNetI2PSeed : strMainNetI2PSeed;
+                        for (unsigned int si = 0; strI2PSeedCheck[si][0] != nullptr; si++) {
+                            if (incomingAddr.find(strI2PSeedCheck[si][0]) != std::string::npos) {
+                                fIsSeed = true;
+                                break;
+                            }
+                        }
+                    }
                     if (fIsSeed && nInbound < nMaxInbound + 2) {
                         fAccept = true;
                         printf("accepted seed node %s (reserved slot)\n", addr.ToString().c_str());
@@ -1563,6 +1656,31 @@ void ThreadOnionSeed(void* parg)
     }
 
     printf("%d addresses from hardcoded .onion seeds (queued as OneShot)\n", found);
+
+    // Load hardcoded I2P (.b32.i2p) seeds for cross-network peer discovery.
+    // These are added to the address manager so that I2P-connected peers can
+    // be discovered. Unlike onion seeds, we don't queue them as OneShot
+    // connections here — they're connected via the normal outbound connector
+    // through the I2P SOCKS proxy.
+    {
+        static const char *(*strI2PSeed)[1] = fTestNet ? strTestNetI2PSeed : strMainNetI2PSeed;
+        int i2pFound = 0;
+        for (unsigned int si = 0; strI2PSeed[si][0] != nullptr; si++) {
+            CNetAddr parsed;
+            if (!parsed.SetSpecial(strI2PSeed[si][0])) {
+                printf("WARNING: ThreadOnionSeed() : invalid .b32.i2p seed: %s\n",
+                       strI2PSeed[si][0]);
+                continue;
+            }
+            int nOneDay = 24*3600;
+            CAddress addr = CAddress(CService(parsed, GetDefaultPort()));
+            addr.nTime = GetTime() - 3*nOneDay - GetRand(4*nOneDay);
+            addrman.Add(addr, parsed);
+            i2pFound++;
+        }
+        if (i2pFound > 0)
+            printf("%d addresses from hardcoded .b32.i2p seeds added to addrman\n", i2pFound);
+    }
 
     // Wait for Tor to establish circuits before attempting HTTPS seed fetch.
     // The hardcoded OneShot connections can race ahead meanwhile.
@@ -2621,6 +2739,12 @@ void StartNode(void* parg)
     // Make this thread recognisable as the startup thread
     RenameThread("Triangles-start");
 
+    // Configurable outbound connections via -maxoutboundconnections (default 8, range 4-32)
+    MAX_OUTBOUND_CONNECTIONS = GetArg("-maxoutboundconnections", 8);
+    if (MAX_OUTBOUND_CONNECTIONS < 4)  MAX_OUTBOUND_CONNECTIONS = 4;
+    if (MAX_OUTBOUND_CONNECTIONS > 32) MAX_OUTBOUND_CONNECTIONS = 32;
+    printf("Configured max outbound connections: %d (from -maxoutboundconnections)\n", MAX_OUTBOUND_CONNECTIONS);
+
     // If a canonical UTXO snapshot file is already present at startup,
     // advertise NODE_SNAPSHOT to peers BEFORE the first outbound connection.
     // EnsureLocalSnapshot() also sets this flag post-IBD, but at that point
@@ -2633,7 +2757,7 @@ void StartNode(void* parg)
     }
 
     if (semOutbound == nullptr) {
-        // initialize semaphore — use -maxoutbound if specified, else default
+        // initialize semaphore — use -maxoutboundconnections (set above), fall back to -maxoutbound
         int nMaxOutbound = (int)GetArg("-maxoutbound", MAX_OUTBOUND_CONNECTIONS);
         nMaxOutbound = min(nMaxOutbound, (int)GetArg("-maxconnections", 125));
         nMaxOutbound = max(nMaxOutbound, 1);  // at least 1 outbound
@@ -2684,6 +2808,10 @@ void StartNode(void* parg)
     // Initiate outbound connections
     if (!NewThread(ThreadOpenConnections, nullptr))
         printf("Error: NewThread(ThreadOpenConnections) failed\n");
+
+    // Start fork detector (post-IBD background monitor)
+    if (!NewThread(ThreadForkDetector, nullptr))
+        printf("Error: NewThread(ThreadForkDetector) failed\n");
 
     // Process messages
     if (!NewThread(ThreadMessageHandler, nullptr))
@@ -2818,4 +2946,30 @@ void RelayTransaction(const CTransaction& tx, const uint256& hash, const CDataSt
     }
 
     RelayInventory(inv);
+}
+
+// ---------------------------------------------------------------------------
+// BIP152 Compact Block relay — net-layer integration
+// ---------------------------------------------------------------------------
+
+/** Advertise a new block to all connected peers.
+ *
+ *  For peers that have negotiated compact block relay (fSendCmpct), the
+ *  inventory is sent as MSG_CMPCT_BLOCK so they know to request the compact
+ *  form.  For legacy peers, standard MSG_BLOCK inventory is sent.
+ *
+ *  The actual compact block construction and sending happens in main.cpp
+ *  (SendCompactBlock / ProcessCompactBlock).  This function only handles
+ *  the inventory advertisement at the net layer.
+ */
+void RelayBlockInventory(const uint256& hash)
+{
+    LOCK(cs_vNodes);
+    for (CNode* pnode : vNodes)
+    {
+        // Use MSG_CMPCT_BLOCK for peers that support compact relay,
+        // MSG_BLOCK for legacy peers.
+        int nType = pnode->fSendCmpct ? MSG_CMPCT_BLOCK : MSG_BLOCK;
+        pnode->PushInventory(CInv(nType, hash));
+    }
 }

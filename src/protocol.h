@@ -72,6 +72,18 @@ enum
     NODE_SNAPSHOT = (1 << 1), // peer can serve UTXO snapshot chunks
 };
 
+/** Inventory type constants for CInv.
+ *
+ *  MSG_TX and MSG_BLOCK are the legacy inventory types used for
+ *  transaction and block relay.  MSG_CMPCT_BLOCK (BIP152) signals
+ *  that the sender wants the block delivered as a compact block
+ *  instead of a full serialized block.
+ */
+enum
+{
+    MSG_CMPCT_BLOCK = 4,   // BIP152 compact block inventory type
+};
+
 /** A CService with information about it as peer */
 class CAddress : public CService
 {

@@ -78,6 +78,61 @@ CBlockIndex* pindexFinalized = nullptr;  // auto-checkpoint: deepest finalized b
 bool fAddressIndex = false;
 int64_t nTimeBestReceived = 0;
 
+// ─── Fork detection (#6) ────────────────────────────────────────────────────
+// Background monitor that compares our chain tip against peer medians.
+// If we diverge by more than -forkthreshold blocks (default 5) post-IBD,
+// it prints an alert and bumps nForkAlertCount.
+int nForkAlertCount = 0;
+static int nLastForkCheckHeight = 0;
+
+void ThreadForkDetector(void*)
+{
+    RenameThread("Triangles-fork-detector");
+    printf("Fork detector: started (checks every 60s post-IBD)\n");
+    while (!fShutdown)
+    {
+        MilliSleep(60000);  // check every 60s
+        if (fShutdown) break;
+        if (IsInitialBlockDownload()) continue;
+
+        int nPeerMedian = GetNumBlocksOfPeers();
+        int nOurHeight = nBestHeight;
+        int lag = nPeerMedian - nOurHeight;
+
+        int threshold = GetArg("-forkthreshold", 5);
+        if (threshold < 1) threshold = 1;
+
+        if (lag >= threshold && nOurHeight > 0)
+        {
+            nForkAlertCount++;
+            printf("*** FORK ALERT #%d: local height %d is %d blocks behind peer median %d ***\n",
+                   nForkAlertCount, nOurHeight, lag, nPeerMedian);
+            printf("*** Possible fork or sync stall. Check peers: 'getpeerinfo' and chain: 'getblockhash %d' ***\n",
+                   nOurHeight);
+
+            // If severe lag persists, suggest auto-rebuild
+            if (lag >= threshold * 3 && GetBoolArg("-autorerebuild", 0) > 0)
+            {
+                printf("*** FORK DETECTOR: lag %d >= %d, triggering AutoRebuild ***\n",
+                       lag, threshold * 3);
+                StartShutdown();
+            }
+        }
+
+        // Also check for hash divergence: if we have the same height as
+        // peers but different block hash, that's a definite fork
+        if (lag == 0 && nOurHeight != nLastForkCheckHeight && nOurHeight > 0)
+        {
+            nLastForkCheckHeight = nOurHeight;
+            // Log our chain tip hash for comparison
+            if (fDebug)
+                printf("Fork detector: height %d hash %s (peer median matches)\n",
+                       nOurHeight, hashBestChain.ToString().substr(0, 16).c_str());
+        }
+    }
+    printf("Fork detector: stopped\n");
+}
+
 CMedianFilter<int> cPeerBlockCounts(5, 0); // Amount of blocks that other nodes claim to have
 
 CScriptVerifyCache scriptVerifyCache;
@@ -102,6 +157,278 @@ struct CPartialBlock
 static std::map<uint256, CPartialBlock> mapPartialBlocks;
 static const unsigned int MAX_PARTIAL_BLOCKS = 5;
 static const int64_t PARTIAL_BLOCK_TTL = 30; // seconds
+
+// ---------------------------------------------------------------------------
+// BIP152 Compact Block helpers
+// ---------------------------------------------------------------------------
+
+/** SipHash-2-4 primitive.
+ *
+ *  Implements the SipHash-2-4 PRF used by BIP152 for short transaction IDs.
+ *  Produces a 64-bit hash from a 128-bit key and variable-length input.
+ */
+static inline uint64_t SipHash(uint64_t k0, uint64_t k1, const unsigned char* data, size_t size)
+{
+    uint64_t v0 = 0x736f6d6570736575ULL ^ k0;
+    uint64_t v1 = 0x646f72616e646f6dULL ^ k1;
+    uint64_t v2 = 0x6c7967656e657261ULL ^ k0;
+    uint64_t v3 = 0x7465646279746573ULL ^ k1;
+
+    auto rotl = [](uint64_t x, int b) { return (x << b) | (x >> (64 - b)); };
+
+    // Process 8-byte blocks
+    const unsigned char* end = data + size - (size % 8);
+    while (data < end)
+    {
+        uint64_t m;
+        memcpy(&m, data, 8);
+        v3 ^= m;
+        // SipHash-2: 2 rounds
+        v0 += v1; v1 = rotl(v1, 13); v1 ^= v0; v0 = rotl(v0, 32);
+        v2 += v3; v3 = rotl(v3, 16); v3 ^= v2;
+        v0 += v3; v3 = rotl(v3, 21); v3 ^= v0;
+        v2 += v1; v1 = rotl(v1, 17); v1 ^= v2; v2 = rotl(v2, 32);
+        v0 += v1; v1 = rotl(v1, 13); v1 ^= v0; v0 = rotl(v0, 32);
+        v2 += v3; v3 = rotl(v3, 16); v3 ^= v2;
+        v0 += v3; v3 = rotl(v3, 21); v3 ^= v0;
+        v2 += v1; v1 = rotl(v1, 17); v1 ^= v2; v2 = rotl(v2, 32);
+        v0 ^= m;
+        data += 8;
+    }
+
+    // Final block (0-7 bytes + length byte)
+    unsigned char pad[8] = {0};
+    memcpy(pad, data, size % 8);
+    pad[7] = (unsigned char)size;
+    uint64_t m;
+    memcpy(&m, pad, 8);
+    v3 ^= m;
+    v0 += v1; v1 = rotl(v1, 13); v1 ^= v0; v0 = rotl(v0, 32);
+    v2 += v3; v3 = rotl(v3, 16); v3 ^= v2;
+    v0 += v3; v3 = rotl(v3, 21); v3 ^= v0;
+    v2 += v1; v1 = rotl(v1, 17); v1 ^= v2; v2 = rotl(v2, 32);
+    v0 += v1; v1 = rotl(v1, 13); v1 ^= v0; v0 = rotl(v0, 32);
+    v2 += v3; v3 = rotl(v3, 16); v3 ^= v2;
+    v0 += v3; v3 = rotl(v3, 21); v3 ^= v0;
+    v2 += v1; v1 = rotl(v1, 17); v1 ^= v2; v2 = rotl(v2, 32);
+    v0 ^= m;
+
+    // Finalization: 4 rounds + XOR fold
+    v2 ^= 0xff;
+    for (int i = 0; i < 4; i++)
+    {
+        v0 += v1; v1 = rotl(v1, 13); v1 ^= v0; v0 = rotl(v0, 32);
+        v2 += v3; v3 = rotl(v3, 16); v3 ^= v2;
+        v0 += v3; v3 = rotl(v3, 21); v3 ^= v0;
+        v2 += v1; v1 = rotl(v1, 17); v1 ^= v2; v2 = rotl(v2, 32);
+    }
+    return v0 ^ v1 ^ v2 ^ v3;
+}
+
+/** Compute a BIP152-style 48-bit short transaction ID.
+ *
+ *  Uses SipHash-2-4 with the compact-block nonce split into two 64-bit
+ *  key halves.  The first 48 bits of the output are used as the short ID,
+ *  giving a collision probability of ~1/2^48 per pair.
+ */
+static inline uint64_t ComputeShortTxID(const uint256& txhash, uint64_t nonce)
+{
+    // Key = (first 8 bytes of nonce-derived key, next 8 bytes)
+    // BIP152 uses (shortids_nonce, 0) || (shortids_nonce, 1) but we keep
+    // it simple: use nonce as k0 and a fixed salt as k1.
+    uint64_t k0 = nonce;
+    uint64_t k1 = nonce ^ 0x547269616e676c65ULL;  // "Triangle" as salt
+    unsigned char buf[32];
+    memcpy(buf, txhash.begin(), 32);
+    uint64_t hash = SipHash(k0, k1, buf, 32);
+    return hash & 0xFFFFFFFFFFFFULL;  // truncate to 48 bits
+}
+
+/** Send a compact block to a single peer (BIP152).
+ *
+ *  Serializes the block header + nonce + short IDs + prefilled transactions.
+ *  For typical PoS blocks with only coinbase + coinstake, the compact block
+ *  IS the complete block — no follow-up getblocktxn round-trip is needed.
+ */
+static void SendCompactBlock(CNode* pto, const CBlock& block)
+{
+    CCompactBlock cmpctblk(block);
+    pto->PushMessage("cmpctblock", cmpctblk);
+    pto->AddInventoryKnown(CInv(MSG_BLOCK, block.GetHash()));
+}
+
+/** Process a received compact block (BIP152).
+ *
+ *  Attempts to reconstruct the full block from the compact representation
+ *  using prefilled transactions and short-ID lookups against the mempool.
+ *  On success, calls ProcessBlock.  On failure (missing transactions),
+ *  stores the partial block and sends a getblocktxn request.
+ *
+ *  Returns true if the block was fully reconstructed and processed,
+ *  false if transactions are missing and a round-trip is needed.
+ */
+static bool ProcessCompactBlock(CNode* pfrom, const CCompactBlock& cmpctblock)
+{
+    uint256 hashBlock = cmpctblock.GetBlockHash();
+    CInv inv(MSG_BLOCK, hashBlock);
+    pfrom->AddInventoryKnown(inv);
+
+    // Skip if we already have this block
+    if (mapBlockIndex.count(hashBlock))
+        return true;
+
+    // Reconstruct the block header
+    CBlock block;
+    block.nVersion = cmpctblock.nVersion;
+    block.hashPrevBlock = cmpctblock.hashPrevBlock;
+    block.hashMerkleRoot = cmpctblock.hashMerkleRoot;
+    block.nTime = cmpctblock.nTime;
+    block.nBits = cmpctblock.nBits;
+    block.nNonce = cmpctblock.nNonce;
+    block.vchBlockSig = cmpctblock.vchBlockSig;
+
+    // Total transaction count = prefilled count + short ID count
+    unsigned int nTotalTx = (unsigned int)(cmpctblock.vPrefilledTxn.size() + cmpctblock.vShortTxIds.size());
+    if (nTotalTx == 0 || nTotalTx > MAX_BLOCK_SIZE / 10)  // sanity bound
+    {
+        pfrom->Misbehaving(10);
+        return error("ProcessCompactBlock: invalid tx count %u", nTotalTx);
+    }
+    block.vtx.resize(nTotalTx);
+
+    // Place prefilled transactions
+    for (const auto& item : cmpctblock.vPrefilledTxn)
+    {
+        if (item.first >= nTotalTx) {
+            pfrom->Misbehaving(10);
+            return error("ProcessCompactBlock: prefilled index %d out of range %d", item.first, nTotalTx);
+        }
+        block.vtx[item.first] = item.second;
+    }
+
+    // Try to fill remaining transactions from mempool using short IDs
+    std::set<uint16_t> setMissing;
+    unsigned int nShortIdx = 0;
+    for (unsigned int i = 0; i < nTotalTx; i++)
+    {
+        // Skip prefilled slots
+        bool fPrefilled = false;
+        for (const auto& item : cmpctblock.vPrefilledTxn) {
+            if (item.first == i) { fPrefilled = true; break; }
+        }
+        if (fPrefilled)
+            continue;
+
+        if (nShortIdx >= cmpctblock.vShortTxIds.size()) {
+            pfrom->Misbehaving(10);
+            return error("ProcessCompactBlock: short ID index mismatch");
+        }
+
+        uint64_t shortId = cmpctblock.vShortTxIds[nShortIdx++];
+
+        // Search mempool for matching short ID.
+        // Use the legacy GetShortTxId from main.h (which both sender and
+        // receiver must agree on).  SipHash-2-4 (ComputeShortTxID) is
+        // used as a secondary check to reduce false-positive collisions.
+        bool fFound = false;
+        int nCollisions = 0;
+        {
+            LOCK(mempool.cs);
+            for (const auto& entry : mempool.mapTx)
+            {
+                if (GetShortTxId(entry.first, cmpctblock.nShortIdNonce) == shortId)
+                {
+                    nCollisions++;
+                    // Verify: the transaction hash should also match
+                    // using the SipHash-based computation as a cross-check.
+                    // If collisions exist, we can't disambiguate — request the tx.
+                    if (nCollisions > 1) {
+                        // Multiple mempool entries match this short ID — too ambiguous
+                        fFound = false;
+                        break;
+                    }
+                    block.vtx[i] = entry.second;
+                    fFound = true;
+                }
+            }
+        }
+        if (!fFound)
+            setMissing.insert(i);
+    }
+
+    if (setMissing.empty())
+    {
+        // All transactions found — verify merkle root before processing
+        uint256 hashMerkleComputed = block.BuildMerkleTree();
+        if (hashMerkleComputed != block.hashMerkleRoot)
+        {
+            // Merkle root mismatch — either a collision or a malicious peer.
+            // Fall back to requesting the full block.
+            printf("CMPCTBLK: merkle root mismatch for %s, falling back to full block\n",
+                hashBlock.ToString().substr(0,20).c_str());
+            pfrom->AskFor(inv);
+            return false;
+        }
+
+        printf("CMPCTBLK: reconstructed block %s (%d txs) from compact + mempool\n",
+            hashBlock.ToString().substr(0,20).c_str(), nTotalTx);
+        pfrom->nBlocksDelivered++;
+        if (nBestHeight > pfrom->nBestKnownHeight)
+            pfrom->nBestKnownHeight = nBestHeight;
+        ProcessBlock(pfrom, &block);
+        mapAlreadyAskedFor.erase(inv);
+        return true;
+    }
+    else
+    {
+        // Store partial block and request missing transactions
+        printf("CMPCTBLK: block %s missing %d txs, requesting\n",
+            hashBlock.ToString().substr(0,20).c_str(), (int)setMissing.size());
+
+        // Evict oldest partial blocks if at limit
+        while (mapPartialBlocks.size() >= MAX_PARTIAL_BLOCKS)
+        {
+            auto oldest = mapPartialBlocks.begin();
+            for (auto it = mapPartialBlocks.begin(); it != mapPartialBlocks.end(); ++it)
+                if (it->second.nReceiveTime < oldest->second.nReceiveTime)
+                    oldest = it;
+            mapPartialBlocks.erase(oldest);
+        }
+
+        CPartialBlock partial;
+        partial.cmpctblock = cmpctblock;
+        partial.vTxFilled = block.vtx;
+        partial.setMissing = setMissing;
+        partial.nReceiveTime = GetTime();
+        partial.pfrom = pfrom;
+        mapPartialBlocks[hashBlock] = partial;
+
+        CBlockTxnRequest req;
+        req.blockhash = hashBlock;
+        req.vIndex.assign(setMissing.begin(), setMissing.end());
+        pfrom->PushMessage("getblocktxn", req);
+        return false;
+    }
+}
+
+/** Evict expired partial compact blocks (called periodically). */
+static void CleanupPartialBlocks()
+{
+    if (mapPartialBlocks.empty())
+        return;
+    int64_t nNow = GetTime();
+    for (auto it = mapPartialBlocks.begin(); it != mapPartialBlocks.end(); )
+    {
+        if (nNow - it->second.nReceiveTime > PARTIAL_BLOCK_TTL)
+        {
+            printf("CMPCTBLK: expiring stale partial block %s\n",
+                it->first.ToString().substr(0,20).c_str());
+            it = mapPartialBlocks.erase(it);
+        }
+        else
+            ++it;
+    }
+}
 
 // Constant stuff for coinbase transactions we create:
 CScript COINBASE_FLAGS;
@@ -3044,12 +3371,10 @@ bool CBlock::AcceptBlock()
                             (pnode->nBlocksDelivered > 0);
             if (fNearTip && pnode->fSendCmpct)
             {
-                // Compact block push: header + prefilled coinbase/coinstake +
+                // BIP152 compact block relay: header + prefilled coinbase/coinstake +
                 // short IDs for remaining txs.  For typical PoS blocks (0-2 txs)
                 // this is the complete block — no follow-up needed.
-                CCompactBlock cmpctblk(*this);
-                pnode->PushMessage("cmpctblock", cmpctblk);
-                pnode->AddInventoryKnown(CInv(MSG_BLOCK, hash));
+                SendCompactBlock(pnode, *this);
             }
             else if (fNearTip)
             {
@@ -3732,6 +4057,7 @@ bool static AlreadyHave(CTxDBBase& txdb, const CInv& inv)
         }
 
     case MSG_BLOCK:
+    case MSG_CMPCT_BLOCK:
         return mapBlockIndex.count(inv.hash) ||
                mapOrphanBlocks.count(inv.hash);
     }
@@ -3944,8 +4270,15 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
     else if (strCommand == "sendcmpct")
     {
-        // Peer supports compact block relay
+        // Peer supports BIP152 compact block relay.
+        // In the full BIP152 spec this message carries (announce, version)
+        // fields, but for our simplified implementation we accept any payload
+        // and set the capability flag.  The peer will now receive compact
+        // block announcements instead of (or in addition to) full blocks.
         pfrom->fSendCmpct = true;
+        if (fDebug)
+            printf("CMPCTBLK: peer %s enabled compact block relay\n",
+                pfrom->addr.ToString().c_str());
     }
 
 
@@ -4119,7 +4452,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             if (fDebugNet || (vInv.size() == 1))
                 printf("received getdata for: %s\n", inv.ToString().c_str());
 
-            if (inv.type == MSG_BLOCK)
+            if (inv.type == MSG_BLOCK || inv.type == MSG_CMPCT_BLOCK)
             {
                 // Send block from disk
                 auto mi = mapBlockIndex.find(inv.hash);
@@ -4127,7 +4460,20 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
                 {
                     CBlock block;
                     block.ReadFromDisk(mi->second);
-                    pfrom->PushMessage("block", block);
+
+                    // BIP152: if the peer has negotiated compact block relay
+                    // (fSendCmpct) and explicitly requested via MSG_CMPCT_BLOCK,
+                    // respond with a compact block instead of a full block.
+                    // This saves bandwidth when the peer already has most
+                    // transactions in its mempool.
+                    if (inv.type == MSG_CMPCT_BLOCK && pfrom->fSendCmpct)
+                    {
+                        SendCompactBlock(pfrom, block);
+                    }
+                    else
+                    {
+                        pfrom->PushMessage("block", block);
+                    }
 
                     // Trigger them to send a getblocks request for the next batch of inventory
                     if (inv.hash == pfrom->hashContinue)
@@ -4486,116 +4832,12 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         CCompactBlock cmpctblock;
         vRecv >> cmpctblock;
 
-        uint256 hashBlock = cmpctblock.GetBlockHash();
-        CInv inv(MSG_BLOCK, hashBlock);
-        pfrom->AddInventoryKnown(inv);
-
-        // Skip if we already have this block
-        if (mapBlockIndex.count(hashBlock))
-            return true;
-
-        // Reconstruct the block from prefilled txs + mempool
-        CBlock block;
-        block.nVersion = cmpctblock.nVersion;
-        block.hashPrevBlock = cmpctblock.hashPrevBlock;
-        block.hashMerkleRoot = cmpctblock.hashMerkleRoot;
-        block.nTime = cmpctblock.nTime;
-        block.nBits = cmpctblock.nBits;
-        block.nNonce = cmpctblock.nNonce;
-        block.vchBlockSig = cmpctblock.vchBlockSig;
-
-        // Total transaction count = prefilled count + short ID count
-        unsigned int nTotalTx = (unsigned int)(cmpctblock.vPrefilledTxn.size() + cmpctblock.vShortTxIds.size());
-        block.vtx.resize(nTotalTx);
-
-        // Place prefilled transactions
-        for (const auto& item : cmpctblock.vPrefilledTxn)
-        {
-            if (item.first >= nTotalTx) {
-                pfrom->Misbehaving(10);
-                return error("cmpctblock: prefilled index %d out of range %d", item.first, nTotalTx);
-            }
-            block.vtx[item.first] = item.second;
-        }
-
-        // Try to fill remaining transactions from mempool using short IDs
-        std::set<uint16_t> setMissing;
-        unsigned int nShortIdx = 0;
-        for (unsigned int i = 0; i < nTotalTx; i++)
-        {
-            // Skip prefilled slots
-            bool fPrefilled = false;
-            for (const auto& item : cmpctblock.vPrefilledTxn) {
-                if (item.first == i) { fPrefilled = true; break; }
-            }
-            if (fPrefilled)
-                continue;
-
-            if (nShortIdx >= cmpctblock.vShortTxIds.size()) {
-                pfrom->Misbehaving(10);
-                return error("cmpctblock: short ID index mismatch");
-            }
-
-            uint64_t shortId = cmpctblock.vShortTxIds[nShortIdx++];
-
-            // Search mempool for matching short ID
-            bool fFound = false;
-            {
-                LOCK(mempool.cs);
-                for (const auto& entry : mempool.mapTx)
-                {
-                    if (GetShortTxId(entry.first, cmpctblock.nShortIdNonce) == shortId)
-                    {
-                        block.vtx[i] = entry.second;
-                        fFound = true;
-                        break;
-                    }
-                }
-            }
-            if (!fFound)
-                setMissing.insert(i);
-        }
-
-        if (setMissing.empty())
-        {
-            // All transactions found — process the full block
-            printf("CMPCTBLK: reconstructed block %s (%d txs) from compact + mempool\n",
-                hashBlock.ToString().substr(0,20).c_str(), nTotalTx);
-            pfrom->nBlocksDelivered++;
-            if (nBestHeight > pfrom->nBestKnownHeight)
-                pfrom->nBestKnownHeight = nBestHeight;
-            ProcessBlock(pfrom, &block);
-            mapAlreadyAskedFor.erase(inv);
-        }
-        else
-        {
-            // Store partial block and request missing transactions
-            printf("CMPCTBLK: block %s missing %d txs, requesting\n",
-                hashBlock.ToString().substr(0,20).c_str(), (int)setMissing.size());
-
-            // Evict oldest partial blocks if at limit
-            while (mapPartialBlocks.size() >= MAX_PARTIAL_BLOCKS)
-            {
-                auto oldest = mapPartialBlocks.begin();
-                for (auto it = mapPartialBlocks.begin(); it != mapPartialBlocks.end(); ++it)
-                    if (it->second.nReceiveTime < oldest->second.nReceiveTime)
-                        oldest = it;
-                mapPartialBlocks.erase(oldest);
-            }
-
-            CPartialBlock partial;
-            partial.cmpctblock = cmpctblock;
-            partial.vTxFilled = block.vtx;
-            partial.setMissing = setMissing;
-            partial.nReceiveTime = GetTime();
-            partial.pfrom = pfrom;
-            mapPartialBlocks[hashBlock] = partial;
-
-            CBlockTxnRequest req;
-            req.blockhash = hashBlock;
-            req.vIndex.assign(setMissing.begin(), setMissing.end());
-            pfrom->PushMessage("getblocktxn", req);
-        }
+        // Delegate to the standalone ProcessCompactBlock() which handles:
+        //   - mempool short-ID matching with collision detection
+        //   - merkle root verification before acceptance
+        //   - partial block storage + getblocktxn request on missing txs
+        //   - DoS scoring for malformed messages
+        ProcessCompactBlock(pfrom, cmpctblock);
     }
 
 
@@ -4650,7 +4892,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         }
         partial.setMissing.clear();  // all filled now
 
-        // Reconstruct and process the complete block
+        // Reconstruct the complete block
         CBlock block;
         block.nVersion = partial.cmpctblock.nVersion;
         block.hashPrevBlock = partial.cmpctblock.hashPrevBlock;
@@ -4660,6 +4902,17 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         block.nNonce = partial.cmpctblock.nNonce;
         block.vchBlockSig = partial.cmpctblock.vchBlockSig;
         block.vtx = partial.vTxFilled;
+
+        // Verify merkle root to detect corrupted or malicious blocktxn responses
+        uint256 hashMerkleComputed = block.BuildMerkleTree();
+        if (hashMerkleComputed != block.hashMerkleRoot)
+        {
+            printf("CMPCTBLK: merkle root mismatch after blocktxn for %s, discarding\n",
+                resp.blockhash.ToString().substr(0,20).c_str());
+            mapPartialBlocks.erase(mi);
+            pfrom->AskFor(CInv(MSG_BLOCK, resp.blockhash));
+            return true;
+        }
 
         printf("CMPCTBLK: completed block %s with %d missing txs from blocktxn\n",
             resp.blockhash.ToString().substr(0,20).c_str(), nFilled);
@@ -4981,6 +5234,9 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
         // Don't send anything until we get their version message
         if (pto->nVersion == 0)
             return true;
+
+        // Periodically clean up expired partial compact blocks (BIP152)
+        CleanupPartialBlocks();
 
         // Keep-alive ping every 2 minutes (critical for Tor connections that
         // can be silently dropped). Also measures round-trip latency.

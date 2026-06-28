@@ -20,6 +20,7 @@
 #include "tor/onion_v3.h"
 #include "tor/tor_process.h"
 #include "i2p/i2p_embedded.h"
+#include "i2p/i2pseed.h"
 #ifdef ENABLE_ZMQ
 #include "zmqpublishnotifier.h"
 #endif
@@ -543,6 +544,7 @@ std::string HelpMessage()
         //"  -dns                   " + _("Allow DNS lookups for -addnode, -seednode and -connect") + "\n" +
         "  -port=<port>           " + _("Listen for connections on <port> (default: 24112 or testnet: 24111)") + "\n" +
         "  -maxconnections=<n>    " + _("Maintain at most <n> connections to peers (default: 125)") + "\n" +
+        "  -maxoutboundconnections=<n> " + _("Maximum outbound connections (default: 8, range 4-32)") + "\n" +
         "  -addnode=<ip>          " + _("Add a node to connect to and attempt to keep the connection open") + "\n" +
         "  -connect=<ip>          " + _("Connect only to the specified node(s)") + "\n" +
         "  -seednode=<ip>         " + _("Connect to a node to retrieve peer addresses, and disconnect") + "\n" +
@@ -832,6 +834,15 @@ bool AppInit2()
 
     fConfChange = GetBoolArg("-confchange", false);
     fEnforceCanonical = GetBoolArg("-enforcecanonical", true);
+
+    // Validate -maxoutboundconnections (range 4-32, default 8)
+    if (mapArgs.count("-maxoutboundconnections"))
+    {
+        int nMaxOutboundConn = GetArg("-maxoutboundconnections", 8);
+        if (nMaxOutboundConn < 4 || nMaxOutboundConn > 32)
+            InitWarning("Ignoring -maxoutboundconnections=" + mapArgs["-maxoutboundconnections"] +
+                        ": out of range (4..32), using default 8");
+    }
 
     int nScriptCheckThreads = GetArg("-par", 0);
     if (nScriptCheckThreads <= 0)
@@ -1707,6 +1718,28 @@ bool AppInit2()
     printf("Loaded %i addresses from peers.dat  %" PRId64 "ms\n",
            addrman.size(), GetTimeMillis() - nStart);
     StartupPerfLog("peers_load", GetTimeMillis() - nStart, strprintf("count=%d", addrman.size()));
+
+    // Add hardcoded I2P (.b32.i2p) seed addresses to the address manager.
+    // This enables cross-network peer discovery: Tor-connected nodes can learn
+    // about I2P peers and vice versa. Onion seeds are loaded separately in
+    // ThreadOnionSeed (net.cpp), but we add I2P seeds here during init so they
+    // are available immediately for the outbound connector.
+    {
+        static const char *(*strI2PSeed)[1] = fTestNet ? strTestNetI2PSeed : strMainNetI2PSeed;
+        int nI2PSeeds = 0;
+        for (unsigned int si = 0; strI2PSeed[si][0] != nullptr; si++) {
+            CNetAddr parsed;
+            if (parsed.SetSpecial(strI2PSeed[si][0])) {
+                int nOneDay = 24 * 3600;
+                CAddress addr = CAddress(CService(parsed, GetDefaultPort()));
+                addr.nTime = GetTime() - 3 * nOneDay - GetRand(4 * nOneDay);
+                addrman.Add(addr, parsed);
+                nI2PSeeds++;
+            }
+        }
+        if (nI2PSeeds > 0)
+            printf("Added %d hardcoded I2P (.b32.i2p) seed addresses to addrman\n", nI2PSeeds);
+    }
     
     
     // ********************************************************* Step 11: start node

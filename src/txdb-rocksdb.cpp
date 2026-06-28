@@ -31,6 +31,8 @@ namespace fs = std::filesystem;
 // Global pointer for the RocksDB instance, shared across CRocksTxDB instances
 // the same way the LevelDB backend shares its txdb singleton.
 static rocksdb::DB* g_rocksdb = nullptr;
+static rocksdb::ColumnFamilyHandle* g_cf_handles[5] = {};  // indexed by CF_ enum
+static bool g_cf_enabled = false;
 
 // Non-batched writes bypass WAL fsync. The TxnCommit path handles durability;
 // crash recovery replays from block files anyway. Default WriteOptions may
@@ -95,6 +97,28 @@ static rocksdb::Options GetRocksOptions()
     return opts;
 }
 
+// ─── Column family names ───────────────────────────────────────────────────
+static const std::string CF_NAMES[] = {
+    rocksdb::kDefaultColumnFamilyName,  // CF_DEFAULT (index 0)
+    "blockindex",                       // CF_BLOCKINDEX (index 1)
+    "txindex",                          // CF_TXINDEX (index 2)
+    "utxo",                             // CF_UTXO (index 3)
+    "addrindex",                        // CF_ADDRINDEX (index 4)
+};
+static constexpr int CF_COUNT = 5;
+
+// Prefix-to-CF routing table. Keys starting with these prefixes go to
+// the indicated CF index. Everything else stays in CF_DEFAULT (metadata).
+struct CfPrefixEntry { const char* prefix; int len; int cf_index; };
+static CfPrefixEntry prefixMap_[] = {
+    {"b",     1, 1},  // CF_BLOCKINDEX
+    {"t",     1, 2},  // CF_TXINDEX
+    {"u",     1, 3},  // CF_UTXO
+    {"addrbal",  7, 4},  // CF_ADDRINDEX
+    {"addrutxo", 8, 4},  // CF_ADDRINDEX
+    {"addrtxid", 8, 4},  // CF_ADDRINDEX
+};
+
 static void open_rocksdb(rocksdb::Options& options, bool fRemoveOld = false)
 {
     fs::path directory = GetDataDir() / "rocksdb";
@@ -105,11 +129,59 @@ static void open_rocksdb(rocksdb::Options& options, bool fRemoveOld = false)
 
     fs::create_directory(directory);
     printf("Opening RocksDB in %s\n", directory.string().c_str());
-    rocksdb::Status status = OpenRocksDB(options, directory.string(), &g_rocksdb);
-    if (!status.ok()) {
-        throw runtime_error(strprintf("open_rocksdb(): error opening database: %s",
-                                      status.ToString().c_str()));
+
+    // Try opening with column families. First, list existing CFs.
+    std::vector<std::string> existingCFs;
+    rocksdb::Options listOpts = options;
+    listOpts.create_if_missing = false;
+    rocksdb::DB::ListColumnFamilies(listOpts, directory.string(), &existingCFs);
+
+    bool needsCreate = (existingCFs.size() <= 1);  // Only "default" or empty
+
+    std::vector<rocksdb::ColumnFamilyDescriptor> cfDescs;
+    for (int i = 0; i < CF_COUNT; i++) {
+        // Include this CF if it already exists OR if we're creating new
+        bool exists = false;
+        for (auto& name : existingCFs)
+            if (name == CF_NAMES[i]) { exists = true; break; }
+        if (exists || needsCreate) {
+            rocksdb::ColumnFamilyOptions cfOpts = options;
+            // Per-CF tuning:
+            if (i == 3) {  // UTXO: optimize for point lookups
+                cfOpts.OptimizeForPointLookup(static_cast<size_t>(GetArg("-dbcache", 2048)));
+            } else if (i == 4) {  // addrindex: optimize for scans
+                cfOpts.OptimizeLevelStyleCompaction(cfOpts.write_buffer_size);
+            }
+            cfDescs.push_back(rocksdb::ColumnFamilyDescriptor(CF_NAMES[i], cfOpts));
+        }
     }
+
+    std::vector<rocksdb::ColumnFamilyHandle*> handles;
+    rocksdb::Status status = rocksdb::DB::Open(options, directory.string(),
+                                                cfDescs, &handles, &g_rocksdb);
+    if (!status.ok()) {
+        // Fallback: open without CFs (old-style single-CF database)
+        printf("RocksDB CF open failed (%s), falling back to single-CF\n", status.ToString().c_str());
+        status = OpenRocksDB(options, directory.string(), &g_rocksdb);
+        if (!status.ok()) {
+            throw runtime_error(strprintf("open_rocksdb(): error opening database: %s",
+                                          status.ToString().c_str()));
+        }
+        return;
+    }
+
+    // Store handles in the global array (CF names map directly to indices)
+    for (size_t i = 0; i < handles.size() && i < CF_COUNT; i++) {
+        // Match handle to our index by name
+        std::string hname = handles[i]->GetName();
+        for (int j = 0; j < CF_COUNT; j++) {
+            if (hname == CF_NAMES[j]) {
+                g_cf_handles[j] = handles[i];
+                break;
+            }
+        }
+    }
+    g_cf_enabled = true;
 }
 
 CRocksTxDB::CRocksTxDB(const char* pszMode)
@@ -245,6 +317,18 @@ bool CRocksTxDB::ScanBatch(const std::string& key, std::string* value, bool* del
     return true;
 }
 
+// ─── CF routing helper ──────────────────────────────────────────────────────
+rocksdb::ColumnFamilyHandle* CRocksTxDB::GetCF(const std::string& key) const
+{
+    if (!g_cf_enabled)
+        return nullptr;  // nullptr = default CF
+    for (auto& entry : prefixMap_) {
+        if ((int)key.size() >= entry.len && key.compare(0, entry.len, entry.prefix) == 0)
+            return g_cf_handles[entry.cf_index];
+    }
+    return nullptr;  // default CF for metadata keys
+}
+
 bool CRocksTxDB::ReadRaw(const std::string& key, std::string& value) const
 {
     bool readFromDb = true;
@@ -255,10 +339,21 @@ bool CRocksTxDB::ReadRaw(const std::string& key, std::string& value) const
             return false;
     }
     if (readFromDb) {
-        rocksdb::Status status = pdb->Get(rocksdb::ReadOptions(), key, &value);
+        rocksdb::ReadOptions ro;
+        auto* cf = GetCF(key);
+        rocksdb::Status status = cf ? pdb->Get(ro, cf, key, &value)
+                                     : pdb->Get(ro, key, &value);
         if (!status.ok()) {
-            if (status.IsNotFound())
+            if (status.IsNotFound()) {
+                // If CFs are enabled and key wasn't in the target CF, also
+                // check the default CF (handles data written before CF migration)
+                if (g_cf_enabled && cf) {
+                    rocksdb::Status status2 = pdb->Get(ro, key, &value);
+                    if (!status2.ok()) return false;
+                    return true;
+                }
                 return false;
+            }
             printf("RocksDB read failure: %s\n", status.ToString().c_str());
             return false;
         }
@@ -268,12 +363,17 @@ bool CRocksTxDB::ReadRaw(const std::string& key, std::string& value) const
 
 bool CRocksTxDB::WriteRaw(const std::string& key, const std::string& value)
 {
+    auto* cf = GetCF(key);
     if (activeBatch) {
-        activeBatch->Put(key, value);
+        if (cf)
+            activeBatch->Put(cf, key, value);
+        else
+            activeBatch->Put(key, value);
         pendingBatch[key] = value;
         return true;
     }
-    rocksdb::Status status = pdb->Put(g_fastWriteOpts, key, value);
+    rocksdb::Status status = cf ? pdb->Put(g_fastWriteOpts, cf, key, value)
+                                  : pdb->Put(g_fastWriteOpts, key, value);
     if (!status.ok()) {
         printf("RocksDB write failure: %s\n", status.ToString().c_str());
         return false;
@@ -285,12 +385,17 @@ bool CRocksTxDB::EraseRaw(const std::string& key)
 {
     if (!pdb)
         return false;
+    auto* cf = GetCF(key);
     if (activeBatch) {
-        activeBatch->Delete(key);
+        if (cf)
+            activeBatch->Delete(cf, key);
+        else
+            activeBatch->Delete(key);
         pendingBatch[key] = std::nullopt;
         return true;
     }
-    rocksdb::Status status = pdb->Delete(rocksdb::WriteOptions(), key);
+    rocksdb::Status status = cf ? pdb->Delete(rocksdb::WriteOptions(), cf, key)
+                                  : pdb->Delete(rocksdb::WriteOptions(), key);
     return (status.ok() || status.IsNotFound());
 }
 
@@ -302,17 +407,18 @@ bool CRocksTxDB::ExistsRaw(const std::string& key) const
         bool deleted = false;
         bool inBatch = ScanBatch(key, &unused, &deleted);
         if (inBatch) {
-            // Key is in the pending batch — present iff not marked deleted.
-            // Critically, a delete marker must shadow the underlying DB's
-            // version of the key (otherwise reads inside an open batch would
-            // still see the stale pre-erase value, defeating the whole point
-            // of the batch). Mirror ReadRaw's deleted==true → return false.
             return !deleted;
         }
-        // Not in the pending batch — fall through to underlying DB.
     }
 
-    rocksdb::Status status = pdb->Get(rocksdb::ReadOptions(), key, &unused);
+    auto* cf = GetCF(key);
+    rocksdb::ReadOptions ro;
+    rocksdb::Status status = cf ? pdb->Get(ro, cf, key, &unused)
+                                  : pdb->Get(ro, key, &unused);
+    if (status.IsNotFound() && g_cf_enabled && cf) {
+        // Fallback to default CF for pre-migration data
+        status = pdb->Get(ro, key, &unused);
+    }
     return status.IsNotFound() == false;
 }
 

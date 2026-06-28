@@ -33,6 +33,256 @@
 
 namespace fs = std::filesystem;
 
+// ===========================================================================
+//  CI2PSamSocket — SAM v3 direct streaming implementation
+// ===========================================================================
+//
+//  Protocol reference: https://geti2p.net/en/docs/api/samv3
+//
+//  The SAM bridge is a simple line-oriented text protocol over TCP.  After
+//  HELLO + SESSION CREATE + STREAM CONNECT succeed, the socket becomes a
+//  raw bidirectional byte stream to the I2P destination — no further SAM
+//  framing is needed and there is zero SOCKS overhead.
+
+static std::atomic<unsigned int> g_samSessionSeq{0};
+
+CI2PSamSocket::CI2PSamSocket()
+    : rawSocket(I2P_INVALID_SOCKET)
+{
+}
+
+CI2PSamSocket::~CI2PSamSocket()
+{
+    CloseSocket();
+}
+
+void CI2PSamSocket::CloseSocket()
+{
+    if (rawSocket != I2P_INVALID_SOCKET) {
+#ifdef WIN32
+        closesocket(rawSocket);
+#else
+        close(rawSocket);
+#endif
+        rawSocket = I2P_INVALID_SOCKET;
+    }
+}
+
+I2pSocket_t CI2PSamSocket::GetRawSocket()
+{
+    I2pSocket_t fd = rawSocket;
+    rawSocket = I2P_INVALID_SOCKET;   // transfer ownership
+    return fd;
+}
+
+bool CI2PSamSocket::SamConnect(const std::string& host, int port)
+{
+    CloseSocket();
+
+#ifdef WIN32
+    rawSocket = (I2pSocket_t)::socket(AF_INET, SOCK_STREAM, 0);
+    if (rawSocket == INVALID_SOCKET) {
+#else
+    rawSocket = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (rawSocket < 0) {
+#endif
+        lastError = "SAM: failed to create socket";
+        return false;
+    }
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);   // SAM is always local
+    addr.sin_port = htons((uint16_t)port);
+
+    if (::connect(rawSocket, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        lastError = "SAM: cannot connect to bridge at 127.0.0.1:" + std::to_string(port);
+        CloseSocket();
+        return false;
+    }
+
+    return true;
+}
+
+bool CI2PSamSocket::SendLine(const std::string& line)
+{
+    std::string msg = line + "\n";
+    const char* data = msg.data();
+    size_t remaining = msg.size();
+
+    while (remaining > 0) {
+#ifdef WIN32
+        int n = ::send(rawSocket, data, (int)remaining, 0);
+#else
+        ssize_t n = ::send(rawSocket, data, remaining, MSG_NOSIGNAL);
+#endif
+        if (n <= 0) {
+            lastError = "SAM: send failed";
+            return false;
+        }
+        data += n;
+        remaining -= (size_t)n;
+    }
+    return true;
+}
+
+bool CI2PSamSocket::ReadLine(std::string& lineOut)
+{
+    // Look for a complete line (terminated by \n) in recvBuffer first.
+    for (;;) {
+        size_t nl = recvBuffer.find('\n');
+        if (nl != std::string::npos) {
+            lineOut = recvBuffer.substr(0, nl);
+            // Strip trailing \r (SAM bridge always uses \n, but be tolerant)
+            if (!lineOut.empty() && lineOut.back() == '\r')
+                lineOut.pop_back();
+            recvBuffer.erase(0, nl + 1);
+            return true;
+        }
+
+        char buf[4096];
+#ifdef WIN32
+        int n = ::recv(rawSocket, buf, sizeof(buf), 0);
+#else
+        ssize_t n = ::recv(rawSocket, buf, sizeof(buf), 0);
+#endif
+        if (n <= 0) {
+            lastError = "SAM: connection closed while waiting for reply";
+            return false;
+        }
+        recvBuffer.append(buf, (size_t)n);
+    }
+}
+
+std::string CI2PSamSocket::ParseValue(const std::string& line, const std::string& key)
+{
+    // Find KEY=VALUE token within a space-separated SAM response line.
+    std::string needle = key + "=";
+    size_t pos = line.find(needle);
+    if (pos == std::string::npos)
+        return {};
+
+    pos += needle.size();
+    size_t end = line.find(' ', pos);
+    if (end == std::string::npos)
+        return line.substr(pos);
+    return line.substr(pos, end - pos);
+}
+
+bool CI2PSamSocket::Connect(const std::string& dest_b32, int port,
+                            const std::string& samHost, int samPort)
+{
+    CloseSocket();
+    lastError.clear();
+    recvBuffer.clear();
+
+    if (dest_b32.empty()) {
+        lastError = "SAM: empty destination";
+        return false;
+    }
+
+    // Generate a unique session ID for this connection.
+    unsigned int seq = ++g_samSessionSeq;
+    sessionId = "triangles-" + std::to_string(seq) + "-" +
+                std::to_string((unsigned long)std::time(nullptr));
+
+    // ----------------------------------------------------------------
+    //  Step 0: TCP connect to the SAM bridge
+    // ----------------------------------------------------------------
+    if (!SamConnect(samHost, samPort)) {
+        // lastError already set by SamConnect
+        return false;
+    }
+
+    // ----------------------------------------------------------------
+    //  Step 1: HELLO handshake
+    //    C → S: HELLO VERSION MIN=3.1 MAX=3.1
+    //    S → C: HELLO REPLY RESULT=OK VERSION=3.1
+    // ----------------------------------------------------------------
+    if (!SendLine("HELLO VERSION MIN=3.1 MAX=3.1")) {
+        return false;
+    }
+
+    {
+        std::string reply;
+        if (!ReadLine(reply)) {
+            return false;
+        }
+        std::string result = ParseValue(reply, "RESULT");
+        if (result != "OK") {
+            lastError = "SAM HELLO failed: " + reply;
+            CloseSocket();
+            return false;
+        }
+    }
+
+    // ----------------------------------------------------------------
+    //  Step 2: SESSION CREATE (transient destination)
+    //    C → S: SESSION CREATE STYLE=STREAM ID=<id> DESTINATION=TRANSIENT
+    //    S → C: SESSION STATUS RESULT=OK DESTINATION=<base64>
+    // ----------------------------------------------------------------
+    if (!SendLine("SESSION CREATE STYLE=STREAM ID=" + sessionId +
+                  " DESTINATION=TRANSIENT")) {
+        return false;
+    }
+
+    {
+        std::string reply;
+        if (!ReadLine(reply)) {
+            return false;
+        }
+        std::string result = ParseValue(reply, "RESULT");
+        if (result != "OK") {
+            lastError = "SAM SESSION CREATE failed: " + reply;
+            CloseSocket();
+            return false;
+        }
+        // Save the transient local destination (base64) for diagnostics.
+        localDestination = ParseValue(reply, "DESTINATION");
+    }
+
+    // ----------------------------------------------------------------
+    //  Step 3: STREAM CONNECT to the remote destination
+    //    C → S: STREAM CONNECT ID=<id> DESTINATION=<b32>.i2p
+    //    S → C: STREAM STATUS RESULT=OK
+    //
+    //  After RESULT=OK the socket is a raw byte stream — no more SAM
+    //  framing is needed.
+    // ----------------------------------------------------------------
+    // Ensure destination has the .b32.i2p suffix (accept bare b32 hash too)
+    std::string dest = dest_b32;
+    if (dest.find(".i2p") == std::string::npos && dest.find(".b32") == std::string::npos) {
+        // Looks like a bare b32 hash — append the standard suffix
+        dest += ".b32.i2p";
+    }
+
+    if (!SendLine("STREAM CONNECT ID=" + sessionId + " DESTINATION=" + dest)) {
+        return false;
+    }
+
+    {
+        std::string reply;
+        if (!ReadLine(reply)) {
+            return false;
+        }
+        std::string result = ParseValue(reply, "RESULT");
+        if (result != "OK") {
+            lastError = "SAM STREAM CONNECT to " + dest + " failed: " + reply;
+            CloseSocket();
+            return false;
+        }
+    }
+
+    // Socket is now a raw I2P stream.  Any residual bytes in recvBuffer
+    // belong to the application layer — leave them for the caller.
+    return true;
+}
+
+// ===========================================================================
+//  CI2PEmbedded — singleton router management
+// ===========================================================================
+
 // Singleton
 CI2PEmbedded* CI2PEmbedded::instance = nullptr;
 
@@ -59,6 +309,60 @@ CI2PEmbedded::~CI2PEmbedded()
 std::string CI2PEmbedded::GetSocksProxy() const
 {
     return "127.0.0.1:" + std::to_string(socksPort);
+}
+
+// ---------------------------------------------------------------------------
+//  IsSamAvailable — quick TCP probe of the SAM bridge port
+// ---------------------------------------------------------------------------
+bool CI2PEmbedded::IsSamAvailable() const
+{
+#ifdef WIN32
+    SOCKET sock = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == INVALID_SOCKET)
+        return false;
+#else
+    int sock = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0)
+        return false;
+#endif
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons((uint16_t)samPort);
+
+    bool ok = (::connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == 0);
+
+#ifdef WIN32
+    closesocket(sock);
+#else
+    close(sock);
+#endif
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+//  CreateConnection — factory for SAM v3 direct streaming connections
+// ---------------------------------------------------------------------------
+CI2PSamSocket* CI2PEmbedded::CreateConnection(const std::string& dest_b32, int port)
+{
+    if (!running.load()) {
+        return nullptr;
+    }
+
+    auto* sam = new CI2PSamSocket();
+    if (!sam->Connect(dest_b32, port, "127.0.0.1", samPort)) {
+        // Caller can inspect via the object — but they don't have it yet,
+        // so log the error and clean up.
+        printf("I2P SAM connect failed: %s\n", sam->GetLastError().c_str());
+        delete sam;
+        return nullptr;
+    }
+
+    printf("I2P SAM stream connected to %s (raw socket, no SOCKS overhead)\n",
+           dest_b32.c_str());
+    return sam;
 }
 
 #ifdef ENABLE_I2P_EMBEDDED
@@ -123,7 +427,7 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
         conf << "port = " << socksPort << "\n";
         conf << "keys = socks-proxy.dat\n";
         conf << "\n";
-        // SAM bridge (for future SAM v3 API usage)
+        // SAM bridge for SAM v3 direct streaming API
         conf << "[sam]\n";
         conf << "enabled = true\n";
         conf << "address = 127.0.0.1\n";
@@ -202,9 +506,13 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
         printf("Embedded I2P: SOCKS proxy at 127.0.0.1:%d, SAM at 127.0.0.1:%d\n",
                socksPort, samPort);
 
-        // Wait for i2pd's SOCKS proxy to become available (up to 120s — I2P
-        // bootstrap is slower than Tor due to floodfill lookup and tunnel build)
-        printf("Embedded I2P: waiting for SOCKS proxy to become available...\n");
+        // Wait for i2pd's SOCKS proxy AND SAM bridge to become available
+        // (up to 120s — I2P bootstrap is slower than Tor due to floodfill
+        // lookup and tunnel build).
+        printf("Embedded I2P: waiting for SOCKS proxy and SAM bridge...\n");
+        bool socksReady = false;
+        bool samReady = false;
+
         for (int i = 0; i < 120; i++) {
             MilliSleep(1000);
             if (fShutdown) {
@@ -212,40 +520,63 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
                 return false;
             }
 
+            // --- Check SOCKS proxy readiness ---
+            if (!socksReady) {
 #ifdef WIN32
-            SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
-            if (sock != INVALID_SOCKET) {
+                SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+                if (sock != INVALID_SOCKET) {
 #else
-            int sock = socket(AF_INET, SOCK_STREAM, 0);
-            if (sock >= 0) {
+                int sock = socket(AF_INET, SOCK_STREAM, 0);
+                if (sock >= 0) {
 #endif
-                struct sockaddr_in addr;
-                memset(&addr, 0, sizeof(addr));
-                addr.sin_family = AF_INET;
-                addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-                addr.sin_port = htons(socksPort);
-                bool up = (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == 0);
+                    struct sockaddr_in addr;
+                    memset(&addr, 0, sizeof(addr));
+                    addr.sin_family = AF_INET;
+                    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+                    addr.sin_port = htons(socksPort);
+                    bool up = (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == 0);
 #ifdef WIN32
-                closesocket(sock);
+                    closesocket(sock);
 #else
-                close(sock);
+                    close(sock);
 #endif
-                if (up) {
-                    printf("Embedded I2P: SOCKS proxy ready on port %d (took %ds)\n",
-                           socksPort, i + 1);
-                    return true;
+                    if (up) {
+                        socksReady = true;
+                        printf("Embedded I2P: SOCKS proxy ready on port %d (took %ds)\n",
+                               socksPort, i + 1);
+                    }
                 }
             }
 
+            // --- Check SAM bridge readiness ---
+            if (!samReady) {
+                samReady = IsSamAvailable();
+                if (samReady) {
+                    printf("Embedded I2P: SAM v3 bridge ready on port %d (took %ds)\n",
+                           samPort, i + 1);
+                }
+            }
+
+            // Both endpoints are up — router is fully bootstrapped
+            if (socksReady && samReady) {
+                printf("Embedded I2P: all I2P endpoints ready (SOCKS %d + SAM %d)\n",
+                       socksPort, samPort);
+                return true;
+            }
+
             if (i > 0 && i % 30 == 0) {
-                printf("Embedded I2P: still bootstrapping (%ds elapsed)...\n", i);
+                printf("Embedded I2P: still bootstrapping (%ds elapsed, SOCKS:%s SAM:%s)...\n",
+                       i, socksReady ? "ready" : "wait",
+                       samReady ? "ready" : "wait");
             }
         }
 
-        // SOCKS not ready after 120s — I2P may still be building tunnels.
+        // Not everything ready after 120s — I2P may still be building tunnels.
         // We return true anyway; connections will retry once tunnels are up.
-        printf("Embedded I2P: SOCKS proxy not ready after 120s (I2P bootstrap in progress)\n");
-        printf("  Outbound .i2p connections will retry automatically.\n");
+        printf("Embedded I2P: bootstrap incomplete after 120s"
+               " (SOCKS:%s SAM:%s) — will retry on demand.\n",
+               socksReady ? "ready" : "pending",
+               samReady ? "ready" : "pending");
         return true;
 
     } catch (const std::exception& e) {

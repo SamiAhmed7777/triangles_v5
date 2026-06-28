@@ -21,7 +21,9 @@
 class CNode;
 class CBlockIndex;
 bool IsInitialBlockDownload();
+void ThreadForkDetector(void*);
 extern int nBestHeight;
+extern int nForkAlertCount;
 
 
 

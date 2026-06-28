@@ -11,10 +11,12 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <rocksdb/db.h>
 #include <rocksdb/options.h>
 #include <rocksdb/write_batch.h>
+#include <rocksdb/utilities/db_ttl.h>
 
 // RocksDB backend for the chain database.
 //
@@ -71,6 +73,19 @@ private:
     rocksdb::WriteBatch* activeBatch;   // When non-NULL, writes/deletes go here.
     rocksdb::Options options;
     int nVersion;
+
+    // ─── Column family support ──────────────────────────────────────────────
+    // Data is split into CFs for independent compaction and caching.
+    // cf_handles[0] is always the default CF (for backward compatibility
+    // with pre-CF databases that have all data in "default").
+    enum CfId : int { CF_DEFAULT = 0, CF_BLOCKINDEX, CF_TXINDEX, CF_UTXO, CF_ADDRINDEX, CF_COUNT };
+    rocksdb::ColumnFamilyHandle* cf_handles[CF_COUNT] = {};
+    bool cf_enabled = false;  // True if CFs were created/opened successfully
+
+    // Route a key to the correct column family handle based on its prefix.
+    // Falls back to CF_DEFAULT for keys that don't match any known prefix
+    // (metadata like "version", "hashBestChain", etc.) or if CFs aren't enabled.
+    rocksdb::ColumnFamilyHandle* GetCF(const std::string& key) const;
 
     // Parallel record of every pending write (value) or delete (nullopt) on
     // activeBatch. Used by ScanBatch to answer "is this key already in the
