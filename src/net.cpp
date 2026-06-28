@@ -21,6 +21,8 @@
 
 #ifdef WIN32
 #include <string.h>
+#else
+#include <sys/uio.h>
 #endif
 
 #ifdef USE_UPNP
@@ -831,36 +833,96 @@ void SocketSendData(CNode *pnode)
     std::deque<CSerializeData>::iterator it = pnode->vSendMsg.begin();
 
     while (it != pnode->vSendMsg.end()) {
+#ifndef WIN32
+        // Coalesce up to MAX_IOV queued messages into a single syscall using
+        // scatter-gather I/O.  On Linux we use sendmsg() so we can pass
+        // MSG_NOSIGNAL | MSG_DONTWAIT; on other POSIX systems (e.g. BSD where
+        // SO_NOSIGPIPE is already set on the socket) we fall back to writev().
+        static const int MAX_IOV = 16;
+        struct iovec iov[MAX_IOV];
+        int iovcnt = 0;
+        std::deque<CSerializeData>::iterator batchEnd = it;
+
+        for (; batchEnd != pnode->vSendMsg.end() && iovcnt < MAX_IOV; ++batchEnd, ++iovcnt) {
+            const CSerializeData &data = *batchEnd;
+            size_t off = (batchEnd == it) ? pnode->nSendOffset : 0;
+            assert(data.size() > off);
+            iov[iovcnt].iov_base = const_cast<char*>(&data[off]);
+            iov[iovcnt].iov_len = data.size() - off;
+        }
+
+        if (iovcnt == 0)
+            break;
+
+        ssize_t nBytes;
+#ifdef MSG_NOSIGNAL
+        struct msghdr msg;
+        memset(&msg, 0, sizeof(msg));
+        msg.msg_iov = iov;
+        msg.msg_iovlen = iovcnt;
+        nBytes = sendmsg(pnode->hSocket, &msg, MSG_NOSIGNAL | MSG_DONTWAIT);
+#else
+        nBytes = writev(pnode->hSocket, iov, iovcnt);
+#endif
+        if (nBytes > 0) {
+            pnode->nLastSend = GetTime();
+            pnode->nSendBytes += nBytes;
+
+            // Consume nBytes across the coalesced messages
+            while (it != batchEnd && nBytes > 0) {
+                const CSerializeData &data = *it;
+                size_t remaining = data.size() - pnode->nSendOffset;
+                if ((size_t)nBytes >= remaining) {
+                    nBytes -= remaining;
+                    pnode->nSendSize -= data.size();
+                    pnode->nSendOffset = 0;
+                    ++it;
+                } else {
+                    pnode->nSendOffset += nBytes;
+                    nBytes = 0;
+                }
+            }
+            // Socket buffer full mid-batch — wait for next cycle
+            if (it != batchEnd)
+                break;
+        } else if (nBytes < 0) {
+            int nErr = WSAGetLastError();
+            if (nErr != WSAEWOULDBLOCK && nErr != WSAEMSGSIZE && nErr != WSAEINTR && nErr != WSAEINPROGRESS) {
+                printf("socket send error %d\n", nErr);
+                pnode->CloseSocketDisconnect();
+            }
+            break;
+        } else {
+            // nBytes == 0: peer closed
+            break;
+        }
+#else
+        // Windows: individual send() calls
         const CSerializeData &data = *it;
         assert(data.size() > pnode->nSendOffset);
         int nBytes = send(pnode->hSocket, &data[pnode->nSendOffset], data.size() - pnode->nSendOffset, MSG_NOSIGNAL | MSG_DONTWAIT);
         if (nBytes > 0) {
             pnode->nLastSend = GetTime();
             pnode->nSendOffset += nBytes;
-            
-            pnode->nSendBytes += nBytes;         
-            
+            pnode->nSendBytes += nBytes;
             if (pnode->nSendOffset == data.size()) {
                 pnode->nSendOffset = 0;
                 pnode->nSendSize -= data.size();
                 it++;
             } else {
-                // could not send full message; stop sending more
                 break;
             }
         } else {
             if (nBytes < 0) {
-                // error
                 int nErr = WSAGetLastError();
-                if (nErr != WSAEWOULDBLOCK && nErr != WSAEMSGSIZE && nErr != WSAEINTR && nErr != WSAEINPROGRESS)
-                {
+                if (nErr != WSAEWOULDBLOCK && nErr != WSAEMSGSIZE && nErr != WSAEINTR && nErr != WSAEINPROGRESS) {
                     printf("socket send error %d\n", nErr);
                     pnode->CloseSocketDisconnect();
                 }
             }
-            // couldn't send anything at all
             break;
         }
+#endif
     }
 
     if (it == pnode->vSendMsg.end()) {
@@ -1221,7 +1283,7 @@ void ThreadSocketHandler2(void* parg)
 
         if (fShutdown)
             return;
-        MilliSleep(10);
+        MilliSleep(IsInitialBlockDownload() ? 1 : 10);
     }
 }
 

@@ -32,6 +32,15 @@ namespace fs = std::filesystem;
 // the same way the LevelDB backend shares its txdb singleton.
 static rocksdb::DB* g_rocksdb = nullptr;
 
+// Non-batched writes bypass WAL fsync. The TxnCommit path handles durability;
+// crash recovery replays from block files anyway. Default WriteOptions may
+// vary across RocksDB versions, so we pin sync=false explicitly.
+static const rocksdb::WriteOptions g_fastWriteOpts = []{
+    rocksdb::WriteOptions wo;
+    wo.sync = false;
+    return wo;
+}();
+
 namespace {
 
 // rocksdb::DB::Open shipped a raw DB** overload for years; newer releases
@@ -71,8 +80,9 @@ static rocksdb::Options GetRocksOptions()
     rocksdb::Options opts;
     opts.create_if_missing = false;
     opts.compression = rocksdb::kSnappyCompression;
-    opts.max_open_files = 1000;
-    opts.write_buffer_size = 64 * 1048576;
+    opts.max_open_files = -1;
+    opts.write_buffer_size = 256 * 1048576;
+    opts.max_write_buffer_number = 4;
     opts.IncreaseParallelism();             // Multi-threaded compaction.
     opts.OptimizeLevelStyleCompaction();    // Sensible defaults for a LSM workload.
 
@@ -263,7 +273,7 @@ bool CRocksTxDB::WriteRaw(const std::string& key, const std::string& value)
         pendingBatch[key] = value;
         return true;
     }
-    rocksdb::Status status = pdb->Put(rocksdb::WriteOptions(), key, value);
+    rocksdb::Status status = pdb->Put(g_fastWriteOpts, key, value);
     if (!status.ok()) {
         printf("RocksDB write failure: %s\n", status.ToString().c_str());
         return false;

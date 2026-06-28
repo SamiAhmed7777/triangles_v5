@@ -44,6 +44,11 @@ static const int HEADER_FRONT_MAX_AHEAD = 32768;
 std::map<uint256, CSyncManager::HeaderNode> mapHeaders;
 uint256 hashBestHeader = 0;
 int64_t nLastNewHeaderTime = 0;
+
+// O(1) in-flight counter — replaces the O(n) scan in CountInFlight().
+// Incremented when fRequested transitions false→true; decremented when an
+// entry with fRequested==true is erased from mapHeaders.
+static size_t g_nInFlight = 0;
 }
 
 CSyncManager g_syncManager;
@@ -151,6 +156,8 @@ void CSyncManager::PruneHeaders()
             if (it->second.nHeight > nProtectFloor &&
                 nNow - it->second.nInsertTime >= HEADER_SYNC_TTL_MICROS)
             {
+                if (it->second.fRequested)
+                    --g_nInFlight;
                 it = mapHeaders.erase(it);
                 ++nEvicted;
             }
@@ -188,7 +195,11 @@ void CSyncManager::PruneHeaders()
         const size_t nTarget = (size_t)MAX_HEADER_SYNC_CACHE * 3 / 4;
         size_t i = 0;
         while (mapHeaders.size() > nTarget && i < vEvictable.size())
+        {
+            if (vEvictable[i]->second.fRequested)
+                --g_nInFlight;
             mapHeaders.erase(vEvictable[i++]);
+        }
 
         RecomputeBestHeader();
     }
@@ -287,14 +298,7 @@ bool CSyncManager::PathReachesChain(const std::vector<uint256>& vPath) const
 
 unsigned int CSyncManager::CountInFlight() const
 {
-    const int64_t nNow = GetTime() * 1000000;
-    unsigned int nInFlight = 0;
-    for (std::map<uint256, HeaderNode>::const_iterator it = mapHeaders.begin(); it != mapHeaders.end(); ++it)
-    {
-        if (it->second.fRequested && nNow - it->second.nLastRequestTime < HEADER_REQUEST_TIMEOUT_MICROS)
-            ++nInFlight;
-    }
-    return nInFlight;
+    return (unsigned int)g_nInFlight;
 }
 
 unsigned int CSyncManager::GetPlannerDepth() const
@@ -331,6 +335,8 @@ void CSyncManager::BlockAccepted(const uint256& hashBlock)
     if (mi == mapHeaders.end())
         return;
 
+    if (mi->second.fRequested)
+        --g_nInFlight;
     mapHeaders.erase(mi);
     if (hashBestHeader == hashBlock)
         RecomputeBestHeader();
@@ -602,7 +608,10 @@ unsigned int CSyncManager::QueueBlocksParallel(unsigned int nWindow)
         if (!mi->second.fRequested || nNow - mi->second.nLastRequestTime >= HEADER_REQUEST_TIMEOUT_MICROS)
         {
             if (!mi->second.fRequested)
+            {
                 mi->second.nFirstRequestTime = nNow;
+                ++g_nInFlight;
+            }
             mi->second.fRequested = true;
             mi->second.nLastRequestTime = nNow;
         }

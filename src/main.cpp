@@ -337,8 +337,9 @@ bool AddOrphanTx(const CTransaction& tx)
     for (const CTxIn& txin : tx.vin)
         mapOrphanTransactionsByPrev[txin.prevout.hash].insert(hash);
 
-    printf("stored orphan tx %s (mapsz %" PRIszu ")\n", hash.ToString().substr(0,10).c_str(),
-        mapOrphanTransactions.size());
+    if (fDebug)
+        printf("stored orphan tx %s (mapsz %" PRIszu ")\n", hash.ToString().substr(0,10).c_str(),
+            mapOrphanTransactions.size());
     return true;
 }
 
@@ -2026,10 +2027,13 @@ bool CBlock::ConnectBlock(CTxDBBase& txdb, CBlockIndex* pindex, bool fJustCheck)
 
             int64_t nCalculatedStakeReward = GetProofOfStakeReward(nCoinAge, nFees);
 
-            // TEMP: Skip coinstake reward check during sync — UTXO set incomplete causes nCalculatedStakeReward=0
-            // Will re-enable after full sync completes
-            // if (nStakeReward > nCalculatedStakeReward)
-            //     return DoS(100, error("ConnectBlock() : coinstake pays too much(actual=%" PRId64 " vs calculated=%" PRId64 ")", nStakeReward, nCalculatedStakeReward));
+            // Enforce coinstake reward check only after IBD completes.
+            // During IBD the UTXO set is incomplete, causing nCalculatedStakeReward=0.
+            if (!IsInitialBlockDownload())
+            {
+                if (nStakeReward > nCalculatedStakeReward)
+                    return DoS(100, error("ConnectBlock() : coinstake pays too much(actual=%" PRId64 " vs calculated=%" PRId64 ")", nStakeReward, nCalculatedStakeReward));
+            }
         }
     }
 
@@ -2085,6 +2089,11 @@ bool CBlock::ConnectBlock(CTxDBBase& txdb, CBlockIndex* pindex, bool fJustCheck)
     // Update address index
     if (fAddressIndex)
     {
+        // Batch balance deltas: accumulate net change per address, then
+        // do a single read-modify-write per unique address at the end.
+        // This avoids hundreds of per-output DB reads/writes per block.
+        std::map<std::pair<int, uint160>, int64_t> mapBalanceDeltas;
+
         for (unsigned int i = 0; i < vtx.size(); i++)
         {
             const CTransaction& tx = vtx[i];
@@ -2096,24 +2105,41 @@ bool CBlock::ConnectBlock(CTxDBBase& txdb, CBlockIndex* pindex, bool fJustCheck)
                 for (unsigned int j = 0; j < tx.vin.size(); j++)
                 {
                     const CTxIn& txin = tx.vin[j];
-                    CTransaction txPrev;
-                    CTxIndex txindex;
-                    if (txdb.ReadDiskTx(txin.prevout.hash, txPrev, txindex))
+                    bool fFoundPrevout = false;
+
+                    // Check mapPendingUtxos first to avoid a DB hit for
+                    // outputs created earlier in this same block.
+                    auto itPending = mapPendingUtxos.find(txin.prevout);
+                    if (itPending != mapPendingUtxos.end())
                     {
-                        if (txin.prevout.n < txPrev.vout.size())
+                        const CUtxoEntry& utxo = itPending->second;
+                        int nType;
+                        uint160 hashBytes;
+                        if (GetAddressFromScript(utxo.scriptPubKey, nType, hashBytes))
                         {
-                            const CTxOut& prevout = txPrev.vout[txin.prevout.n];
-                            int nType;
-                            uint160 hashBytes;
-                            if (GetAddressFromScript(prevout.scriptPubKey, nType, hashBytes))
+                            txdb.EraseAddressUtxo(nType, hashBytes, txin.prevout.hash, txin.prevout.n);
+                            mapBalanceDeltas[std::make_pair(nType, hashBytes)] -= utxo.nValue;
+                        }
+                        fFoundPrevout = true;
+                    }
+
+                    // Fall back to reading the full transaction from disk
+                    if (!fFoundPrevout)
+                    {
+                        CTransaction txPrev;
+                        CTxIndex txindex;
+                        if (txdb.ReadDiskTx(txin.prevout.hash, txPrev, txindex))
+                        {
+                            if (txin.prevout.n < txPrev.vout.size())
                             {
-                                // Remove spent UTXO
-                                txdb.EraseAddressUtxo(nType, hashBytes, txin.prevout.hash, txin.prevout.n);
-                                // Decrease balance
-                                int64_t nBalance = 0;
-                                txdb.ReadAddressBalance(nType, hashBytes, nBalance);
-                                nBalance -= prevout.nValue;
-                                txdb.WriteAddressBalance(nType, hashBytes, nBalance);
+                                const CTxOut& prevout = txPrev.vout[txin.prevout.n];
+                                int nType;
+                                uint160 hashBytes;
+                                if (GetAddressFromScript(prevout.scriptPubKey, nType, hashBytes))
+                                {
+                                    txdb.EraseAddressUtxo(nType, hashBytes, txin.prevout.hash, txin.prevout.n);
+                                    mapBalanceDeltas[std::make_pair(nType, hashBytes)] -= prevout.nValue;
+                                }
                             }
                         }
                     }
@@ -2134,15 +2160,24 @@ bool CBlock::ConnectBlock(CTxDBBase& txdb, CBlockIndex* pindex, bool fJustCheck)
                     // Add new UTXO
                     txdb.WriteAddressUtxo(nType, hashBytes, txhash, k,
                                           txout.nValue, pindex->nHeight, txout.scriptPubKey);
-                    // Increase balance
-                    int64_t nBalance = 0;
-                    txdb.ReadAddressBalance(nType, hashBytes, nBalance);
-                    nBalance += txout.nValue;
-                    txdb.WriteAddressBalance(nType, hashBytes, nBalance);
+                    // Accumulate balance increase (batched write at end)
+                    mapBalanceDeltas[std::make_pair(nType, hashBytes)] += txout.nValue;
                     // Record tx in address history
                     txdb.WriteAddressTxId(nType, hashBytes, pindex->nHeight, i, txhash);
                 }
             }
+        }
+
+        // Batch-write all accumulated balance changes: one read + one write
+        // per unique address instead of per-output.
+        for (const auto& entry : mapBalanceDeltas)
+        {
+            if (entry.second == 0)
+                continue;
+            int64_t nBalance = 0;
+            txdb.ReadAddressBalance(entry.first.first, entry.first.second, nBalance);
+            nBalance += entry.second;
+            txdb.WriteAddressBalance(entry.first.first, entry.first.second, nBalance);
         }
     }
 
@@ -2946,12 +2981,20 @@ bool CBlock::AcceptBlock()
     uint256 hashProofOfStake = 0, targetProofOfStake = 0;
     if (IsProofOfStake())
     {
-        // Skip expensive PoS kernel verification for blocks covered by hardcoded checkpoint.
-        // The checkpoint at height 2,186,940 already guarantees chain integrity.
-        // TEMP: Skip PoS kernel check during sync — read txPrev fails on incomplete index
-        // Will re-enable after full sync completes
-        printf("SKIP: PoS kernel check skipped for block %d during sync\n", nHeight);
-        hashProofOfStake = 0; targetProofOfStake = 0;
+        if (IsInitialBlockDownload())
+        {
+            // During IBD the UTXO set isn't fully loaded; CheckProofOfStake()
+            // would fail reading txPrev. Skip with a throttled log.
+            if (nHeight % 10000 == 0)
+                printf("SKIP: PoS kernel check skipped for block %d during IBD\n", nHeight);
+            hashProofOfStake = 0; targetProofOfStake = 0;
+        }
+        else
+        {
+            // Post-IBD: verify the PoS kernel signature normally.
+            if (!CheckProofOfStake(vtx[1], nBits, hashProofOfStake, targetProofOfStake))
+                return DoS(100, error("AcceptBlock() : check proof-of-stake failed for block %d", nHeight));
+        }
     }
 
     // Sync checkpoint enforcement is disabled:
@@ -3089,7 +3132,7 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     if (!pcheckpoint)
         pcheckpoint = pindexBest;
 
-    if (false && pcheckpoint && pblock->hashPrevBlock != hashBestChain)  // TEMP: disabled anti-spam check for sync
+    if (pcheckpoint && pblock->hashPrevBlock != hashBestChain)
     {
         int64_t deltaTime = pblock->GetBlockTime() - pcheckpoint->nTime;
         CBigNum bnNewBlock;
@@ -3121,7 +3164,8 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     // If don't already have its previous block, shunt it off to holding area until we get it
     if (!mapBlockIndex.count(pblock->hashPrevBlock))
     {
-        printf("ProcessBlock: ORPHAN BLOCK, prev=%s\n", pblock->hashPrevBlock.ToString().substr(0,20).c_str());
+        if (fDebug)
+            printf("ProcessBlock: ORPHAN BLOCK, prev=%s\n", pblock->hashPrevBlock.ToString().substr(0,20).c_str());
         std::unique_ptr<CBlock> pblock2 = std::make_unique<CBlock>(*pblock);
         // triangles: check proof-of-stake
         if (pblock2->IsProofOfStake())
@@ -3192,7 +3236,7 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     {
         const unsigned int nQueued =
             (g_syncManager.GetBestHeader() != 0) ? g_syncManager.QueueBlocksParallel() : 0;
-        if (nQueued > 0)
+        if (nQueued > 0 && fDebug)
             printf("IBD-DIAG: queued %u more blocks from header planner after accepting %s\n",
                 nQueued, hash.ToString().substr(0,20).c_str());
 
@@ -3202,7 +3246,7 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
             const unsigned int nRefilled = g_syncManager.RequestRefillAllPeers(
                 g_syncManager.GetBestHeader(), CSyncManager::HEADER_SYNC_REFILL_MIN_INTERVAL_SECONDS,
                 (nPlannerDepth == 0) ? "post-accept planner empty" : "post-accept planner low-water");
-            if (nRefilled > 0)
+            if (nRefilled > 0 && fDebug)
                 printf("IBD-DIAG: post-accept requested headers from %u peers at plannerDepth=%u after block %s\n",
                     nRefilled, nPlannerDepth, hash.ToString().substr(0,20).c_str());
         }

@@ -10,6 +10,7 @@
 
 #ifndef WIN32
 #include <sys/fcntl.h>
+#include <netinet/tcp.h>
 #endif
 
 #include <cstdlib>
@@ -455,6 +456,19 @@ bool static ConnectSocketDirectly(const CService &addrConnect, SOCKET& hSocketRe
             closesocket(hSocket);
             return false;
         }
+    }
+
+    // TCP_NODELAY: disable Nagle's algorithm for low-latency P2P messaging.
+    // SO_KEEPALIVE: detect dead connections faster (important for Tor/I2P
+    // tunnels that can silently drop without RST/FIN).
+    {
+        int one = 1;
+#ifdef WIN32
+        setsockopt(hSocket, IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(one));
+#else
+        setsockopt(hSocket, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+#endif
+        setsockopt(hSocket, SOL_SOCKET, SO_KEEPALIVE, (char*)&one, sizeof(one));
     }
 
     // this isn't even strictly necessary
