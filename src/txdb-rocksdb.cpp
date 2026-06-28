@@ -75,6 +75,39 @@ inline rocksdb::Status OpenRocksDB(const rocksdb::Options& opts,
     return OpenRocksDBImpl(opts, path, dbptr, 0);
 }
 
+// Same SFINAE pattern for the column-family Open overload.
+// Some RocksDB versions (MSYS2 MinGW) ship only the unique_ptr signature.
+template<typename T>
+inline auto OpenRocksDBCFImpl(const rocksdb::Options& opts, const std::string& path,
+                              const std::vector<rocksdb::ColumnFamilyDescriptor>& cfDescs,
+                              std::vector<rocksdb::ColumnFamilyHandle*>* handles,
+                              T** dbptr, int)
+    -> decltype(rocksdb::DB::Open(opts, path, cfDescs, handles, dbptr))
+{
+    return rocksdb::DB::Open(opts, path, cfDescs, handles, dbptr);
+}
+
+template<typename T>
+inline rocksdb::Status OpenRocksDBCFImpl(const rocksdb::Options& opts, const std::string& path,
+                                         const std::vector<rocksdb::ColumnFamilyDescriptor>& cfDescs,
+                                         std::vector<rocksdb::ColumnFamilyHandle*>* handles,
+                                         T** dbptr, long)
+{
+    std::unique_ptr<T> tmp;
+    auto s = rocksdb::DB::Open(opts, path, cfDescs, handles, &tmp);
+    if (s.ok()) *dbptr = tmp.release();
+    return s;
+}
+
+inline rocksdb::Status OpenRocksDBCF(const rocksdb::Options& opts,
+                                     const std::string& path,
+                                     const std::vector<rocksdb::ColumnFamilyDescriptor>& cfDescs,
+                                     std::vector<rocksdb::ColumnFamilyHandle*>* handles,
+                                     rocksdb::DB** dbptr)
+{
+    return OpenRocksDBCFImpl(opts, path, cfDescs, handles, dbptr, 0);
+}
+
 } // anonymous namespace
 
 static rocksdb::Options GetRocksOptions()
@@ -157,7 +190,7 @@ static void open_rocksdb(rocksdb::Options& options, bool fRemoveOld = false)
     }
 
     std::vector<rocksdb::ColumnFamilyHandle*> handles;
-    rocksdb::Status status = rocksdb::DB::Open(options, directory.string(),
+    rocksdb::Status status = OpenRocksDBCF(options, directory.string(),
                                                 cfDescs, &handles, &g_rocksdb);
     if (!status.ok()) {
         // Fallback: open without CFs (old-style single-CF database)
