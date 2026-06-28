@@ -134,6 +134,75 @@ if(NOT TARGET RocksDB::rocksdb AND NOT TARGET PkgConfig::RocksDB)
     message(STATUS "Found RocksDB (manual probe): ${ROCKSDB_LIBRARY}")
 endif()
 
+# Triangles uses RocksDB features that only exist in 7.4+ (XXH3 per-block
+# checksum, type 4). Building against an older RocksDB produces a binary
+# whose smsgDB Open() fails on any SST file written by RocksDB 7.4+ —
+# instead of just bailing, src/smessage.cpp::SecMsgDB::Open now
+# quarantines the offending file and recovers. We still fail loudly at
+# configure time so this drift doesn't sneak back in unnoticed.
+
+# rocksdb/version.h ships with every RocksDB release (3.x onward) and
+# defines ROCKSDB_MAJOR / ROCKSDB_MINOR / ROCKSDB_PATCH. If neither
+# find_package nor pkg-config exposed RocksDB_VERSION (e.g. Ubuntu 22.04's
+# librocksdb-dev, which ships no CMake config and no .pc file), we can
+# still recover the version directly from the header. This closes the
+# "manual probe silently allows old RocksDB" gap that let v5.9.24 ship
+# linked to librocksdb 6.11.
+function(_tri_detect_rocksdb_version_from_header)
+    if(RocksDB_VERSION)
+        return()
+    endif()
+    foreach(_dir ${ARGN})
+        if(NOT IS_DIRECTORY "${_dir}")
+            continue()
+        endif()
+        set(_vh "${_dir}/rocksdb/version.h")
+        if(EXISTS "${_vh}")
+            file(STRINGS "${_vh}" _maj REGEX "^#define ROCKSDB_MAJOR ")
+            file(STRINGS "${_vh}" _min REGEX "^#define ROCKSDB_MINOR ")
+            file(STRINGS "${_vh}" _pat REGEX "^#define ROCKSDB_PATCH ")
+            if(_maj AND _min AND _pat)
+                string(REGEX MATCH "[0-9]+" _maj "${_maj}")
+                string(REGEX MATCH "[0-9]+" _min "${_min}")
+                string(REGEX MATCH "[0-9]+" _pat "${_pat}")
+                set(RocksDB_VERSION "${_maj}.${_min}.${_pat}")
+                set(RocksDB_VERSION "${_maj}.${_min}.${_pat}" PARENT_SCOPE)
+                message(STATUS "Detected RocksDB version from version.h: ${RocksDB_VERSION}")
+                return()
+            endif()
+        endif()
+    endforeach()
+endfunction()
+
+if(NOT RocksDB_VERSION AND TARGET RocksDB::rocksdb)
+    get_target_property(_rocksdb_inc RocksDB::rocksdb INTERFACE_INCLUDE_DIRECTORIES)
+    if(_rocksdb_inc)
+        _tri_detect_rocksdb_version_from_header(${_rocksdb_inc})
+    endif()
+endif()
+
+if(NOT RocksDB_VERSION AND ROCKSDB_INCLUDE_DIR)
+    _tri_detect_rocksdb_version_from_header(${ROCKSDB_INCLUDE_DIR})
+endif()
+
+if(RocksDB_VERSION AND RocksDB_VERSION VERSION_LESS "7.4.0")
+    message(FATAL_ERROR
+        "Triangles requires RocksDB >= 7.4.0 (got ${RocksDB_VERSION}). "
+        "Older versions cannot read smsgDB files written by RocksDB 7.4+ "
+        "(XXH3 per-block checksum). "
+        "On Debian/Ubuntu: install librocksdb-dev >= 7.4 from a backports "
+        "repo or build RocksDB from source into /usr/local.")
+elseif(NOT RocksDB_VERSION)
+    # No version detectable: headers missing entirely, or ROCKSDB_INCLUDE_DIR
+    # not pointing at one with rocksdb/version.h. Runtime fallback in
+    # SecMsgDB::Open covers the gap; print WARNING so build logs flag it.
+    message(WARNING
+        "Could not determine RocksDB version (no CMake config, no "
+        "pkg-config metadata, and no rocksdb/version.h found). "
+        "Triangles prefers RocksDB >= 7.4.0; older versions are recovered "
+        "at runtime via SecMsgDB::Open's quarantine fallback.")
+endif()
+
 # libsecp256k1 — vendored as a git submodule under src/secp256k1. Provides
 # ECDSA signing/verification, pubkey recovery (via the recovery module), and
 # ECDH for secure messaging. Configure the submodule's build for our needs:
