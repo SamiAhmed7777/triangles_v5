@@ -353,24 +353,23 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     labelV3Icon = ui->label_v3;
     labelV3Icon->setVisible(false);
 
+    // Tor icon next to onion address in the stacked address group (hidden until populated)
+    labelTorIcon = ui->label_tor_icon;
+    labelTorIcon->setVisible(false);
+
     QTimer *timerOnion = new QTimer(this);
     connect(timerOnion, SIGNAL(timeout()), this, SLOT(updateOnionAddress()));
     timerOnion->start(5000);
     updateOnionAddress();
 
-    // I2P address in status bar (hidden until populated)
-    labelI2PAddress = new QLabel(this);
-    labelI2PAddress->setObjectName("label_i2p");
-    labelI2PAddress->setStyleSheet("color: #6a4cff; padding-left: 4px;");
+    // I2P address in status bar (hidden until populated, click to copy)
+    labelI2PAddress = ui->label_i2p;
     labelI2PAddress->setVisible(false);
     labelI2PAddress->setCursor(Qt::PointingHandCursor);
-    statusBar()->addPermanentWidget(labelI2PAddress);
+    labelI2PAddress->installEventFilter(this);
 
-    labelI2PIcon = new QLabel(this);
-    labelI2PIcon->setObjectName("label_i2p_icon");
-    labelI2PIcon->setText("[I2P]");
+    labelI2PIcon = ui->label_i2p_icon;
     labelI2PIcon->setVisible(false);
-    statusBar()->addPermanentWidget(labelI2PIcon);
 
     QTimer *timerI2P = new QTimer(this);
     connect(timerI2P, SIGNAL(timeout()), this, SLOT(updateI2PAddress()));
@@ -1347,6 +1346,16 @@ bool TrianglesGUI::eventFilter(QObject *object, QEvent *event)
         }
         return true;
     }
+    if (object == labelI2PAddress && event->type() == QEvent::MouseButtonPress)
+    {
+        QString addr = labelI2PAddress->text();
+        if (!addr.isEmpty())
+        {
+            QApplication::clipboard()->setText(addr);
+            QToolTip::showText(QCursor::pos(), tr("Copied!"), labelI2PAddress);
+        }
+        return true;
+    }
     return QMainWindow::eventFilter(object, event);
 }
 
@@ -1806,6 +1815,15 @@ void TrianglesGUI::updateOnionAddress()
         labelV3Icon->setVisible(true);
     }
 
+    // Tor icon in the stacked address group — green when onion present, hidden otherwise
+    if (hasOnion) {
+        labelTorIcon->setStyleSheet("color: #7eb6ff; font-weight: bold;");
+        labelTorIcon->setToolTip(tr("Tor V3 hidden service active"));
+        labelTorIcon->setVisible(true);
+    } else {
+        labelTorIcon->setVisible(false);
+    }
+
     // Onion address text — respects user preference
     if (clientModel && clientModel->getOptionsModel() &&
         !clientModel->getOptionsModel()->getShowOnionAddress()) {
@@ -1819,7 +1837,7 @@ void TrianglesGUI::updateOnionAddress()
     }
 
     labelOnionAddress->setText(QString::fromStdString(onionAddress));
-    labelOnionAddress->setToolTip(tr("This wallet's Tor .onion address. Selectable — right-click to copy."));
+    labelOnionAddress->setToolTip(tr("This wallet's Tor .onion address. Click to copy."));
     labelOnionAddress->setVisible(true);
 }
 
@@ -1849,7 +1867,7 @@ void TrianglesGUI::updateI2PAddress()
     }
 
     labelI2PAddress->setText(QString::fromStdString(i2pAddress));
-    labelI2PAddress->setToolTip(tr("This node's I2P .b32.i2p address. Selectable — right-click to copy."));
+    labelI2PAddress->setToolTip(tr("This node's I2P .b32.i2p address. Click to copy."));
     labelI2PAddress->setVisible(true);
 }
 
