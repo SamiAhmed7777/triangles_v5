@@ -43,6 +43,7 @@
 #include "wallet.h"
 #include "tor/tor_embedded.h"
 #include "tor/onion_v3.h"
+#include "i2p/i2p_embedded.h"
 
 #ifdef Q_OS_MAC
 #include "macdockiconhandler.h"
@@ -356,6 +357,25 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     connect(timerOnion, SIGNAL(timeout()), this, SLOT(updateOnionAddress()));
     timerOnion->start(5000);
     updateOnionAddress();
+
+    // I2P address in status bar (hidden until populated)
+    labelI2PAddress = new QLabel(this);
+    labelI2PAddress->setObjectName("label_i2p");
+    labelI2PAddress->setStyleSheet("color: #6a4cff; padding-left: 4px;");
+    labelI2PAddress->setVisible(false);
+    labelI2PAddress->setCursor(Qt::PointingHandCursor);
+    statusBar()->addPermanentWidget(labelI2PAddress);
+
+    labelI2PIcon = new QLabel(this);
+    labelI2PIcon->setObjectName("label_i2p_icon");
+    labelI2PIcon->setText("[I2P]");
+    labelI2PIcon->setVisible(false);
+    statusBar()->addPermanentWidget(labelI2PIcon);
+
+    QTimer *timerI2P = new QTimer(this);
+    connect(timerI2P, SIGNAL(timeout()), this, SLOT(updateI2PAddress()));
+    timerI2P->start(5000);
+    updateI2PAddress();
 
     QTimer *timerShutdown = new QTimer(this);
     connect(timerShutdown, SIGNAL(timeout()), this, SLOT(detectShutdown()));
@@ -1801,6 +1821,36 @@ void TrianglesGUI::updateOnionAddress()
     labelOnionAddress->setText(QString::fromStdString(onionAddress));
     labelOnionAddress->setToolTip(tr("This wallet's Tor .onion address. Selectable — right-click to copy."));
     labelOnionAddress->setVisible(true);
+}
+
+void TrianglesGUI::updateI2PAddress()
+{
+    std::string i2pAddress = CI2PEmbedded::GetInstance()->GetI2PAddress();
+    bool hasI2P = CI2PEmbedded::GetInstance()->IsRunning() && !i2pAddress.empty();
+
+    // I2P indicator
+    if (hasI2P) {
+        labelI2PIcon->setStyleSheet("color: #6a4cff; font-weight: bold;");
+        labelI2PIcon->setToolTip(tr("I2P router active"));
+        labelI2PIcon->setVisible(true);
+    } else if (CI2PEmbedded::GetInstance()->IsRunning()) {
+        labelI2PIcon->setStyleSheet("color: #aaaa00; font-weight: bold;");
+        labelI2PIcon->setToolTip(tr("I2P router running (building tunnels...)"));
+        labelI2PIcon->setVisible(true);
+    } else {
+        labelI2PIcon->setStyleSheet("color: #555555; font-weight: bold;");
+        labelI2PIcon->setToolTip(tr("I2P not active"));
+        labelI2PIcon->setVisible(false);
+    }
+
+    if (!hasI2P) {
+        labelI2PAddress->setVisible(false);
+        return;
+    }
+
+    labelI2PAddress->setText(QString::fromStdString(i2pAddress));
+    labelI2PAddress->setToolTip(tr("This node's I2P .b32.i2p address. Selectable — right-click to copy."));
+    labelI2PAddress->setVisible(true);
 }
 
 
