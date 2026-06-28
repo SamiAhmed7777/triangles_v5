@@ -234,26 +234,30 @@ if(USE_I2P_EMBEDDED)
     )
     # i2pd builds as two static libraries: libi2pd.a (core router) and
     # libi2pd_client.a (SAM, SOCKS, tunnels, client context). Both are needed.
-    # We link them with --start-group to resolve circular deps with Boost/SSL.
-    if(NOT APPLE)
-        target_link_libraries(triangles_common PUBLIC
-            -Wl,--allow-multiple-definition
-            -Wl,--start-group
-        )
-    endif()
+    # The static libs have circular inter-dependencies. Rather than using
+    # --start-group/--end-group (which CMake mis-orders with Ninja), we
+    # list each archive twice so the linker resolves all symbols in two
+    # left-to-right passes.
     target_link_libraries(triangles_common PUBLIC
-        "${I2P_SOURCE_ROOT}/libi2pd.a"
         "${I2P_SOURCE_ROOT}/libi2pdclient.a"
+        "${I2P_SOURCE_ROOT}/libi2pd.a"
         "${I2P_SOURCE_ROOT}/libi2pdlang.a"
+        "${I2P_SOURCE_ROOT}/libi2pdclient.a"
+        "${I2P_SOURCE_ROOT}/libi2pd.a"
         Boost::program_options Boost::thread Boost::chrono
-        Boost::filesystem Boost::system
         OpenSSL::SSL OpenSSL::Crypto
         ZLIB::ZLIB
     )
-    if(NOT APPLE)
+    if(WIN32)
         target_link_libraries(triangles_common PUBLIC
-            -Wl,--end-group
+            -Wl,--allow-multiple-definition
         )
+    endif()
+    if(TARGET Boost::filesystem)
+        target_link_libraries(triangles_common PUBLIC Boost::filesystem)
+    endif()
+    if(TARGET Boost::system)
+        target_link_libraries(triangles_common PUBLIC Boost::system)
     endif()
 endif()
 
