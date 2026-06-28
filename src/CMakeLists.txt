@@ -246,6 +246,7 @@ if(USE_I2P_EMBEDDED)
         "${I2P_SOURCE_ROOT}/libi2pdclient.a"
         "${I2P_SOURCE_ROOT}/libi2pdlang.a"
         Boost::program_options Boost::thread Boost::chrono
+        Boost::filesystem Boost::system
         OpenSSL::SSL OpenSSL::Crypto
         ZLIB::ZLIB
     )
