@@ -371,6 +371,14 @@ CI2PSamSocket* CI2PEmbedded::CreateConnection(const std::string& dest_b32, int p
 //  Embedded mode: i2pd runs in-process via libi2pd / i2p::api
 // ========================================================================
 
+#ifdef WIN32
+// MinGW's rpcndr.h (pulled in by winsock2.h/windows.h) #defines
+// 'interface' as 'struct' for COM support. i2pd's I2CP.h uses it as a
+// parameter name (I2CPServer(const std::string& interface, ...)),
+// causing a parse error. Undef before including any i2pd headers.
+#undef interface
+#endif
+
 // i2pd C++ API
 #include "Config.h"
 #include "Log.h"
