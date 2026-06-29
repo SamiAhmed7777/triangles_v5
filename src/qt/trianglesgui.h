@@ -112,7 +112,6 @@ private:
     QLabel *labelOnionAddress;
     QLabel *labelI2PAddress;
     QLabel *labelV3Icon;
-    QLabel *labelI2PAddress;
     QLabel *labelI2PIcon;
     QLabel *labelTorIcon;
     QLabel *progressBarLabel;
