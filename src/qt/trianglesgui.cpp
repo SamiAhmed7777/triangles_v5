@@ -43,6 +43,7 @@
 #include "wallet.h"
 #include "tor/tor_embedded.h"
 #include "tor/onion_v3.h"
+#include "i2p.h"
 
 #ifdef Q_OS_MAC
 #include "macdockiconhandler.h"
@@ -348,6 +349,12 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     labelOnionAddress->setCursor(Qt::PointingHandCursor);
     labelOnionAddress->installEventFilter(this);
 
+    // I2P address, stacked directly above the .onion address (click to copy)
+    labelI2PAddress = ui->label_i2p;
+    labelI2PAddress->setVisible(false);
+    labelI2PAddress->setCursor(Qt::PointingHandCursor);
+    labelI2PAddress->installEventFilter(this);
+
     // V3 indicator next to staking icon (hidden until onion is active)
     labelV3Icon = ui->label_v3;
     labelV3Icon->setVisible(false);
@@ -356,6 +363,11 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     connect(timerOnion, SIGNAL(timeout()), this, SLOT(updateOnionAddress()));
     timerOnion->start(5000);
     updateOnionAddress();
+
+    QTimer *timerI2P = new QTimer(this);
+    connect(timerI2P, SIGNAL(timeout()), this, SLOT(updateI2PAddress()));
+    timerI2P->start(5000);
+    updateI2PAddress();
 
     QTimer *timerShutdown = new QTimer(this);
     connect(timerShutdown, SIGNAL(timeout()), this, SLOT(detectShutdown()));
@@ -1327,6 +1339,16 @@ bool TrianglesGUI::eventFilter(QObject *object, QEvent *event)
         }
         return true;
     }
+    if (object == labelI2PAddress && event->type() == QEvent::MouseButtonPress)
+    {
+        QString addr = labelI2PAddress->text();
+        if (!addr.isEmpty())
+        {
+            QApplication::clipboard()->setText(addr);
+            QToolTip::showText(QCursor::pos(), tr("Copied!"), labelI2PAddress);
+        }
+        return true;
+    }
     return QMainWindow::eventFilter(object, event);
 }
 
@@ -1453,6 +1475,7 @@ void TrianglesGUI::menuOperationsRequested()
     QAction* unlockWalletStaking = menu.addAction(QIcon(":/menu_16/unlock"), tr("&Unlock Wallet...").remove('&').remove("..."));
     QAction* lockWallet = menu.addAction(QIcon(":/menu_16/lock"), tr("&Lock Wallet...").remove('&').remove("..."));
     QAction* changePassword = menu.addAction(QIcon(":/menu_16/passphrase"), tr("&Change Passphrase...").remove('&').remove("..."));
+    QAction* hdSeed = menu.addAction(QIcon(":/menu_16/passphrase"), tr("Seed Phrase (HD Backup)..."));
     QAction* signMessage = menu.addAction(QIcon(":/menu_16/sign"), tr("Sign &message...").remove('&').remove("..."));
     QAction* verifySignature = menu.addAction(QIcon(":/menu_16/verify"), tr("&Verify message...").remove('&').remove("..."));
 
@@ -1512,6 +1535,10 @@ void TrianglesGUI::menuOperationsRequested()
     {
         if (walletModel->getEncryptionStatus() == WalletModel::Unlocked || walletModel->getEncryptionStatus() == WalletModel::Locked)
             changePassphrase();
+    }
+    else if (selected == hdSeed)
+    {
+        hdSeedManager();
     }
     else if (selected == signMessage)
     {
@@ -1796,6 +1823,32 @@ void TrianglesGUI::updateOnionAddress()
     labelOnionAddress->setText(QString::fromStdString(onionAddress));
     labelOnionAddress->setToolTip(tr("This wallet's Tor .onion address. Selectable — right-click to copy."));
     labelOnionAddress->setVisible(true);
+}
+
+void TrianglesGUI::updateI2PAddress()
+{
+    if (!labelI2PAddress)
+        return;
+
+    std::string i2pAddress;
+    if (CI2PSession::GetInstance()->IsActive())
+        i2pAddress = CI2PSession::GetInstance()->GetB32Address();
+
+    // Respect the same visibility preference as the onion address.
+    if (clientModel && clientModel->getOptionsModel() &&
+        !clientModel->getOptionsModel()->getShowOnionAddress()) {
+        labelI2PAddress->setVisible(false);
+        return;
+    }
+
+    if (i2pAddress.empty()) {
+        labelI2PAddress->setVisible(false);
+        return;
+    }
+
+    labelI2PAddress->setText(QString::fromStdString(i2pAddress));
+    labelI2PAddress->setToolTip(tr("This wallet's I2P .b32.i2p address. Selectable — right-click to copy."));
+    labelI2PAddress->setVisible(true);
 }
 
 

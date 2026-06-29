@@ -53,6 +53,8 @@ set(CORE_SOURCES
     net.cpp
     net_bootstrap.cpp
     netbase.cpp
+    i2p.cpp
+    i2p_process.cpp
     protocol.cpp
     script.cpp
     sync.cpp

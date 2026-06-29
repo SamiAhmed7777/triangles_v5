@@ -3831,6 +3831,18 @@ bool FastImportBlockFile()
             int nApplied = 0;
             for (CBlockIndex* pindex : vMain)
             {
+                // Genesis (height 0) is a hardcoded special block that is not
+                // re-read from disk this way; it contributes nothing to supply
+                // and the genesis-walk audit skips it identically. Carry the
+                // running supply (0) forward and move on.
+                if (pindex->nHeight == 0)
+                {
+                    pindex->nMint = 0;
+                    pindex->nMoneySupply = nRunningSupply; // still 0 here
+                    txdb.WriteBlockIndex(CDiskBlockIndex(pindex));
+                    continue;
+                }
+
                 CBlock blockMain;
                 if (!blockMain.ReadFromDisk(pindex))
                     return error("FastImportBlockFile: ReadFromDisk failed at height %d", pindex->nHeight);

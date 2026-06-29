@@ -600,6 +600,7 @@ void CNetAddr::Init()
     memset(ip, 0, sizeof(ip));
     memset(tor_v3_pubkey, 0, sizeof(tor_v3_pubkey));
     m_is_tor_v3 = false;
+    m_is_i2p = false;
 }
 
 void CNetAddr::SetIP(const CNetAddr& ipIn)
@@ -607,6 +608,7 @@ void CNetAddr::SetIP(const CNetAddr& ipIn)
     memcpy(ip, ipIn.ip, sizeof(ip));
     memcpy(tor_v3_pubkey, ipIn.tor_v3_pubkey, sizeof(tor_v3_pubkey));
     m_is_tor_v3 = ipIn.m_is_tor_v3;
+    m_is_i2p = ipIn.m_is_i2p;
 }
 
 static const unsigned char pchOnionCat[] = {0xFD,0x87,0xD8,0x7E,0xEB,0x43};
@@ -648,6 +650,22 @@ bool CNetAddr::SetSpecial(const std::string &strName)
         memcpy(ip, pchOnionCat, sizeof(pchGarliCat));
         for (unsigned int i=0; i<16-sizeof(pchGarliCat); i++)
             ip[i + sizeof(pchGarliCat)] = vchAddr[i];
+        return true;
+    }
+    // Modern I2P base32 address: 52 base32 chars = SHA-256(destination) (32 bytes)
+    // rendered as "<b32>.b32.i2p". Store the hash and flag this as an I2P address.
+    if (strName.size()>8 && strName.substr(strName.size() - 8, 8) == ".b32.i2p") {
+        std::string addrPart = strName.substr(0, strName.size() - 8);
+        std::vector<unsigned char> vchAddr = DecodeBase32(addrPart.c_str());
+        if (vchAddr.size() != 32)
+            return false;
+        // Keep the GarliCat prefix in ip[] so legacy reachability checks that
+        // look for unique-local space still treat this as a routable overlay.
+        memcpy(ip, pchGarliCat, sizeof(pchGarliCat));
+        memset(ip + sizeof(pchGarliCat), 0, 16 - sizeof(pchGarliCat));
+        memcpy(tor_v3_pubkey, vchAddr.data(), 32);
+        m_is_i2p = true;
+        m_is_tor_v3 = false;
         return true;
     }
     return false;
@@ -772,7 +790,7 @@ bool CNetAddr::IsTorV3() const
 
 bool CNetAddr::IsI2P() const
 {
-    return (memcmp(ip, pchGarliCat, sizeof(pchGarliCat)) == 0);
+    return m_is_i2p || (memcmp(ip, pchGarliCat, sizeof(pchGarliCat)) == 0);
 }
 
 bool CNetAddr::IsLocal() const
@@ -878,6 +896,13 @@ std::string CNetAddr::ToStringIP() const
     }
     if (IsTor())
         return EncodeBase32(&ip[6], 10) + ".onion";
+    if (m_is_i2p) {
+        // Modern I2P: base32 of the 32-byte destination hash, unpadded.
+        std::string b32 = EncodeBase32(tor_v3_pubkey, 32);
+        while (!b32.empty() && b32[b32.size() - 1] == '=')
+            b32.erase(b32.size() - 1);
+        return b32 + ".b32.i2p";
+    }
     if (IsI2P())
         return EncodeBase32(&ip[6], 10) + ".oc.b32.i2p";
     CService serv(*this, 0);
@@ -911,12 +936,14 @@ bool operator==(const CNetAddr& a, const CNetAddr& b)
 {
     if (a.m_is_tor_v3 || b.m_is_tor_v3)
         return a.m_is_tor_v3 == b.m_is_tor_v3 && memcmp(a.tor_v3_pubkey, b.tor_v3_pubkey, 32) == 0;
+    if (a.m_is_i2p || b.m_is_i2p)
+        return a.m_is_i2p == b.m_is_i2p && memcmp(a.tor_v3_pubkey, b.tor_v3_pubkey, 32) == 0;
     return (memcmp(a.ip, b.ip, 16) == 0);
 }
 
 bool operator!=(const CNetAddr& a, const CNetAddr& b)
 {
-    return (memcmp(a.ip, b.ip, 16) != 0);
+    return !(a == b);
 }
 
 bool operator<(const CNetAddr& a, const CNetAddr& b)
@@ -924,6 +951,10 @@ bool operator<(const CNetAddr& a, const CNetAddr& b)
     if (a.m_is_tor_v3 != b.m_is_tor_v3)
         return !a.m_is_tor_v3; // non-v3 sorts before v3
     if (a.m_is_tor_v3)
+        return memcmp(a.tor_v3_pubkey, b.tor_v3_pubkey, 32) < 0;
+    if (a.m_is_i2p != b.m_is_i2p)
+        return !a.m_is_i2p; // non-i2p sorts before i2p
+    if (a.m_is_i2p)
         return memcmp(a.tor_v3_pubkey, b.tor_v3_pubkey, 32) < 0;
     return (memcmp(a.ip, b.ip, 16) < 0);
 }
@@ -948,6 +979,17 @@ bool CNetAddr::GetIn6Addr(struct in6_addr* pipv6Addr) const
 // no two connections will be attempted to addresses with the same group
 std::vector<unsigned char> CNetAddr::GetGroup() const
 {
+    // Modern I2P addresses keep their identifying bytes in the 32-byte
+    // destination-hash field (ip[] only holds the overlay prefix), so derive
+    // the group from the hash to keep peers in distinct groups.
+    if (m_is_i2p) {
+        std::vector<unsigned char> vch;
+        vch.push_back(NET_I2P);
+        vch.push_back(tor_v3_pubkey[0]);
+        vch.push_back(tor_v3_pubkey[1]);
+        return vch;
+    }
+
     std::vector<unsigned char> vchRet;
     int nClass = NET_IPV6;
     int nStartByte = 0;
@@ -1022,7 +1064,7 @@ std::vector<unsigned char> CNetAddr::GetGroup() const
 uint64_t CNetAddr::GetHash() const
 {
     uint256 hash;
-    if (m_is_tor_v3)
+    if (m_is_tor_v3 || m_is_i2p)
         hash = Hash(&tor_v3_pubkey[0], &tor_v3_pubkey[32]);
     else
         hash = Hash(&ip[0], &ip[16]);

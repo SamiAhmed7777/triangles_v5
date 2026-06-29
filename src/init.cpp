@@ -19,6 +19,8 @@
 #include "tor/tor_embedded.h"
 #include "tor/onion_v3.h"
 #include "tor/tor_process.h"
+#include "i2p.h"
+#include "i2p_process.h"
 #ifdef ENABLE_ZMQ
 #include "zmqpublishnotifier.h"
 #endif
@@ -241,6 +243,10 @@ void Shutdown(void* parg)
             pScriptCheckQueue.reset();
         }
 
+        // Stop the I2P SAM session and its accept loop, then the i2pd router.
+        StopI2P();
+        StopEmbeddedI2P();
+
         // NOW safe to destroy Tor state - all threads have stopped
         ShutdownTorV3();
         StopEmbeddedTor();
@@ -421,6 +427,8 @@ std::string HelpMessage()
         "  -torsocks=<port>       " + _("Set embedded or managed Tor SOCKS proxy port (default: 19099)") + "\n" +
         "  -torhiddenservice      " + _("Enable the managed Tor hidden service (default: 1)") + "\n" +
         "  -torhsport=<port>      " + _("Set embedded or managed Tor hidden service port (default: wallet listen port)") + "\n" +
+        "  -i2p                   " + _("Enable I2P connectivity; auto-launches a bundled i2pd router (default: 1)") + "\n" +
+        "  -i2psam=<ip:port>      " + _("I2P SAM bridge address; non-loopback disables the bundled router (default: 127.0.0.1:7656)") + "\n" +
         //"  -dns                   " + _("Allow DNS lookups for -addnode, -seednode and -connect") + "\n" +
         "  -port=<port>           " + _("Listen for connections on <port> (default: 24112 or testnet: 24111)") + "\n" +
         "  -maxconnections=<n>    " + _("Maintain at most <n> connections to peers (default: 125)") + "\n" +
@@ -1436,6 +1444,45 @@ bool AppInit2()
         if (torStarted) {
             if (!NewThread(ThreadTorMaintenance, nullptr))
                 printf("Warning: ThreadTorMaintenance could not be started\n");
+        }
+
+        // Bring up I2P (SAM) transport alongside Tor so the wallet has both a
+        // .onion and a .b32.i2p address. On by default; disable with -i2p=0.
+        // A bundled i2pd router is launched automatically (mirroring embedded
+        // Tor); if -i2psam points at a non-loopback bridge, or a router is
+        // already running, we use that instead.
+        if (GetBoolArg("-i2p", true)) {
+            int64_t nI2PStart = GetTimeMillis();
+
+            // Resolve the SAM endpoint (default 127.0.0.1:7656).
+            std::string sam = GetArg("-i2psam", "127.0.0.1:7656");
+            int samPort = I2P_DEFAULT_SAM_PORT;
+            std::string samHost = "127.0.0.1";
+            SplitHostPort(sam, samPort, samHost);
+            if (samPort <= 0) samPort = I2P_DEFAULT_SAM_PORT;
+            bool loopback = samHost.empty() || samHost == "127.0.0.1" || samHost == "localhost";
+
+            // Auto-launch our own i2pd only when the bridge is local.
+            if (loopback) {
+                uiInterface.InitMessage(_("Starting the I2P router..."));
+                if (!StartEmbeddedI2P((GetDataDir() / "i2pd").string(), samPort)) {
+                    printf("NOTICE: bundled I2P router unavailable (%s).\n",
+                           CI2PProcess::GetInstance()->GetLastError().c_str());
+                    printf("  I2P will use an external router if one is running on %s.\n", sam.c_str());
+                }
+            }
+
+            uiInterface.InitMessage(_("Connecting to the I2P network..."));
+            bool i2pStarted = StartI2P();
+            StartupPerfLog("i2p_start", GetTimeMillis() - nI2PStart, strprintf("started=%d", i2pStarted));
+            if (i2pStarted) {
+                SetReachable(NET_I2P, true);
+                std::string i2pAddr = CI2PSession::GetInstance()->GetB32Address();
+                printf("I2P network enabled. Our address: %s\n", i2pAddr.c_str());
+            } else {
+                printf("NOTICE: I2P not available this session; continuing with Tor only\n");
+                StopEmbeddedI2P();
+            }
         }
     }
 
