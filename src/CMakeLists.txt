@@ -234,50 +234,54 @@ if(USE_I2P_EMBEDDED)
     )
     # i2pd builds as two static libraries: libi2pd.a (core router) and
     # libi2pd_client.a (SAM, SOCKS, tunnels, client context). Both are needed.
-    # The static libs have circular inter-dependencies and also reference
-    # Boost (filesystem, program_options) and zlib symbols. On MinGW the
-    # Boost:: targets may not exist as CMake imported targets even though
-    # the libraries are installed, so we use raw -l flags as a fallback.
+    # i2pd's own Makefile.mingw links by full static .a paths rather than
+    # -l flags because MinGW's linker is single-pass and CMake imported
+    # targets (Boost::) may not exist on MSYS2. We follow the same pattern:
+    # link the archives, then their Boost/zlib deps as full paths, then
+    # the archives again to resolve the second-pass references.
     target_link_libraries(triangles_common PUBLIC
         "${I2P_SOURCE_ROOT}/libi2pdclient.a"
         "${I2P_SOURCE_ROOT}/libi2pd.a"
         "${I2P_SOURCE_ROOT}/libi2pdlang.a"
-        "${I2P_SOURCE_ROOT}/libi2pdclient.a"
-        "${I2P_SOURCE_ROOT}/libi2pd.a"
-    )
-    # Boost and zlib dependencies of i2pd — these MUST come after the
-    # archives in link order so unresolved symbols get satisfied.
-    if(TARGET Boost::filesystem)
-        target_link_libraries(triangles_common PUBLIC Boost::filesystem)
-    elseif(WIN32)
-        target_link_libraries(triangles_common PUBLIC boost_filesystem-mt)
-    endif()
-    if(TARGET Boost::system)
-        target_link_libraries(triangles_common PUBLIC Boost::system)
-    elseif(WIN32)
-        target_link_libraries(triangles_common PUBLIC boost_system-mt)
-    endif()
-    if(TARGET Boost::program_options)
-        target_link_libraries(triangles_common PUBLIC Boost::program_options)
-    elseif(WIN32)
-        target_link_libraries(triangles_common PUBLIC boost_program_options-mt)
-    endif()
-    target_link_libraries(triangles_common PUBLIC
-        Boost::thread Boost::chrono
-        OpenSSL::SSL OpenSSL::Crypto
-        ZLIB::ZLIB
-    )
-    # List the archives again after Boost/zlib so the linker can resolve
-    # any remaining i2pd→Boost references in a second pass.
-    target_link_libraries(triangles_common PUBLIC
-        "${I2P_SOURCE_ROOT}/libi2pd.a"
-        "${I2P_SOURCE_ROOT}/libi2pdclient.a"
     )
     if(WIN32)
+        # MinGW: link Boost/zlib deps as full static paths, matching i2pd's
+        # own Makefile.mingw. CMake imported targets may not exist here.
+        if(NOT MINGW_PREFIX)
+            if(DEFINED ENV{MINGW_PREFIX})
+                set(MINGW_PREFIX "$ENV{MINGW_PREFIX}")
+            else()
+                set(MINGW_PREFIX "/mingw64")
+            endif()
+        endif()
         target_link_libraries(triangles_common PUBLIC
+            "${MINGW_PREFIX}/lib/libboost_filesystem-mt.a"
+            "${MINGW_PREFIX}/lib/libboost_program_options-mt.a"
+            "${MINGW_PREFIX}/lib/libboost_system-mt.a"
+            "${MINGW_PREFIX}/lib/libssl.a"
+            "${MINGW_PREFIX}/lib/libcrypto.a"
+            "${MINGW_PREFIX}/lib/libz.a"
             -Wl,--allow-multiple-definition
         )
+    else()
+        target_link_libraries(triangles_common PUBLIC
+            Boost::program_options Boost::thread Boost::chrono
+            OpenSSL::SSL OpenSSL::Crypto
+            ZLIB::ZLIB
+        )
+        if(TARGET Boost::filesystem)
+            target_link_libraries(triangles_common PUBLIC Boost::filesystem)
+        endif()
+        if(TARGET Boost::system)
+            target_link_libraries(triangles_common PUBLIC Boost::system)
+        endif()
     endif()
+    # Second pass: list archives again so linker resolves i2pd→Boost refs
+    # that were unsatisfied in the first left-to-right pass.
+    target_link_libraries(triangles_common PUBLIC
+        "${I2P_SOURCE_ROOT}/libi2pd.a"
+        "${I2P_SOURCE_ROOT}/libi2pdclient.a"
+    )
 endif()
 
 # Platform-specific libraries
