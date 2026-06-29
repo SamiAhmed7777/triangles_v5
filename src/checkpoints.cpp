@@ -33,9 +33,10 @@ namespace Checkpoints
         { 10881, uint256("0x4b6554c45e1e6764a6f3c309c47baf53c9edd81f624e52b072518cd15da237e6")},
         { 17650, uint256("0x224940e1f986a202209b8e762728d1452ab45870c308abf84905674acf326a47")},
         // Recent finality pin (PoS era). Closes the long unchecked span from
-        // 17650 to the live tip so stale-bootstrap / low-trust forks below this
-        // height are rejected outright. Hash taken from the canonical chain.
+        // 17650 to the live tip so stale-bootstrap / low-trust forks below
+        // this height are rejected outright. Hash from the canonical chain.
         { 2205000, uint256("0x6bdd3c5e5a32e1dd9a70e705f1a28d1dd84929f89579bd2696d41bc87f39446f")},
+        { 2206004, uint256("0xb34e8e6a7bb7f52167d81aaad4d26f87a876898fdd0fce860916fc1aaf9a2a46")},
     };
 
     // Published UTXO snapshot file SHA256, keyed by snapshot height.
@@ -47,6 +48,7 @@ namespace Checkpoints
     // here. The corresponding (height, blockhash) must already exist in
     // mapCheckpoints / mapCheckpointsTestnet.
     static std::map<int, uint256> mapSnapshotHashes = {
+        { 2206004, uint256("0x1419282dae817315ee1b955543f6248233fe5800f5e8488734a0ece5bd6781ea")},
     };
 
     static std::map<int, uint256> mapSnapshotHashesTestnet = {
