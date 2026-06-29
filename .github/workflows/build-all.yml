@@ -268,6 +268,22 @@ jobs:
           echo "=== dist/ contents ==="
           find dist/ -type f | head -50
 
+      - name: Upload portable wallet zip
+        # Portable Windows GUI wallet ZIP — what users extract to a folder
+        # and run triangles-qt.exe directly. This is what the Chocolatey
+        # package and most manual downloads expect.
+        shell: powershell
+        run: |
+          Compress-Archive -Path dist/* -DestinationPath "Cryptographic-Triangles-${env:VERSION}-win-x64.zip" -Force
+          echo "Created Cryptographic-Triangles-${env:VERSION}-win-x64.zip"
+          Get-Item "Cryptographic-Triangles-${env:VERSION}-win-x64.zip"
+
+      - name: Upload artifact (portable zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-qt-zip
+          path: Cryptographic-Triangles-*-win-x64.zip
+
       - name: Download Tor
         shell: powershell
         run: |
@@ -761,6 +777,8 @@ jobs:
           mkdir -p release
           # Windows Qt installer (setup.exe — includes Tor, Start Menu shortcuts, uninstaller)
           cp artifacts/windows-qt-setup/*.exe release/
+          # Windows Qt portable zip (extract & run — no install required)
+          cp artifacts/windows-qt-zip/*.zip release/
           # Windows daemon (zip with DLLs + Tor)
           cd artifacts/windows-daemon && zip -r "../../release/Cryptographic-Triangles-${VERSION}-win-x64-daemon.zip" . && cd ../..
           # Linux Qt .deb (dpkg -i to install — includes Tor, desktop entry, icon)
