@@ -245,8 +245,10 @@ if(USE_I2P_EMBEDDED)
         "${I2P_SOURCE_ROOT}/libi2pdlang.a"
     )
     if(WIN32)
-        # MinGW: link Boost/zlib deps as full static paths, matching i2pd's
-        # own Makefile.mingw. CMake imported targets may not exist here.
+        # MinGW/MSYS2: Boost:: CMake imported targets are unreliable here.
+        # Use find_library to locate the actual .a/.dll files. Some Boost
+        # libs (e.g. boost_system) are header-only in newer versions and
+        # won't have a .a file at all — that's fine, we skip them.
         if(NOT MINGW_PREFIX)
             if(DEFINED ENV{MINGW_PREFIX})
                 set(MINGW_PREFIX "$ENV{MINGW_PREFIX}")
@@ -254,15 +256,22 @@ if(USE_I2P_EMBEDDED)
                 set(MINGW_PREFIX "/mingw64")
             endif()
         endif()
-        target_link_libraries(triangles_common PUBLIC
-            "${MINGW_PREFIX}/lib/libboost_filesystem-mt.a"
-            "${MINGW_PREFIX}/lib/libboost_program_options-mt.a"
-            "${MINGW_PREFIX}/lib/libboost_system-mt.a"
-            "${MINGW_PREFIX}/lib/libssl.a"
-            "${MINGW_PREFIX}/lib/libcrypto.a"
-            "${MINGW_PREFIX}/lib/libz.a"
-            -Wl,--allow-multiple-definition
-        )
+        find_library(I2P_BOOST_FS  NAMES boost_filesystem-mt boost_filesystem libboost_filesystem-mt  HINTS "${MINGW_PREFIX}/lib")
+        find_library(I2P_BOOST_PO  NAMES boost_program_options-mt boost_program_options libboost_program_options-mt  HINTS "${MINGW_PREFIX}/lib")
+        find_library(I2P_BOOST_SYS NAMES boost_system-mt boost_system libboost_system-mt  HINTS "${MINGW_PREFIX}/lib")
+        find_library(I2P_SSL       NAMES ssl libssl  HINTS "${MINGW_PREFIX}/lib")
+        find_library(I2P_CRYPTO    NAMES crypto libcrypto  HINTS "${MINGW_PREFIX}/lib")
+        find_library(I2P_Z         NAMES z libz zlib  HINTS "${MINGW_PREFIX}/lib")
+        set(I2P_WIN_LIBS "")
+        foreach(lib I2P_BOOST_FS I2P_BOOST_PO I2P_BOOST_SYS I2P_SSL I2P_CRYPTO I2P_Z)
+            if(${lib})
+                list(APPEND I2P_WIN_LIBS "${${lib}}")
+                message(STATUS "  I2P link: ${lib} = ${${lib}}")
+            else()
+                message(STATUS "  I2P link: ${lib} = (not found, header-only?)")
+            endif()
+        endforeach()
+        target_link_libraries(triangles_common PUBLIC ${I2P_WIN_LIBS} -Wl,--allow-multiple-definition)
     else()
         target_link_libraries(triangles_common PUBLIC
             Boost::program_options Boost::thread Boost::chrono
