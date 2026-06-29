@@ -591,6 +591,16 @@ CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
         return nullptr;
     }
 
+    // For I2P make sure addrConnect carries the destination so the resulting
+    // CNode is labelled correctly even when we were given a bare pszDest.
+    if (fI2P && !addrConnect.IsI2P()) {
+        std::string i2pHost = addrStr;
+        size_t i2pEnd = i2pHost.find(".i2p");
+        if (i2pEnd != std::string::npos)
+            i2pHost = i2pHost.substr(0, i2pEnd + 4);
+        addrConnect.SetSpecial(i2pHost);
+    }
+
     if (pszDest == nullptr) {
         if (IsLocal(addrConnect))
             return nullptr;
@@ -614,8 +624,20 @@ CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
         pszDest ? 0 : (double)(GetAdjustedTime() - addrConnect.nTime)/3600.0);
 
     // Connect
-    SOCKET hSocket;
-    if (pszDest ? ConnectSocketByName(addrConnect, hSocket, pszDest, GetDefaultPort()) : ConnectSocket(addrConnect, hSocket))
+    SOCKET hSocket = INVALID_SOCKET;
+    bool fConnected;
+    if (fI2P) {
+        // Route through the I2P SAM session. Strip any :port suffix; I2P peers
+        // are reached purely by destination.
+        std::string i2pDest = addrStr;
+        size_t i2pEnd = i2pDest.find(".i2p");
+        if (i2pEnd != std::string::npos)
+            i2pDest = i2pDest.substr(0, i2pEnd + 4);
+        fConnected = CI2PSession::GetInstance()->Connect(i2pDest, hSocket);
+    } else {
+        fConnected = pszDest ? ConnectSocketByName(addrConnect, hSocket, pszDest, GetDefaultPort()) : ConnectSocket(addrConnect, hSocket);
+    }
+    if (fConnected)
     {
         addrman.Attempt(addrConnect);
 
@@ -647,6 +669,54 @@ CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
     else
     {
         return nullptr;
+    }
+}
+
+// Adopt a connected I2P SAM data socket (from the accept loop in i2p.cpp) as an
+// inbound peer. The socket arrives in blocking mode; switch it to non-blocking
+// to match the rest of the socket handler, then register the node.
+void AddI2PInboundNode(SOCKET hSocket, const CAddress& addr)
+{
+    if (hSocket == INVALID_SOCKET)
+        return;
+
+    if (CNode::IsBanned(addr)) {
+        printf("I2P inbound from %s dropped (banned)\n", addr.ToString().c_str());
+        closesocket(hSocket);
+        return;
+    }
+
+    // Honour the inbound connection limit.
+    int nInbound = 0;
+    {
+        LOCK(cs_vNodes);
+        for (CNode* pnode : vNodes)
+            if (pnode->fInbound)
+                nInbound++;
+    }
+    int nMaxInbound = GetArg("-maxconnections", 125) - MAX_OUTBOUND_CONNECTIONS;
+    if (nInbound >= nMaxInbound) {
+        printf("I2P inbound from %s dropped (too many inbound)\n", addr.ToString().c_str());
+        closesocket(hSocket);
+        return;
+    }
+
+#ifdef WIN32
+    u_long nOne = 1;
+    if (ioctlsocket(hSocket, FIONBIO, &nOne) == SOCKET_ERROR)
+        printf("AddI2PInboundNode() : ioctlsocket non-blocking setting failed, error %d\n", WSAGetLastError());
+#else
+    if (fcntl(hSocket, F_SETFL, O_NONBLOCK) == SOCKET_ERROR)
+        printf("AddI2PInboundNode() : fcntl non-blocking setting failed, error %d\n", errno);
+#endif
+
+    printf("accepted I2P connection %s\n", addr.ToString().c_str());
+    CNode* pnode = new CNode(hSocket, addr, "", true);
+    pnode->AddRef();
+    pnode->nTimeConnected = GetTime();
+    {
+        LOCK(cs_vNodes);
+        vNodes.push_back(pnode);
     }
 }
 

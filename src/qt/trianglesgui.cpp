@@ -349,6 +349,12 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     labelOnionAddress->setCursor(Qt::PointingHandCursor);
     labelOnionAddress->installEventFilter(this);
 
+    // I2P address, stacked directly above the .onion address (click to copy)
+    labelI2PAddress = ui->label_i2p;
+    labelI2PAddress->setVisible(false);
+    labelI2PAddress->setCursor(Qt::PointingHandCursor);
+    labelI2PAddress->installEventFilter(this);
+
     // V3 indicator next to staking icon (hidden until onion is active)
     labelV3Icon = ui->label_v3;
     labelV3Icon->setVisible(false);
@@ -370,7 +376,6 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
 
     labelI2PIcon = ui->label_i2p_icon;
     labelI2PIcon->setVisible(false);
-
     QTimer *timerI2P = new QTimer(this);
     connect(timerI2P, SIGNAL(timeout()), this, SLOT(updateI2PAddress()));
     timerI2P->start(5000);

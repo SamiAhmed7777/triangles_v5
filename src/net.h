@@ -37,6 +37,8 @@ void AddressCurrentlyConnected(const CService& addr);
 CNode* FindNode(const CNetAddr& ip);
 CNode* FindNode(const CService& ip);
 CNode* ConnectNode(CAddress addrConnect, const char *strDest = nullptr);
+// Adopt a connected I2P SAM data socket as an inbound peer (called from i2p.cpp).
+void AddI2PInboundNode(SOCKET hSocket, const CAddress& addr);
 void MapPort();
 unsigned short GetListenPort();
 bool BindListenPort(const CService &bindAddr, std::string& strError=REF(std::string()));

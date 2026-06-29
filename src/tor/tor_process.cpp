@@ -311,6 +311,24 @@ bool CTorProcess::WriteTorrc()
     torrc << "AvoidDiskWrites 1\n";
     torrc << "Log notice stderr\n";
 
+    // Append user-supplied extra Tor configuration if present. This lets
+    // operators on censored / DPI-filtered networks add Bridge lines,
+    // ClientTransportPlugin (obfs4), or a Socks5Proxy/HTTPSProxy upstream so
+    // Tor can reach the network when direct connections are blocked. The file
+    // is never overwritten by the wallet; only the auto-generated torrc is.
+    {
+        fs::path extraPath = dataPath / "torrc.extra";
+        if (fs::exists(extraPath)) {
+            std::ifstream extra(extraPath.string().c_str());
+            if (extra.is_open()) {
+                torrc << "\n# ---- appended from torrc.extra (user-managed) ----\n";
+                torrc << extra.rdbuf();
+                torrc << "\n";
+                printf("Tor: appended user configuration from %s\n", extraPath.string().c_str());
+            }
+        }
+    }
+
     torrc.close();
 
     if (hiddenServiceEnabled) {

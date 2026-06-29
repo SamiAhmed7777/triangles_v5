@@ -10,6 +10,9 @@
 #include "db.h"
 #include "walletdb.h"
 #include "net_bootstrap.h"
+#include "i2p.h"
+#include "tor/onion_v3.h"
+#include "tor/tor_embedded.h"
 
 using namespace json_spirit;
 using namespace std;
@@ -34,12 +37,34 @@ Value getnetworkinfo(const Array& params, bool fHelp)
     healthObj.push_back(Pair("lastblocktime", static_cast<int64_t>(health.lastBlockTime)));
     healthObj.push_back(Pair("networkmode", "tor_native"));
 
+    // Tor .onion address (wallet hidden service).
+    std::string onionAddress = CTorV3Manager::GetInstance()->GetWalletOnionAddress();
+    if (onionAddress.empty())
+        onionAddress = CTorEmbedded::GetInstance()->GetOnionAddress();
+
+    // I2P session state and .b32.i2p address.
+    CI2PSession* i2p = CI2PSession::GetInstance();
+    int nI2PPeers = 0;
+    {
+        LOCK(cs_vNodes);
+        for (CNode* pnode : vNodes)
+            if (pnode->addr.IsI2P())
+                nI2PPeers++;
+    }
+    Object i2pObj;
+    i2pObj.push_back(Pair("enabled", i2p->IsEnabled()));
+    i2pObj.push_back(Pair("active",  i2p->IsActive()));
+    i2pObj.push_back(Pair("address", i2p->GetB32Address()));
+    i2pObj.push_back(Pair("peers",   nI2PPeers));
+
     Object obj;
     obj.push_back(Pair("version",         FormatFullVersion()));
     obj.push_back(Pair("protocolversion", (int)PROTOCOL_VERSION));
     obj.push_back(Pair("connections",     (int)vNodes.size()));
     obj.push_back(Pair("proxy",           (proxy.first.IsValid() ? proxy.first.ToStringIPPort() : string())));
     obj.push_back(Pair("ip",             addrSeenByPeer.ToStringIP()));
+    obj.push_back(Pair("toraddress",     onionAddress));
+    obj.push_back(Pair("i2p",            i2pObj));
     obj.push_back(Pair("localservices",  strprintf("%016"PRIx64, nLocalServices)));
     obj.push_back(Pair("testnet",        fTestNet));
     obj.push_back(Pair("networkhealth",  healthObj));

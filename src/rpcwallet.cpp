@@ -9,6 +9,9 @@
 #include "init.h"
 #include "base58.h"
 #include "smessage.h"
+#include "i2p.h"
+#include "tor/onion_v3.h"
+#include "tor/tor_embedded.h"
 
 using namespace json_spirit;
 using namespace std;
@@ -99,6 +102,13 @@ Value getinfo(const Array& params, bool fHelp)
     obj.push_back(Pair("connections",   (int)vNodes.size()));
     obj.push_back(Pair("proxy",         (proxy.first.IsValid() ? proxy.first.ToStringIPPort() : string())));
     obj.push_back(Pair("ip",            addrSeenByPeer.ToStringIP()));
+
+    // Anonymous network identities.
+    std::string onionAddress = CTorV3Manager::GetInstance()->GetWalletOnionAddress();
+    if (onionAddress.empty())
+        onionAddress = CTorEmbedded::GetInstance()->GetOnionAddress();
+    obj.push_back(Pair("toraddress",    onionAddress));
+    obj.push_back(Pair("i2paddress",    CI2PSession::GetInstance()->GetB32Address()));
 
     diff.push_back(Pair("proof-of-work",  GetDifficulty()));
     diff.push_back(Pair("proof-of-stake", GetDifficulty(GetLastBlockIndex(pindexBest, true))));
