@@ -10,7 +10,7 @@
 #include "db.h"
 #include "walletdb.h"
 #include "net_bootstrap.h"
-#include "i2p.h"
+#include "i2p/i2p_embedded.h"
 #include "tor/onion_v3.h"
 #include "tor/tor_embedded.h"
 
@@ -42,8 +42,8 @@ Value getnetworkinfo(const Array& params, bool fHelp)
     if (onionAddress.empty())
         onionAddress = CTorEmbedded::GetInstance()->GetOnionAddress();
 
-    // I2P session state and .b32.i2p address.
-    CI2PSession* i2p = CI2PSession::GetInstance();
+    // I2P embedded router state and .b32.i2p address.
+    CI2PEmbedded* i2p = CI2PEmbedded::GetInstance();
     int nI2PPeers = 0;
     {
         LOCK(cs_vNodes);
@@ -52,9 +52,9 @@ Value getnetworkinfo(const Array& params, bool fHelp)
                 nI2PPeers++;
     }
     Object i2pObj;
-    i2pObj.push_back(Pair("enabled", i2p->IsEnabled()));
-    i2pObj.push_back(Pair("active",  i2p->IsActive()));
-    i2pObj.push_back(Pair("address", i2p->GetB32Address()));
+    i2pObj.push_back(Pair("enabled", i2p->IsRunning()));
+    i2pObj.push_back(Pair("active",  i2p->IsRunning()));
+    i2pObj.push_back(Pair("address", i2p->GetI2PAddress()));
     i2pObj.push_back(Pair("peers",   nI2PPeers));
 
     Object obj;

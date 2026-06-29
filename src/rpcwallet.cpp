@@ -9,7 +9,7 @@
 #include "init.h"
 #include "base58.h"
 #include "smessage.h"
-#include "i2p.h"
+#include "i2p/i2p_embedded.h"
 #include "tor/onion_v3.h"
 #include "tor/tor_embedded.h"
 
@@ -108,7 +108,7 @@ Value getinfo(const Array& params, bool fHelp)
     if (onionAddress.empty())
         onionAddress = CTorEmbedded::GetInstance()->GetOnionAddress();
     obj.push_back(Pair("toraddress",    onionAddress));
-    obj.push_back(Pair("i2paddress",    CI2PSession::GetInstance()->GetB32Address()));
+    obj.push_back(Pair("i2paddress",    CI2PEmbedded::GetInstance()->GetI2PAddress()));
 
     diff.push_back(Pair("proof-of-work",  GetDifficulty()));
     diff.push_back(Pair("proof-of-stake", GetDifficulty(GetLastBlockIndex(pindexBest, true))));

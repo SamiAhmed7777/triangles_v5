@@ -591,16 +591,6 @@ CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
         return nullptr;
     }
 
-    // For I2P make sure addrConnect carries the destination so the resulting
-    // CNode is labelled correctly even when we were given a bare pszDest.
-    if (fI2P && !addrConnect.IsI2P()) {
-        std::string i2pHost = addrStr;
-        size_t i2pEnd = i2pHost.find(".i2p");
-        if (i2pEnd != std::string::npos)
-            i2pHost = i2pHost.substr(0, i2pEnd + 4);
-        addrConnect.SetSpecial(i2pHost);
-    }
-
     if (pszDest == nullptr) {
         if (IsLocal(addrConnect))
             return nullptr;
@@ -624,20 +614,8 @@ CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
         pszDest ? 0 : (double)(GetAdjustedTime() - addrConnect.nTime)/3600.0);
 
     // Connect
-    SOCKET hSocket = INVALID_SOCKET;
-    bool fConnected;
-    if (fI2P) {
-        // Route through the I2P SAM session. Strip any :port suffix; I2P peers
-        // are reached purely by destination.
-        std::string i2pDest = addrStr;
-        size_t i2pEnd = i2pDest.find(".i2p");
-        if (i2pEnd != std::string::npos)
-            i2pDest = i2pDest.substr(0, i2pEnd + 4);
-        fConnected = CI2PSession::GetInstance()->Connect(i2pDest, hSocket);
-    } else {
-        fConnected = pszDest ? ConnectSocketByName(addrConnect, hSocket, pszDest, GetDefaultPort()) : ConnectSocket(addrConnect, hSocket);
-    }
-    if (fConnected)
+    SOCKET hSocket;
+    if (pszDest ? ConnectSocketByName(addrConnect, hSocket, pszDest, GetDefaultPort()) : ConnectSocket(addrConnect, hSocket))
     {
         addrman.Attempt(addrConnect);
 

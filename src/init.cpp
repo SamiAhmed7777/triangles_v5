@@ -1706,7 +1706,7 @@ bool AppInit2()
             StartupPerfLog("i2p_start", GetTimeMillis() - nI2PStart, strprintf("started=%d", i2pStarted));
             if (i2pStarted) {
                 SetReachable(NET_I2P, true);
-                std::string i2pAddr = CI2PSession::GetInstance()->GetB32Address();
+                std::string i2pAddr = CI2PEmbedded::GetInstance()->GetI2PAddress();
                 printf("I2P network enabled. Our address: %s\n", i2pAddr.c_str());
             } else {
                 printf("NOTICE: I2P not available this session; continuing with Tor only\n");
