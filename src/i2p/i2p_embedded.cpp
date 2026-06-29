@@ -569,7 +569,7 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
             if (socksReady && samReady) {
                 printf("Embedded I2P: all I2P endpoints ready (SOCKS %d + SAM %d)\n",
                        socksPort, samPort);
-                return true;
+                break;
             }
 
             if (i > 0 && i % 30 == 0) {
@@ -579,12 +579,16 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
             }
         }
 
-        // Not everything ready after 120s — I2P may still be building tunnels.
-        // We return true anyway; connections will retry once tunnels are up.
-        printf("Embedded I2P: bootstrap incomplete after 120s"
-               " (SOCKS:%s SAM:%s) — will retry on demand.\n",
-               socksReady ? "ready" : "pending",
-               samReady ? "ready" : "pending");
+        // Populate the .b32.i2p address from the router's identity hash.
+        // This is the I2P address that appears in the Qt status bar.
+        try {
+            auto identHash = i2p::context.GetRouterInfo().GetIdentHash();
+            i2pHostname = identHash.ToBase32() + ".b32.i2p";
+            printf("Embedded I2P: router address = %s\n", i2pHostname.c_str());
+        } catch (...) {
+            printf("Embedded I2P: could not retrieve router address yet\n");
+        }
+
         return true;
 
     } catch (const std::exception& e) {
