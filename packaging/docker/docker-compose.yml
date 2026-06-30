@@ -3,7 +3,7 @@ version: "3.8"
 services:
   trianglesd:
     build: .
-    image: cryptographic-triangles/trianglesd:5.9.24
+    image: cryptographic-triangles/trianglesd:6.1.0
     container_name: trianglesd
     restart: unless-stopped
     ports:
