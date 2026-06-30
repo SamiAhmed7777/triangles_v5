@@ -175,6 +175,7 @@ jobs:
             mingw-w64-x86_64-miniupnpc
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-rocksdb
+            mingw-w64-x86_64-sqlite3
             mingw-w64-x86_64-autotools
 
       - name: Set VERSION
@@ -352,6 +353,7 @@ jobs:
             mingw-w64-x86_64-miniupnpc
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-rocksdb
+            mingw-w64-x86_64-sqlite3
             mingw-w64-x86_64-autotools
 
       - name: Configure
