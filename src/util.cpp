@@ -41,18 +41,6 @@
 #include "version.h"
 #include "ui_interface.h"
 
-// Work around clang compilation problem in Boost 1.46:
-// /usr/include/boost/program_options/detail/config_file.hpp:163:17: error: call to function 'to_internal' that is neither visible in the template definition nor found by argument-dependent lookup
-// See also: http://stackoverflow.com/questions/10020179/compilation-fail-in-boost-librairies-program-options
-//           http://clang.debian.net/status.php?version=3.0&key=CANNOT_FIND_FUNCTION
-namespace boost {
-    namespace program_options {
-        std::string to_internal(const std::string&);
-    }
-}
-
-#include <boost/program_options/detail/config_file.hpp>
-#include <boost/program_options/parsers.hpp>
 #include <filesystem>
 #include <fstream>
 #include <thread>
@@ -1137,24 +1125,81 @@ std::filesystem::path GetConfigFile()
 void ReadConfigFile(map<string, string>& mapSettingsRet,
                     map<string, vector<string> >& mapMultiSettingsRet)
 {
+    // Modernization: replaced boost::program_options::detail::config_file_iterator
+    // with a std::ifstream + getline parser. Supports the same syntax that the
+    // triangle.conf files actually use:
+    //   - `key=value` or `key = value` (whitespace around = is ignored)
+    //   - `#` comments and blank lines are skipped
+    //   - Surrounding double quotes are stripped from values
+    //   - Same `InterpretNegativeSetting` semantics as the Boost version
+    //   - Command-line settings still take precedence (we don't overwrite
+    //     keys that are already in mapSettingsRet)
+    //
+    // Intentionally NOT supported (different from Boost):
+    //   - Backslash line continuations
+    //   - Escape sequences inside quoted values (\n, \t, etc.)
+    //   - Section headers ([section])
+    // If any of those become needed, the actual conf syntax in
+    // contrib/triangles.conf.example should be extended first.
     std::ifstream streamConfig(GetConfigFile());
     if (!streamConfig.good())
         return; // No triangles.conf file is OK
 
-    set<string> setOptions;
-    setOptions.insert("*");
-
-    for (boost::program_options::detail::config_file_iterator it(streamConfig, setOptions), end; it != end; ++it)
+    string strLine;
+    while (std::getline(streamConfig, strLine))
     {
-        // Don't overwrite existing settings so command line settings override triangles.conf
-        string strKey = string("-") + it->string_key;
-        if (mapSettingsRet.count(strKey) == 0)
+        // Strip trailing CR (Windows line endings)
+        if (!strLine.empty() && strLine.back() == '\r')
+            strLine.pop_back();
+
+        // Trim leading whitespace
+        size_t start = strLine.find_first_not_of(" \t");
+        if (start == string::npos)
+            continue;                   // blank line
+        if (strLine[start] == '#')
+            continue;                   // comment
+
+        // Find '=' separator
+        size_t eq = strLine.find('=', start);
+        if (eq == string::npos)
+            continue;                   // malformed; skip silently
+
+        // Extract key, trim trailing whitespace
+        string strKey = strLine.substr(start, eq - start);
+        size_t keyEnd = strKey.find_last_not_of(" \t");
+        if (keyEnd == string::npos)
+            continue;                   // empty key
+        strKey = strKey.substr(0, keyEnd + 1);
+
+        // Extract value, trim leading whitespace
+        size_t valStart = eq + 1;
+        valStart = strLine.find_first_not_of(" \t", valStart);
+        if (valStart == string::npos)
+            valStart = eq + 1;          // empty value, no leading ws
+
+        string strValue = strLine.substr(valStart);
+
+        // Trim trailing whitespace from value
+        size_t valEnd = strValue.find_last_not_of(" \t");
+        if (valEnd != string::npos)
+            strValue = strValue.substr(0, valEnd + 1);
+
+        // Strip surrounding double quotes if present
+        if (strValue.size() >= 2 &&
+            strValue.front() == '"' && strValue.back() == '"')
         {
-            mapSettingsRet[strKey] = it->value[0];
-            // interpret nofoo=1 as foo=0 (and nofoo=0 as foo=1) as long as foo not set)
-            InterpretNegativeSetting(strKey, mapSettingsRet);
+            strValue = strValue.substr(1, strValue.size() - 2);
         }
-        mapMultiSettingsRet[strKey].push_back(it->value[0]);
+
+        // Don't overwrite existing settings so command line settings override triangles.conf
+        string strSetting = string("-") + strKey;
+        if (mapSettingsRet.count(strSetting) == 0)
+        {
+            mapSettingsRet[strSetting] = strValue;
+            // interpret nofoo=1 as foo=0 (and nofoo=0 as foo=1) as long as foo not set
+            InterpretNegativeSetting(strSetting, mapSettingsRet);
+        }
+        mapMultiSettingsRet[strSetting].push_back(strValue);
     }
 }
 
