@@ -63,7 +63,6 @@ static bool InitWarning(const std::string& str);
 #endif
 
 using namespace std;
-using namespace boost;
 namespace fs = std::filesystem;
 
 namespace {
