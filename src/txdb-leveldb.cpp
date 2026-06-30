@@ -7,8 +7,6 @@
 
 #include <filesystem>
 
-#include <boost/version.hpp>
-
 #include <leveldb/env.h>
 #include <leveldb/cache.h>
 #include <leveldb/filter_policy.h>
@@ -514,6 +512,20 @@ bool CTxDB::LoadBlockIndex()
     nBestHeight = pindexBest->nHeight;
     nBestChainTrust = pindexBest->nChainTrust;
 
+    // Heal pnext pointers along the active chain.  Persisted hashNext can be
+    // stale or zeroed by crash-interrupted reorgs, which breaks
+    // GetKernelStakeModifier()'s forward walk and causes valid new
+    // proof-of-stake blocks to be rejected with "check kernel failed".
+    {
+        int nHealed = 0;
+        for (CBlockIndex* p = pindexBest; p && p->pprev; p = p->pprev)
+        {
+            if (p->pprev->pnext != p) { p->pprev->pnext = p; nHealed++; }
+        }
+        if (nHealed > 0)
+            printf("LoadBlockIndex(): healed %d pnext links on active chain\n", nHealed);
+    }
+
     printf("STARTUP-PERF: best_chain %" PRId64 "ms\n", GetTimeMillis() - nPhaseStart);
 
     nPhaseStart = GetTimeMillis();
@@ -610,7 +622,18 @@ bool CTxDB::LoadBlockIndex()
             break;
         CBlock block;
         if (!block.ReadFromDisk(pindex))
+        {
+            // Snapshot-sourced chains have block headers + UTXOs but not raw
+            // block bodies on disk yet. Skip verification for those — the
+            // UTXO set itself was content-hash verified during LoadSnapshot.
+            // For non-snapshot chains, this remains a fatal error.
+            if (fLoadedFromSnapshot) {
+                printf("LoadBlockIndex(): block %d not on disk (snapshot-sourced), skipping verification\n",
+                       pindex->nHeight);
+                continue;
+            }
             return error("LoadBlockIndex() : block.ReadFromDisk failed");
+        }
         if (nCheckLevel>0 && !block.CheckBlock(true, true, (nCheckLevel>6)))
         {
             printf("LoadBlockIndex() : *** found bad block at %d, hash=%s\n", pindex->nHeight, pindex->GetBlockHash().ToString().c_str());

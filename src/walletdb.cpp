@@ -6,7 +6,6 @@
 #include "walletdb.h"
 #include "wallet.h"
 #include <filesystem>
-#include <boost/version.hpp>
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -429,6 +428,24 @@ ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue,
                 pwallet->mapKeyMetadata[keyid] = CKeyMetadata(keypool.nTime);
 
         }
+        else if (strType == "hdmnemonic")
+        {
+            std::string m;
+            ssValue >> m;
+            pwallet->LoadHDMnemonic(m);
+        }
+        else if (strType == "hdcmnemonic")
+        {
+            std::pair<uint256, std::vector<unsigned char> > cm;
+            ssValue >> cm;
+            pwallet->LoadCryptedHDMnemonic(cm.first, cm.second);
+        }
+        else if (strType == "hdchain")
+        {
+            int64_t n;
+            ssValue >> n;
+            pwallet->nHDChainIndex = n;
+        }
         else if (strType == "version")
         {
             ssValue >> wss.nFileVersion;
@@ -461,7 +478,8 @@ ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue,
 static bool IsKeyType(string strType)
 {
     return (strType== "key" || strType == "wkey" ||
-            strType == "mkey" || strType == "ckey");
+            strType == "mkey" || strType == "ckey" ||
+            strType == "hdmnemonic" || strType == "hdcmnemonic");
 }
 
 DBErrors CWalletDB::LoadWallet(CWallet* pwallet)
@@ -652,11 +670,7 @@ bool BackupWallet(const CWallet& wallet, const string& strDest)
                     pathDest /= wallet.strWalletFile;
 
                 try {
-#if BOOST_VERSION >= 104000
                     fs::copy_file(pathSrc, pathDest, fs::copy_options::overwrite_existing);
-#else
-                    fs::copy_file(pathSrc, pathDest);
-#endif
                     printf("copied wallet.dat to %s\n", pathDest.string().c_str());
                     return true;
                 } catch(const fs::filesystem_error &e) {

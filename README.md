@@ -48,9 +48,11 @@ Triangles uses CMake. All platforms follow the same build pattern.
 | C++ compiler | C++17 support |
 | OpenSSL | 3.x |
 | Boost | 1.90+ |
-| Berkeley DB | 5.3 (with C++ bindings) |
+| SQLite | 3.x (default wallet database backend) |
+| Berkeley DB | 5.3 with C++ bindings (legacy wallet backend, used for migration) |
 | libevent | 2.x |
-| LevelDB | bundled |
+| RocksDB | 7.4+ (default chain database backend) |
+| LevelDB | bundled (legacy chain DB backend, used for migration) |
 
 ### Linux (Ubuntu 24.04 / Debian 12+)
 
@@ -132,6 +134,26 @@ trianglesd
 ```
 
 The node will connect to seed nodes over Tor and sync the blockchain automatically.
+
+### Chain Database (RocksDB)
+
+The chain database (block index, transaction index, UTXO set, address index) uses **RocksDB by default**. RocksDB gives faster sync and lookups than the legacy LevelDB backend through parallel compaction, bloom filters, and a larger write buffer and block cache (tunable with `-dbcache=<MB>`).
+
+If you are upgrading a node that already has a LevelDB chain database (`txleveldb/` in your data directory), it is migrated automatically on first launch: the chain state is copied into a new `rocksdb/` directory and verified (record count, UTXO count and value, best-chain hash, and DB format must all match) before use. The original `txleveldb/` directory is left untouched as a fallback and is never modified.
+
+To select a backend explicitly:
+
+```bash
+trianglesd -chaindb=rocksdb   # default
+trianglesd -chaindb=leveldb   # legacy backend (retained for fallback/migration)
+```
+
+Migration can also be triggered or forced manually:
+
+```bash
+trianglesd -migratechaindb        # migrate txleveldb -> rocksdb if not already done
+trianglesd -migratechaindbforce   # re-migrate, replacing any existing rocksdb/
+```
 
 ### Existing Wallet Holders
 

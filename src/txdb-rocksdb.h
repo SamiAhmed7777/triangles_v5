@@ -10,10 +10,13 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include <rocksdb/db.h>
 #include <rocksdb/options.h>
 #include <rocksdb/write_batch.h>
+#include <rocksdb/utilities/db_ttl.h>
 
 // RocksDB backend for the chain database.
 //
@@ -49,6 +52,16 @@ public:
 
     std::unique_ptr<CTxDBIteratorBase> NewIterator() const override;
 
+    // ─── Test-only friend accessor ──────────────────────────────────────────
+    // test_chaindb_runtime exercises the protected raw methods (ReadRaw /
+    // WriteRaw / EraseRaw / ExistsRaw) directly to verify the wrapper layer
+    // that the daemon uses at runtime when launched with -chaindb=rocksdb.
+    // We don't widen the public API just for the test — instead the test
+    // declares a ChainDbRuntimeTestAccessor struct that this class befriends,
+    // giving it the same access the class itself has. White-box test pattern,
+    // zero impact on production callers.
+    friend struct ChainDbRuntimeTestAccessor;
+
 protected:
     bool ReadRaw(const std::string& key, std::string& value) const override;
     bool WriteRaw(const std::string& key, const std::string& value) override;
@@ -61,12 +74,26 @@ private:
     rocksdb::Options options;
     int nVersion;
 
+    // ─── Column family support (DISABLED) ────────────────────────────────────
+    // CF partitioning is intentionally off: the read path (NewIterator /
+    // LoadBlockIndex) only iterates the default CF, so all data must live there
+    // for scans to be correct. GetCF() therefore always returns nullptr (the
+    // default CF). See the long note in txdb-rocksdb.cpp's GetCF definition.
+    // These members are retained for a future CF-aware-iteration phase.
+    enum CfId : int { CF_DEFAULT = 0, CF_BLOCKINDEX, CF_TXINDEX, CF_UTXO, CF_ADDRINDEX, CF_COUNT };
+    rocksdb::ColumnFamilyHandle* cf_handles[CF_COUNT] = {};
+    bool cf_enabled = false;  // Always false while CF routing is disabled.
+
+    // Returns the column family a key should live in. While CF partitioning is
+    // disabled this always returns nullptr (= default CF).
+    rocksdb::ColumnFamilyHandle* GetCF(const std::string& key) const;
+
     // Parallel record of every pending write (value) or delete (nullopt) on
     // activeBatch. Used by ScanBatch to answer "is this key already in the
     // active batch?" without iterating the WriteBatch via Handler — Ubuntu's
     // librocksdb-dev hides typeinfo for rocksdb::WriteBatch::Handler so a
     // subclass-based scan fails to link there.
-    std::map<std::string, std::optional<std::string>> pendingBatch;
+    std::unordered_map<std::string, std::optional<std::string>> pendingBatch;
 
     bool ScanBatch(const std::string& key, std::string* value, bool* deleted) const;
 };

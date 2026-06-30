@@ -40,8 +40,10 @@ target_include_directories(json_compat INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/js
 set(CORE_SOURCES
     addrman.cpp
     bootstrap.cpp
+    checkpointpublisher.cpp
     checkpoints.cpp
     crypter.cpp
+    hdwallet.cpp
     crypto_ecdh.cpp
     crypto_ecdsa.cpp
     db.cpp
@@ -52,12 +54,17 @@ set(CORE_SOURCES
     net.cpp
     net_bootstrap.cpp
     netbase.cpp
+    i2p.cpp
+    i2p_process.cpp
     protocol.cpp
     script.cpp
     sync.cpp
     util.cpp
     version.cpp
     walletdb.cpp
+    walletdb-sqlite.cpp
+    walletdb-factory.cpp
+    walletmigrate.cpp
     kernel.cpp
     pbkdf2.cpp
     scrypt.cpp
@@ -84,6 +91,7 @@ set(CORE_SOURCES
     tor/onion_v3.cpp
     tor/tor_process.cpp
     tor/tor_embedded.cpp
+    i2p/i2p_embedded.cpp
 )
 
 # Scrypt assembly — platform-specific
@@ -111,6 +119,7 @@ target_include_directories(triangles_common PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/json"
     "${CMAKE_CURRENT_SOURCE_DIR}/tor"
+    "${CMAKE_CURRENT_SOURCE_DIR}/i2p"
     "${CMAKE_BINARY_DIR}/generated"       # for build.h
 )
 
@@ -122,10 +131,8 @@ target_link_libraries(triangles_common PUBLIC
     leveldb_bundled
     OpenSSL::SSL
     OpenSSL::Crypto
-    Boost::program_options
-    Boost::thread
-    Boost::chrono
     BerkeleyDB::BerkeleyDB
+    SQLite::SQLite3
     Libevent::Libevent
     ZLIB::ZLIB
     Threads::Threads
@@ -177,17 +184,116 @@ if(USE_TOR_EMBEDDED)
     # and its dependencies.
     # Use --allow-multiple-definition because libtor.a may pull in static
     # OpenSSL objects that duplicate the DLL import lib already linked above.
+    # These GNU ld options are not supported on macOS (which uses lld) —
+    # guard with NOT APPLE so the build still works on macOS.
+    # On macOS, the libevent/openssl/zlib install paths are not on the
+    # default linker search path. Pull them in from the standard
+    # homebrew locations so -levent / -lssl / -lssl etc. resolve.
+    if(APPLE)
+        target_link_directories(triangles_common PUBLIC
+            /opt/homebrew/opt/libevent/lib
+            /opt/homebrew/opt/openssl@3/lib
+            /opt/homebrew/opt/zlib/lib
+        )
+    endif()
+    if(NOT APPLE)
+        target_link_libraries(triangles_common PUBLIC
+            -Wl,--allow-multiple-definition
+            -Wl,--start-group
+        )
+    endif()
     target_link_libraries(triangles_common PUBLIC
-        -Wl,--allow-multiple-definition
-        -Wl,--start-group
         -ltor
         -levent -levent_core -levent_extra -levent_openssl
         -lssl -lcrypto -lz -llzma -lzstd
-        -Wl,--end-group
     )
+    if(NOT APPLE)
+        target_link_libraries(triangles_common PUBLIC
+            -Wl,--end-group
+        )
+    endif()
     if(WIN32)
         target_link_libraries(triangles_common PUBLIC iphlpapi shlwapi crypt32)
     endif()
+endif()
+
+# Optional: Embedded I2P (i2pd)
+if(USE_I2P_EMBEDDED)
+    if(I2P_SOURCE_ROOT STREQUAL "")
+        set(I2P_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/i2p/i2pd-src")
+    endif()
+    if(NOT EXISTS "${I2P_SOURCE_ROOT}/libi2pd/Crypto.h")
+        message(FATAL_ERROR
+            "USE_I2P_EMBEDDED=ON but i2pd source not found at ${I2P_SOURCE_ROOT}.\n"
+            "Run: git submodule update --init --recursive\n"
+            "Or set -DI2P_SOURCE_ROOT=/path/to/i2pd")
+    endif()
+    target_compile_definitions(triangles_common PUBLIC ENABLE_I2P_EMBEDDED)
+    target_include_directories(triangles_common PUBLIC
+        "${I2P_SOURCE_ROOT}"
+        "${I2P_SOURCE_ROOT}/libi2pd"
+        "${I2P_SOURCE_ROOT}/libi2pd_client"
+        "${I2P_SOURCE_ROOT}/i18n"
+    )
+    # i2pd builds as two static libraries: libi2pd.a (core router) and
+    # libi2pd_client.a (SAM, SOCKS, tunnels, client context). Both are needed.
+    # i2pd's own Makefile.mingw links by full static .a paths rather than
+    # -l flags because MinGW's linker is single-pass and CMake imported
+    # targets (Boost::) may not exist on MSYS2. We follow the same pattern:
+    # link the archives, then their Boost/zlib deps as full paths, then
+    # the archives again to resolve the second-pass references.
+    target_link_libraries(triangles_common PUBLIC
+        "${I2P_SOURCE_ROOT}/libi2pdclient.a"
+        "${I2P_SOURCE_ROOT}/libi2pd.a"
+        "${I2P_SOURCE_ROOT}/libi2pdlang.a"
+    )
+    if(WIN32)
+        # MinGW/MSYS2: Boost:: CMake imported targets are unreliable here.
+        # Use find_library to locate the actual .a/.dll files. Some Boost
+        # libs (e.g. boost_system) are header-only in newer versions and
+        # won't have a .a file at all — that's fine, we skip them.
+        if(NOT MINGW_PREFIX)
+            if(DEFINED ENV{MINGW_PREFIX})
+                set(MINGW_PREFIX "$ENV{MINGW_PREFIX}")
+            else()
+                set(MINGW_PREFIX "/mingw64")
+            endif()
+        endif()
+        find_library(I2P_BOOST_FS  NAMES boost_filesystem-mt boost_filesystem libboost_filesystem-mt  HINTS "${MINGW_PREFIX}/lib")
+        find_library(I2P_BOOST_PO  NAMES boost_program_options-mt boost_program_options libboost_program_options-mt  HINTS "${MINGW_PREFIX}/lib")
+        find_library(I2P_BOOST_SYS NAMES boost_system-mt boost_system libboost_system-mt  HINTS "${MINGW_PREFIX}/lib")
+        find_library(I2P_SSL       NAMES ssl libssl  HINTS "${MINGW_PREFIX}/lib")
+        find_library(I2P_CRYPTO    NAMES crypto libcrypto  HINTS "${MINGW_PREFIX}/lib")
+        find_library(I2P_Z         NAMES z libz zlib  HINTS "${MINGW_PREFIX}/lib")
+        set(I2P_WIN_LIBS "")
+        foreach(lib I2P_BOOST_FS I2P_BOOST_PO I2P_BOOST_SYS I2P_SSL I2P_CRYPTO I2P_Z)
+            if(${lib})
+                list(APPEND I2P_WIN_LIBS "${${lib}}")
+                message(STATUS "  I2P link: ${lib} = ${${lib}}")
+            else()
+                message(STATUS "  I2P link: ${lib} = (not found, header-only?)")
+            endif()
+        endforeach()
+        target_link_libraries(triangles_common PUBLIC ${I2P_WIN_LIBS} -Wl,--allow-multiple-definition)
+    else()
+        target_link_libraries(triangles_common PUBLIC
+            Boost::program_options Boost::thread Boost::chrono
+            OpenSSL::SSL OpenSSL::Crypto
+            ZLIB::ZLIB
+        )
+        if(TARGET Boost::filesystem)
+            target_link_libraries(triangles_common PUBLIC Boost::filesystem)
+        endif()
+        if(TARGET Boost::system)
+            target_link_libraries(triangles_common PUBLIC Boost::system)
+        endif()
+    endif()
+    # Second pass: list archives again so linker resolves i2pd→Boost refs
+    # that were unsatisfied in the first left-to-right pass.
+    target_link_libraries(triangles_common PUBLIC
+        "${I2P_SOURCE_ROOT}/libi2pd.a"
+        "${I2P_SOURCE_ROOT}/libi2pdclient.a"
+    )
 endif()
 
 # Platform-specific libraries
@@ -250,6 +356,39 @@ if(BUILD_DAEMON)
 endif()
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# 4b. JSON-RPC client (triangles-cli)
+#
+# Self-contained: only links univalue + boost::asio + boost::program_options
+# + boost::filesystem + OpenSSL (for base64 / future TLS). Does NOT link
+# triangles_common, wallet, or net — keeps the binary small.
+# ═══════════════════════════════════════════════════════════════════════════════
+if(BUILD_CLI)
+    add_executable(triangles-cli
+        triangles-cli.cpp
+    )
+    # No Boost dependency: uses raw POSIX/Winsock sockets for HTTP. Only links
+    # the json_compat header-only shim and the platform's native socket lib
+    # (Winsock ws2_32 on Windows; libc on POSIX). Keeps the binary small and
+    # avoids per-platform Boost linking pain (MSYS2 uses versioned -mt- names;
+    # Homebrew doesn't ship the boost_system CMake config).
+    target_link_libraries(triangles-cli
+        PRIVATE
+            json_compat
+    )
+
+    if(WIN32)
+        set_target_properties(triangles-cli PROPERTIES SUFFIX ".exe")
+        target_link_libraries(triangles-cli PRIVATE ws2_32)
+    endif()
+
+    if(MSVC)
+        set_target_properties(triangles-cli PROPERTIES
+            VS_WINRT_COMPONENT "console"
+        )
+    endif()
+endif()
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 5. Qt5 GUI wallet (triangles-qt)
 # ═══════════════════════════════════════════════════════════════════════════════
 if(BUILD_QT)
@@ -306,6 +445,7 @@ if(BUILD_QT)
         qt/trianglesunits.cpp
         qt/qvaluecombobox.cpp
         qt/askpassphrasedialog.cpp
+        qt/hdseeddialog.cpp
         qt/notificator.cpp
         qt/qtipcserver.cpp
         qt/rpcconsole.cpp
@@ -385,6 +525,7 @@ if(BUILD_QT)
         Qt5::Core
         Qt5::Gui
         Qt5::Widgets
+        Qt5::Network
     )
 
     # Optional: D-Bus notifications (Linux)
@@ -448,6 +589,9 @@ if(BUILD_TESTS)
     file(GLOB TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/test/*.cpp")
     # Exclude miner_tests.cpp (never ported from Bitcoin)
     list(FILTER TEST_SOURCES EXCLUDE REGEX "miner_tests\\.cpp$")
+    # Exclude the standalone chaindb test driver — it gets its own target
+    # because it needs to run without the TestingSetup global fixture.
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "chaindb_equivalence_tests_main\\.cpp$")
 
     add_executable(test_triangles
         ${TEST_SOURCES}
@@ -472,4 +616,70 @@ if(BUILD_TESTS)
     )
 
     add_test(NAME triangles_unit_tests COMMAND test_triangles --log_level=test_suite)
+
+    # ── Standalone chaindb equivalence tests ─────────────────────────────────
+    # Runs without the TestingSetup global fixture (which would otherwise
+    # open the real chain DB and lock it for the process). Sets a fresh
+    # temp -datadir via its own global fixture, then runs the
+    # chaindb_equivalence_tests suite.
+    add_executable(test_chaindb_equivalence
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/chaindb_equivalence_tests_main.cpp"
+        # wallet.cpp provides the CWallet symbols that triangles_common
+        # (txdb-rocksdb, net, etc.) references, even though the chaindb
+        # tests themselves don't use the wallet.
+        wallet.cpp
+    )
+    target_include_directories(test_chaindb_equivalence PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test"
+        "${CMAKE_CURRENT_SOURCE_DIR}/leveldb/include"
+    )
+    target_link_libraries(test_chaindb_equivalence PRIVATE
+        triangles_common
+        Boost::unit_test_framework
+    )
+    add_test(NAME chaindb_equivalence_tests
+             COMMAND test_chaindb_equivalence --log_level=test_suite)
+
+    # ── Standalone snapshotnet P2P tests ────────────────────────────────────
+    # Same rationale as test_chaindb_equivalence: snapshotnet needs filesystem
+    # and threading globals and its own tmp datadir fixture, which would
+    # conflict with test_triangles' heavy TestingSetup. Runs independently.
+    add_executable(test_snapshotnet
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/snapshotnet_tests.cpp"
+        wallet.cpp
+    )
+    target_include_directories(test_snapshotnet PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test"
+        "${CMAKE_CURRENT_SOURCE_DIR}/leveldb/include"
+    )
+    target_link_libraries(test_snapshotnet PRIVATE
+        triangles_common
+        Boost::unit_test_framework
+    )
+    add_test(NAME snapshotnet_tests
+             COMMAND test_snapshotnet --log_level=test_suite)
+
+    # ── Standalone chaindb runtime tests (CRocksTxDB wrapper layer) ─────────
+    # Exercises MakeChainDB / WipeChainDataDir / IsRocksDbChainBackend and
+    # the CRocksTxDB write/read/batch/iterator wrapper — the same code path
+    # the daemon uses when launched with `-chaindb=rocksdb`. The
+    # chaindb_equivalence_tests (above) only verify the byte-copy migration
+    # via the raw leveldb/rocksdb APIs; this one verifies the wrapper class.
+    add_executable(test_chaindb_runtime
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/chaindb_runtime_tests.cpp"
+        wallet.cpp
+    )
+    target_include_directories(test_chaindb_runtime PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test"
+        "${CMAKE_CURRENT_SOURCE_DIR}/leveldb/include"
+    )
+    target_link_libraries(test_chaindb_runtime PRIVATE
+        triangles_common
+        Boost::unit_test_framework
+    )
+    add_test(NAME chaindb_runtime_tests
+             COMMAND test_chaindb_runtime --log_level=test_suite)
 endif()

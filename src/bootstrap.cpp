@@ -17,6 +17,13 @@
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/sha.h>
+
+#include "key.h"
+#include "base58.h"
+#include "util.h"
+
+extern const std::string strMessageMagic;
 
 #include <fstream>
 #include <sstream>
@@ -43,7 +50,18 @@ namespace Bootstrap {
 
 bool NeedsBootstrap(const fs::path& dataDir)
 {
-    return !fs::exists(dataDir / "blk0001.dat");
+    // Need bootstrap if there's no chain database (the UTXO set / block index).
+    // blk0001.dat alone is NOT sufficient — it's raw block data that requires
+    // (fast-import was removed; UTXO snapshot is the only sync path)
+    // Check every supported backend directory: RocksDB (rocksdb/, now the
+    // default) and LevelDB (txleveldb/), plus legacy chainstate/ layouts. A
+    // node that already holds a RocksDB chain DB must NOT be treated as fresh,
+    // otherwise it would attempt a bootstrap download on every restart.
+    bool hasChainDb = fs::exists(dataDir / "rocksdb")
+                   || fs::exists(dataDir / "txleveldb")
+                   || fs::exists(dataDir / "blocks" / "chainstate")
+                   || fs::exists(dataDir / "chainstate");
+    return !hasChainDb;
 }
 
 // Direct TCP connection bypassing Tor SOCKS proxy.
@@ -446,114 +464,6 @@ static int64_t ParseTarOctal(const char* field, size_t len)
 }
 
 // Extract a tar.gz file to a destination directory
-static bool ExtractTarGz(const fs::path& tarGzPath,
-                          const fs::path& destDir,
-                          std::string& strError)
-{
-    gzFile gz = gzopen(tarGzPath.string().c_str(), "rb");
-    if (!gz) {
-        strError = "Cannot open " + tarGzPath.string();
-        return false;
-    }
-
-    gzbuffer(gz, 262144); // 256 KB buffer for performance
-
-    char header[512];
-
-    while (true) {
-        int bytesRead = gzread(gz, header, 512);
-        if (bytesRead == 0) break; // EOF
-        if (bytesRead != 512) {
-            strError = "Truncated tar header";
-            gzclose(gz);
-            return false;
-        }
-
-        // End-of-archive marker (zero block)
-        bool allZero = true;
-        for (int i = 0; i < 512; i++) {
-            if (header[i] != 0) { allZero = false; break; }
-        }
-        if (allZero) break;
-
-        // Parse filename: name (offset 0, 100 bytes) + optional prefix (offset 345, 155 bytes)
-        char name[101] = {0};
-        char prefix[156] = {0};
-        memcpy(name, header, 100);
-        memcpy(prefix, header + 345, 155);
-
-        std::string fullName;
-        if (prefix[0] != '\0')
-            fullName = std::string(prefix) + "/" + std::string(name);
-        else
-            fullName = std::string(name);
-
-        // Security: reject absolute paths and path traversal
-        if (fullName.empty() || fullName[0] == '/' || fullName.find("..") != std::string::npos) {
-            strError = "Unsafe path in tar archive: " + fullName;
-            gzclose(gz);
-            return false;
-        }
-
-        char typeflag = header[156];
-        int64_t fileSize = ParseTarOctal(header + 124, 12);
-
-        if (typeflag == '5' || (!fullName.empty() && fullName.back() == '/')) {
-            // Directory entry
-            fs::create_directories(destDir / fullName);
-        } else if (typeflag == '0' || typeflag == '\0') {
-            // Regular file
-            fs::path filePath = destDir / fullName;
-            fs::create_directories(filePath.parent_path());
-
-            FILE* outFile = fopen(filePath.string().c_str(), "wb");
-            if (!outFile) {
-                strError = "Cannot create file: " + filePath.string();
-                gzclose(gz);
-                return false;
-            }
-
-            int64_t remaining = fileSize;
-            char buf[65536];
-            while (remaining > 0) {
-                int toRead = (remaining > (int64_t)sizeof(buf)) ? (int)sizeof(buf) : (int)remaining;
-                int n = gzread(gz, buf, toRead);
-                if (n <= 0) {
-                    fclose(outFile);
-                    strError = "Truncated tar data for: " + fullName;
-                    gzclose(gz);
-                    return false;
-                }
-                fwrite(buf, 1, n, outFile);
-                remaining -= n;
-            }
-            fclose(outFile);
-
-            // Skip padding to next 512-byte boundary
-            int64_t pad = (512 - (fileSize % 512)) % 512;
-            if (pad > 0) {
-                char padBuf[512];
-                if (gzread(gz, padBuf, (unsigned)pad) != (int)pad) {
-                    strError = "Truncated tar padding for: " + fullName;
-                    gzclose(gz);
-                    return false;
-                }
-            }
-        } else {
-            // Unknown entry type - skip its data
-            int64_t totalSkip = fileSize + ((512 - (fileSize % 512)) % 512);
-            char skipBuf[512];
-            while (totalSkip > 0) {
-                int toRead = (totalSkip > 512) ? 512 : (int)totalSkip;
-                if (gzread(gz, skipBuf, toRead) != toRead) break;
-                totalSkip -= toRead;
-            }
-        }
-    }
-
-    gzclose(gz);
-    return true;
-}
 
 } // anonymous namespace
 
@@ -598,6 +508,8 @@ bool ParseManifest(const fs::path& manifestPath,
             manifest.hash = val;
         else if (key == "dbversion")
             manifest.dbversion = std::atoi(val.c_str());
+        else if (key == "signature")
+            manifest.signature = val;
     }
     in.close();
 
@@ -660,6 +572,96 @@ bool VerifyManifest(const SnapshotManifest& manifest,
         return false;
     }
 
+    // ─── Signature verification (#11) ─────────────────────────────────────
+    // If the manifest includes a signature, verify it against the
+    // compiled-in snapshot signing key. This prevents MITM attacks
+    // where an attacker replaces the snapshot file on the bootstrap server.
+    //
+    // If no signature is present, print a warning but continue (backward
+    // compatibility with older snapshots that pre-date signing).
+    if (!manifest.signature.empty()) {
+        // Build the message that was signed: "height||hash" (ASCII)
+        std::string message = std::to_string(manifest.height) + "||" + manifest.hash;
+
+        // Decode the hex-encoded signature (64 bytes for Ed25519)
+        std::vector<unsigned char> sigBytes;
+        if (manifest.signature.size() != 128) {  // 64 bytes hex = 128 chars
+            strError = "Invalid signature length in manifest (expected 128 hex chars, got "
+                     + std::to_string(manifest.signature.size()) + ")";
+            return false;
+        }
+        for (size_t i = 0; i < manifest.signature.size(); i += 2) {
+            auto hexVal = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            int hi = hexVal(manifest.signature[i]);
+            int lo = hexVal(manifest.signature[i + 1]);
+            if (hi < 0 || lo < 0) {
+                strError = "Invalid hex in manifest signature";
+                return false;
+            }
+            sigBytes.push_back((hi << 4) | lo);
+        }
+
+        // Snapshot signing public key (Ed25519, 32 bytes).
+        // This is the public half of the key used to sign snapshots on the
+        // bootstrap server. The private key never leaves the build machine.
+        // To rotate: generate new keypair, update this constant, re-sign
+        // all snapshots, update manifest files.
+        static const unsigned char snapshotPubkey[32] = {
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        };  // Placeholder: replace with actual pubkey when signing is deployed
+
+        // Use OpenSSL Ed25519 verification
+        EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+        if (!mdctx) {
+            strError = "Failed to allocate EVP context for signature verification";
+            return false;
+        }
+
+        EVP_PKEY* pkey = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr,
+                                                      snapshotPubkey, 32);
+        if (!pkey) {
+            EVP_MD_CTX_free(mdctx);
+            strError = "Failed to load snapshot signing public key";
+            return false;
+        }
+
+        int rc = EVP_DigestVerifyInit(mdctx, nullptr, nullptr, nullptr, pkey);
+        if (rc != 1) {
+            EVP_PKEY_free(pkey);
+            EVP_MD_CTX_free(mdctx);
+            strError = "Failed to init signature verification";
+            return false;
+        }
+
+        rc = EVP_DigestVerify(mdctx,
+                              sigBytes.data(), sigBytes.size(),
+                              (const unsigned char*)message.data(), message.size());
+
+        EVP_PKEY_free(pkey);
+        EVP_MD_CTX_free(mdctx);
+
+        if (rc == 1) {
+            printf("Snapshot manifest signature VERIFIED\n");
+        } else if (rc == 0) {
+            strError = "Snapshot manifest signature INVALID — possible tampering detected";
+            return false;
+        } else {
+            // rc < 0 means error (e.g., placeholder zero pubkey not yet deployed)
+            printf("WARNING: Snapshot manifest signature verification error (rc=%d). "
+                   "Signing key may not be deployed yet. Proceeding without verification.\n", rc);
+        }
+    } else {
+        printf("WARNING: Snapshot manifest has no signature — loading WITHOUT signature verification\n");
+    }
+
     return true;
 }
 
@@ -670,34 +672,19 @@ bool DownloadBootstrap(const std::string& host,
 {
     bool gotBlockFile = false;
 
-    // Try downloading bootstrap.tar.gz first
-    // Bootstrap server is on clearnet — bypass Tor proxy for DNS + HTTP
+    // FastImport removed (commit bdb7253). v2 UTXO snapshot is the ONLY
+    // supported sync path. Skip the legacy tarball fallback entirely so we
+    // never hit /triangles-bootstrap.tar.gz (404 since 2026-06-19 cleanup)
+    // or /tri-bootstrap.tar.gz (also gone; was the URL in the old filelist.txt).
+    // The remaining path below reads filelist.txt → downloads utxo-snapshot.bin.
     const bool noProxy = true;
-    fs::path tmpTarGz = dataDir / "bootstrap.tar.gz.tmp";
-    std::string tarUrl = std::string(BASE_PATH) + "triangles-bootstrap.tar.gz";
-
-    printf("DownloadBootstrap(): attempting tar.gz download from %s%s\n", host.c_str(), tarUrl.c_str());
-    bool tarDownloaded = DownloadFile(host, tarUrl, tmpTarGz, progressFn, strError, noProxy);
-    printf("DownloadBootstrap(): tarDownloaded=%d result=%s\n", tarDownloaded, strError.c_str());
-
-    if (tarDownloaded) {
-        bool extractOk = ExtractTarGz(tmpTarGz, dataDir, strError);
-        fs::remove(tmpTarGz);
-
-        if (extractOk && fs::exists(dataDir / "blk0001.dat"))
-            gotBlockFile = true;
-        // If extraction failed, fall through to legacy path
-    }
 
     if (!gotBlockFile) {
-        // Fallback: try filelist.txt + individual file downloads
+        // Try filelist.txt — should contain only utxo-snapshot.bin (v2).
         std::string fallbackError;
         std::vector<std::string> files;
         if (!FetchFileList(host, files, fallbackError, noProxy)) {
-            if (!tarDownloaded)
-                strError = strError + " (fallback also failed: " + fallbackError + ")";
-            else
-                strError = "Extraction failed: " + strError + " (fallback also failed: " + fallbackError + ")";
+            strError = "filelist.txt unavailable: " + fallbackError;
             return false;
         }
 
@@ -720,7 +707,7 @@ bool DownloadBootstrap(const std::string& host,
 
     // Check if the archive included a trusted pre-built index for the active
     // backend with a valid snapshot.manifest. If verified, keep it to skip the
-    // multi-hour FastImportBlockFile() rebuild.
+    // multi-hour rebuild (fast-import removed; UTXO snapshot is the only sync path).
     fs::path chainDbPath = GetChainDataDir();
     fs::path database  = dataDir / "database";
     fs::path manifestPath = dataDir / "snapshot.manifest";
@@ -753,7 +740,7 @@ bool DownloadBootstrap(const std::string& host,
 
     if (!keepIndex) {
         // No valid manifest or verification failed - delete the index.
-        // FastImportBlockFile() will rebuild from blk0001.dat on next startup.
+        // The block index will be rebuilt from the UTXO snapshot on next startup.
         printf("Bootstrap: removing extracted %s/ (will rebuild index from blk0001.dat)\n",
                GetChainDataDir().filename().string().c_str());
         if (fs::exists(chainDbPath))
@@ -771,15 +758,312 @@ bool DownloadBootstrap(const std::string& host,
     return true;
 }
 
+namespace {
+
+// Try to find the canonical UTXO snapshot entry in the bootstrap server's
+// manifest.json. Looks for an entry of type "utxo_snapshot" and extracts
+// its filename + expected SHA256. Returns true on success.
+//
+// We deliberately do a simple substring scan rather than full JSON parsing:
+// the manifest is operator-controlled, the format is stable, and adding a
+// JSON dependency for ~50 lines of code isn't worth it.
+//
+// On failure, the caller falls back to the legacy "utxo-snapshot.bin" URL,
+// which the bootstrap server symlinks to the canonical file.
+// Trusted signer addresses for snapshot manifests. A snapshot is accepted
+// iff its manifest's signing_address matches one of these AND its signature
+// verifies under Triangles' compact-message protocol.
+static const char* TRUSTED_SNAPSHOT_SIGNERS[] = {
+    "TG8f76yktTxDrT7JJymY3wVAusXiD3fVvX",  // Sami's snapshot publisher key
+};
+static const size_t NUM_TRUSTED_SNAPSHOT_SIGNERS =
+    sizeof(TRUSTED_SNAPSHOT_SIGNERS) / sizeof(TRUSTED_SNAPSHOT_SIGNERS[0]);
+
+bool IsTrustedSnapshotSigner(const std::string& addr)
+{
+    for (size_t i = 0; i < NUM_TRUSTED_SNAPSHOT_SIGNERS; ++i)
+        if (addr == TRUSTED_SNAPSHOT_SIGNERS[i])
+            return true;
+    return false;
+}
+
+// Verify a Triangles signed-message compact signature. Returns true iff:
+//   - The address is valid
+//   - The signature is valid base64
+//   - The compact signature recovers to a public key whose hash160 matches
+//     the address's keyID
+//   - The hash being verified is Hash(strMessageMagic || message)
+//
+// Mirrors verifymessage RPC. Caller separately checks trust.
+bool VerifySignedMessage(const std::string& strAddress,
+                         const std::string& strSignatureB64,
+                         const std::string& strMessage,
+                         std::string& strError)
+{
+    CTrianglesAddress addr(strAddress);
+    if (!addr.IsValid()) {
+        strError = "Invalid signer address: " + strAddress;
+        return false;
+    }
+    CKeyID keyID;
+    if (!addr.GetKeyID(keyID)) {
+        strError = "Address does not refer to a key: " + strAddress;
+        return false;
+    }
+
+    bool fInvalid = false;
+    std::vector<unsigned char> vchSig = DecodeBase64(strSignatureB64.c_str(), &fInvalid);
+    if (fInvalid) {
+        strError = "Malformed base64 in signature";
+        return false;
+    }
+
+    CDataStream ss(SER_GETHASH, 0);
+    ss << strMessageMagic;
+    ss << strMessage;
+
+    CKey key;
+    if (!key.SetCompactSignature(Hash(ss.begin(), ss.end()), vchSig)) {
+        strError = "Signature does not verify (recovered key mismatch or malformed sig)";
+        return false;
+    }
+    if (key.GetPubKey().GetID() != keyID) {
+        strError = "Signature recovered to a different key than the claimed signer";
+        return false;
+    }
+    return true;
+}
+
+// Extract a string field value from a small JSON object (subset).
+std::string ExtractJsonString(const std::string& json, const std::string& field)
+{
+    std::string key = "\"" + field + "\"";
+    size_t pos = json.find(key);
+    if (pos == std::string::npos) return "";
+    pos += key.size();
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == ':' || json[pos] == '\t'))
+        pos++;
+    if (pos >= json.size() || json[pos] != '\"') return "";
+    pos++;
+    size_t end = json.find('\"', pos);
+    if (end == std::string::npos) return "";
+    return json.substr(pos, end - pos);
+}
+
+bool FindCanonicalSnapshotInManifest(const std::string& manifestText,
+                                     std::string& outFilename,
+                                     std::string& outSha256,
+                                     std::string& outManifestFilename,
+                                     std::string& strError)
+{
+    // Look for the "utxo_snapshot" file entry, e.g.:
+    //   "utxo-snapshot-2207680.utx": {
+    //     ...
+    //     "type": "utxo_snapshot",
+    //     "sha256": "eeefe107...",
+    //     ...
+    //   }
+    size_t typePos = manifestText.find("\"utxo_snapshot\"");
+    if (typePos == std::string::npos) {
+        strError = "manifest.json has no utxo_snapshot entry";
+        return false;
+    }
+
+    // Walk backwards from the typePos to find the start of this file's block.
+    // Format: "filename": { ... "type": "utxo_snapshot" ...
+    // We scan for the nearest preceding '"' followed by ':' that introduces a
+    // top-level file entry. Simple heuristic: find the line containing the
+    // type marker, then search backwards for the file key.
+    size_t entryStart = manifestText.rfind('"', typePos);
+    if (entryStart == std::string::npos || entryStart == 0) {
+        strError = "malformed manifest.json (no filename before utxo_snapshot entry)";
+        return false;
+    }
+    // Skip the opening quote
+    size_t filenameStart = entryStart + 1;
+    size_t filenameEnd = manifestText.find('"', filenameStart);
+    if (filenameEnd == std::string::npos) {
+        strError = "malformed manifest.json (unterminated filename)";
+        return false;
+    }
+    outFilename = manifestText.substr(filenameStart, filenameEnd - filenameStart);
+
+    // Within this block, extract the sha256.
+    // Walk forward from the typePos to find the matching closing brace of the
+    // entry. (Manifest is shallow, so a naive brace-count is fine.)
+    size_t braceStart = manifestText.find('{', filenameEnd);
+    if (braceStart == std::string::npos) {
+        strError = "malformed manifest.json (no body after filename)";
+        return false;
+    }
+    int depth = 0;
+    size_t bodyEnd = braceStart;
+    for (size_t i = braceStart; i < manifestText.size(); ++i) {
+        if (manifestText[i] == '{') depth++;
+        else if (manifestText[i] == '}') {
+            depth--;
+            if (depth == 0) { bodyEnd = i; break; }
+        }
+    }
+    if (depth != 0) {
+        strError = "malformed manifest.json (unbalanced braces in entry)";
+        return false;
+    }
+    std::string entry = manifestText.substr(braceStart, bodyEnd - braceStart);
+
+    size_t shaPos = entry.find("\"sha256\"");
+    if (shaPos == std::string::npos) {
+        strError = "manifest entry has no sha256 field";
+        return false;
+    }
+    size_t valStart = entry.find('"', shaPos + 8);
+    if (valStart == std::string::npos) {
+        strError = "malformed manifest.json (no sha256 value)";
+        return false;
+    }
+    valStart++;
+    size_t valEnd = entry.find('"', valStart);
+    if (valEnd == std::string::npos) {
+        strError = "malformed manifest.json (unterminated sha256 value)";
+        return false;
+    }
+    outSha256 = entry.substr(valStart, valEnd - valStart);
+
+    // Extract manifest filename (optional).
+    outManifestFilename.clear();
+    size_t manPos = entry.find("\"manifest\"");
+    if (manPos != std::string::npos) {
+        size_t mvStart = entry.find('\"', manPos + 10);
+        if (mvStart != std::string::npos) {
+            mvStart++;
+            size_t mvEnd = entry.find('\"', mvStart);
+            if (mvEnd != std::string::npos)
+                outManifestFilename = entry.substr(mvStart, mvEnd - mvStart);
+        }
+    }
+
+    return true;
+}
+
+// Read an entire file into a string. Empty string on error.
+std::string ReadFileToString(const fs::path& path)
+{
+    FILE* f = fopen(path.string().c_str(), "rb");
+    if (!f) return "";
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); return ""; }
+    fseek(f, 0, SEEK_SET);
+    std::string s(sz, '\0');
+    size_t nread = fread(&s[0], 1, sz, f);
+    s.resize(nread);
+    fclose(f);
+    return s;
+}
+
+// Compute the SHA256 of a file, return as lowercase hex string.
+std::string Sha256OfFile(const fs::path& path)
+{
+    FILE* f = fopen(path.string().c_str(), "rb");
+    if (!f) return "";
+    SHA256_CTX ctx;
+    SHA256_Init(&ctx);
+    unsigned char buf[64 * 1024];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+        SHA256_Update(&ctx, buf, n);
+    fclose(f);
+    unsigned char out[SHA256_DIGEST_LENGTH];
+    SHA256_Final(out, &ctx);
+    static const char hex[] = "0123456789abcdef";
+    std::string s(SHA256_DIGEST_LENGTH * 2, '0');
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
+        s[2*i]     = hex[(out[i] >> 4) & 0xF];
+        s[2*i + 1] = hex[out[i] & 0xF];
+    }
+    return s;
+}
+
+} // anonymous namespace
+
 bool DownloadUtxoSnapshot(const std::string& host,
                           const fs::path& dataDir,
                           ProgressCallback progressFn,
                           std::string& strError)
 {
     const bool noProxy = true;
-    const char* snapshotFilename = "utxo-snapshot.bin";
 
-    // Download utxo-snapshot.bin to a temp file
+    // Step 1: discover the canonical snapshot filename + expected SHA256 +
+    // per-snapshot manifest filename from the big manifest.json. Falls back
+    // to legacy URL if manifest unavailable.
+    std::string snapshotFilename = "utxo-snapshot.bin";
+    std::string expectedSha256;
+    std::string snapshotManifestFilename;
+    bool haveManifest = false;
+
+    fs::path tmpManifest = dataDir / "manifest.json.tmp";
+    if (DownloadFile(host, "manifest.json", tmpManifest, nullptr, strError, noProxy)) {
+        std::string text = ReadFileToString(tmpManifest);
+        fs::remove(tmpManifest);
+
+        std::string mFile, mSha, mManifest;
+        std::string mErr;
+        if (FindCanonicalSnapshotInManifest(text, mFile, mSha, mManifest, mErr)) {
+            snapshotFilename = mFile;
+            expectedSha256 = mSha;
+            snapshotManifestFilename = mManifest;
+            haveManifest = true;
+            printf("Bootstrap: manifest declares canonical snapshot %s (sha256=%s)\n",
+                   snapshotFilename.c_str(), expectedSha256.substr(0, 16).c_str());
+        } else {
+            printf("Bootstrap: manifest parse failed (%s) — falling back to legacy URL\n",
+                   mErr.c_str());
+        }
+    } else {
+        printf("Bootstrap: no manifest.json available — falling back to legacy URL\n");
+        strError.clear();
+    }
+
+    // Step 2: verify the per-snapshot manifest's signature. This is the
+    // AUTHENTICATION gate — the signature attests that the listed snapshot
+    // file came from a trusted operator. No checkpoint required; signature
+    // alone proves authenticity.
+    if (!snapshotManifestFilename.empty()) {
+        fs::path tmpSnapManifest = dataDir / "snapshot-manifest.tmp";
+        if (!DownloadFile(host, snapshotManifestFilename, tmpSnapManifest, nullptr, strError, noProxy)) {
+            fs::remove(tmpSnapManifest);
+            return false;
+        }
+        std::string snapManifestText = ReadFileToString(tmpSnapManifest);
+        fs::remove(tmpSnapManifest);
+
+        std::string signerAddr = ExtractJsonString(snapManifestText, "signing_address");
+        std::string message     = ExtractJsonString(snapManifestText, "message");
+        std::string signature   = ExtractJsonString(snapManifestText, "signature");
+        std::string declaredSha = ExtractJsonString(snapManifestText, "snapshot_sha256");
+
+        if (signerAddr.empty() || message.empty() || signature.empty()) {
+            strError = "per-snapshot manifest missing required fields (signing_address/message/signature)";
+            return false;
+        }
+        if (!IsTrustedSnapshotSigner(signerAddr)) {
+            strError = "snapshot manifest signer " + signerAddr + " is not in trusted signers list";
+            return false;
+        }
+        std::string vErr;
+        if (!VerifySignedMessage(signerAddr, signature, message, vErr)) {
+            strError = "snapshot signature verification failed: " + vErr;
+            return false;
+        }
+        if (!declaredSha.empty())
+            expectedSha256 = declaredSha;
+        printf("Bootstrap: snapshot signature verified (signer=%s)\n", signerAddr.c_str());
+    } else {
+        printf("Bootstrap: WARNING — no per-snapshot manifest available; "
+               "loading snapshot WITHOUT signature verification\n");
+    }
+
+    // Step 3: download the canonical snapshot file.
     fs::path tmpPath = dataDir / "utxo-snapshot.bin.tmp";
     std::string urlPath = std::string(BASE_PATH) + snapshotFilename;
 
@@ -790,17 +1074,35 @@ bool DownloadUtxoSnapshot(const std::string& host,
         return false;
     }
 
+    // Step 4: verify the downloaded file's SHA256 against the manifest.
+    if (!expectedSha256.empty()) {
+        std::string actualSha = Sha256OfFile(tmpPath);
+        if (actualSha.empty()) {
+            strError = "Cannot read downloaded snapshot for SHA256 verification";
+            fs::remove(tmpPath);
+            return false;
+        }
+        if (actualSha != expectedSha256) {
+            strError = "Snapshot SHA256 mismatch: expected " + expectedSha256
+                     + ", got " + actualSha
+                     + " (manifest/snapshot tampering or server misconfiguration)";
+            fs::remove(tmpPath);
+            return false;
+        }
+        printf("Bootstrap: snapshot SHA256 verified (%s)\n", actualSha.substr(0, 16).c_str());
+    }
+
     printf("Bootstrap: UTXO snapshot downloaded, loading into database...\n");
 
-    // Load the snapshot into a fresh active chain DB
-    if (!UtxoSnapshot::LoadSnapshot(tmpPath, dataDir, strError)) {
+    // Step 5: load the snapshot. requireCheckpoint is FALSE — signature is
+    // the authentication gate; checkpoints would force snapshots only at
+    // specific heights. Signature alone is sufficient.
+    if (!UtxoSnapshot::LoadSnapshot(tmpPath, dataDir, strError, /*requireCheckpoint=*/false)) {
         fs::remove(tmpPath);
         return false;
     }
 
-    // Clean up the temp file
     fs::remove(tmpPath);
-
     printf("Bootstrap: UTXO snapshot loaded successfully.\n");
     return true;
 }

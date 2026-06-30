@@ -17,8 +17,9 @@
 // Factory: returns a chain-database handle whose concrete backend is chosen
 // by the -chaindb command-line argument:
 //
-//   -chaindb=leveldb  (default — pending Phase-4 retirement)
-//   -chaindb=rocksdb
+//   -chaindb=rocksdb  (default)
+//   -chaindb=leveldb  (retained as migration source + fallback; pending
+//                      retirement after live-chain validation)
 //
 // Callers receive a CTxDBBase*, so the rest of the codebase stays
 // backend-agnostic. Mode strings ("r", "r+", "cr+") match the pre-existing

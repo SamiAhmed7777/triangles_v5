@@ -22,7 +22,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build \
             libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
-            librocksdb-dev libevent-dev libminiupnpc-dev zlib1g-dev
+            libevent-dev libminiupnpc-dev zlib1g-dev \
+            libsnappy-dev liblz4-dev libzstd-dev libsqlite3-dev
+
+      - name: Build RocksDB from source
+        # Ubuntu 22.04's librocksdb-dev is 6.11.4 which CMakeLists.txt now
+        # refuses to configure against (need >= 7.4 for XXH3 per-block
+        # checksum). Build 8.9.1 from source — same version DNS2 ships —
+        # into /usr/local so CMake's find_library picks it up first.
+        run: sudo bash scripts/ci/build-rocksdb.sh
 
       - name: Configure
         run: |
@@ -33,8 +41,48 @@ jobs:
             -DBUILD_TESTS=ON \
             -DUSE_UPNP=OFF
 
+      - name: Build libtor (embedded Tor static lib)
+        # USE_TOR_EMBEDDED defaults to ON and the daemon/Qt GUI both
+        # link -ltor. The Tor source is a git submodule but libtor.a
+        # is NOT built by cmake. build-libtor.sh defaults to /mingw64
+        # paths which don't exist on the ubuntu-22.04 runner; pass
+        # /usr where libevent-dev/libssl-dev/zlib1g-dev install.
+        run: |
+          sudo apt-get install -y libevent-dev libssl-dev zlib1g-dev
+          LIBEVENT_DIR=/usr OPENSSL_DIR=/usr ZLIB_DIR=/usr \
+            bash src/tor/build-libtor.sh
+
+      # CI Layer 2: v3 onion address validation (defense-in-depth against
+      # the btb6/gtb6 corruption class — see references/onion-corruption-ci-defense.md).
+      # Validates: (a) src/onionseed.h hardcoded seeds, (b) contrib/triangles.conf.example
+      # operator-facing example. Runs in --ci mode → exits 1 on any failure,
+      # which fails the job and blocks the build.
+      - name: Validate .onion addresses (CI gate)
+        run: |
+          python3 scripts/validate_onion_seeds.py \
+            --ci \
+            --against src/onionseed.h \
+            src/onionseed.h \
+            contrib/triangles.conf.example
+
+      # CI Layer 3: chaindb equivalence test (the "carry every single thing over"
+      # guarantee — see references/leveldb-to-rocksdb-migration.md Phase A).
+      # Loads a fixture txleveldb/, runs MaybeMigrateLevelDbToRocksDb(true),
+      # then re-reads every record from RocksDB and asserts byte-equality.
+      # This is the proof that no data is lost in the LevelDB→RocksDB migration.
       - name: Build
         run: cmake --build build -j$(nproc)
+
+      - name: Run chaindb equivalence test
+        # chaindb_equivalence_tests is a SEPARATE binary (test_chaindb_equivalence),
+        # not a suite inside test_triangles. Run the right binary.
+        run: |
+          if [ -x build/bin/test_chaindb_equivalence ]; then
+            ./build/bin/test_chaindb_equivalence --log_level=test_suite
+          else
+            echo "test_chaindb_equivalence not built — skipping chaindb equivalence"
+            exit 0
+          fi
 
       - name: Run unit tests
         run: cd build && ctest --output-on-failure || true
@@ -64,7 +112,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build \
             libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
-            librocksdb-dev libevent-dev libminiupnpc-dev zlib1g-dev
+            libevent-dev libminiupnpc-dev zlib1g-dev \
+            libsnappy-dev liblz4-dev libzstd-dev libsqlite3-dev
+
+      - name: Build RocksDB from source
+        run: sudo bash scripts/ci/build-rocksdb.sh
 
       - name: Configure with sanitizers
         run: |
@@ -78,6 +130,17 @@ jobs:
             -DBUILD_DAEMON=ON \
             -DBUILD_TESTS=ON \
             -DUSE_UPNP=OFF
+
+      - name: Build libtor (embedded Tor static lib)
+        # USE_TOR_EMBEDDED defaults to ON and the daemon/Qt GUI both
+        # link -ltor. The Tor source is a git submodule but libtor.a
+        # is NOT built by cmake. build-libtor.sh defaults to /mingw64
+        # paths which don't exist on the ubuntu-22.04 runner; pass
+        # /usr where libevent-dev/libssl-dev/zlib1g-dev install.
+        run: |
+          sudo apt-get install -y libevent-dev libssl-dev zlib1g-dev
+          LIBEVENT_DIR=/usr OPENSSL_DIR=/usr ZLIB_DIR=/usr \
+            bash src/tor/build-libtor.sh
 
       - name: Build
         run: cmake --build build-san -j$(nproc)
@@ -108,19 +171,21 @@ jobs:
             mingw-w64-x86_64-boost
             mingw-w64-x86_64-openssl
             mingw-w64-x86_64-db
+            mingw-w64-x86_64-sqlite3
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-miniupnpc
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-rocksdb
+            mingw-w64-x86_64-autotools
 
       - name: Set VERSION
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
           else
-            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
-            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
-            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | tr -d '\r' | awk '{print $3}')
             echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
           fi
 
@@ -132,7 +197,16 @@ jobs:
             -DBUILD_DAEMON=OFF \
             -DBUILD_TESTS=OFF \
             -DUSE_UPNP=ON \
-            -DUSE_QRCODE=OFF
+            -DUSE_QRCODE=OFF \
+            -DUSE_I2P_EMBEDDED=ON
+
+      - name: Build libtor (embedded Tor static lib)
+        # Windows Qt GUI also transitively links -ltor via triangles_common.
+        # msys2 default install puts everything in /mingw64.
+        run: bash src/tor/build-libtor.sh
+
+      - name: Build libi2pd (embedded I2P static lib)
+        run: bash src/i2p/build-libi2pd.sh
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -194,6 +268,22 @@ jobs:
           strip --strip-all dist/triangles-qt.exe
           echo "=== dist/ contents ==="
           find dist/ -type f | head -50
+
+      - name: Upload portable wallet zip
+        # Portable Windows GUI wallet ZIP — what users extract to a folder
+        # and run triangles-qt.exe directly. This is what the Chocolatey
+        # package and most manual downloads expect.
+        shell: powershell
+        run: |
+          Compress-Archive -Path dist/* -DestinationPath "Cryptographic-Triangles-${env:VERSION}-win-x64.zip" -Force
+          echo "Created Cryptographic-Triangles-${env:VERSION}-win-x64.zip"
+          Get-Item "Cryptographic-Triangles-${env:VERSION}-win-x64.zip"
+
+      - name: Upload artifact (portable zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-qt-zip
+          path: Cryptographic-Triangles-*-win-x64.zip
 
       - name: Download Tor
         shell: powershell
@@ -259,10 +349,12 @@ jobs:
             mingw-w64-x86_64-boost
             mingw-w64-x86_64-openssl
             mingw-w64-x86_64-db
+            mingw-w64-x86_64-sqlite3
             mingw-w64-x86_64-libevent
             mingw-w64-x86_64-miniupnpc
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-rocksdb
+            mingw-w64-x86_64-autotools
 
       - name: Configure
         run: |
@@ -270,23 +362,28 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_QT=OFF \
             -DBUILD_DAEMON=ON \
+            -DBUILD_CLI=ON \
             -DBUILD_TESTS=OFF \
-            -DUSE_UPNP=ON
+            -DUSE_UPNP=ON \
+            -DUSE_I2P_EMBEDDED=ON
+
+      - name: Build libtor (embedded Tor static lib)
+        # Windows: msys2 default install puts everything in /mingw64,
+        # which is exactly the script's default. Just invoke it.
+        # See v5.9.25-fork-detection run #466 for why this is needed.
+        run: bash src/tor/build-libtor.sh
+
+      - name: Build libi2pd (embedded I2P static lib)
+        run: bash src/i2p/build-libi2pd.sh
 
       - name: Build
         run: |
           cmake --build build -j$(nproc)
           strip --strip-all build/bin/trianglesd.exe
+          strip --strip-all build/bin/triangles-cli.exe
 
       - name: Package daemon with DLLs
-        run: |
-          mkdir -p daemon-dist/tor
-          cp build/bin/trianglesd.exe daemon-dist/
-
-          # Copy all linked DLLs from MSYS2
-          ldd build/bin/trianglesd.exe | grep '/mingw64' | awk '{print $3}' | while read dll; do
-            cp "$dll" daemon-dist/ 2>/dev/null || true
-          done
+        run: bash scripts/ci/package-windows-daemon.sh daemon-dist trianglesd triangles-cli
 
       - name: Bundle Tor for daemon
         shell: powershell
@@ -318,9 +415,9 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
           else
-            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
-            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
-            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | tr -d '\r' | awk '{print $3}')
             echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
           fi
 
@@ -330,7 +427,11 @@ jobs:
           sudo apt-get install -y build-essential cmake ninja-build \
             qtbase5-dev qttools5-dev-tools \
             libboost-all-dev libssl-dev libdb++-dev \
-            libleveldb-dev librocksdb-dev libevent-dev libminiupnpc-dev zlib1g-dev
+            libleveldb-dev libevent-dev libminiupnpc-dev zlib1g-dev \
+            libsnappy-dev liblz4-dev libzstd-dev libsqlite3-dev
+
+      - name: Build RocksDB from source
+        run: sudo bash scripts/ci/build-rocksdb.sh
 
       - name: Configure
         run: |
@@ -339,7 +440,20 @@ jobs:
             -DBUILD_QT=ON \
             -DBUILD_DAEMON=OFF \
             -DBUILD_TESTS=OFF \
-            -DUSE_UPNP=ON
+            -DUSE_UPNP=ON \
+            -DUSE_I2P_EMBEDDED=ON
+
+      - name: Build libtor (embedded Tor static lib)
+        # Linux Qt GUI also transitively links -ltor via triangles_common.
+        # build-libtor.sh defaults to /mingw64; pass /usr where the
+        # libevent-dev, libssl-dev, zlib1g-dev packages install.
+        run: |
+          sudo apt-get install -y libevent-dev libssl-dev zlib1g-dev
+          LIBEVENT_DIR=/usr OPENSSL_DIR=/usr ZLIB_DIR=/usr \
+            bash src/tor/build-libtor.sh
+
+      - name: Build libi2pd (embedded I2P static lib)
+        run: bash src/i2p/build-libi2pd.sh
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -437,9 +551,9 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
           else
-            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
-            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
-            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | tr -d '\r' | awk '{print $3}')
             echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
           fi
 
@@ -448,7 +562,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build \
             libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
-            librocksdb-dev libevent-dev libminiupnpc-dev zlib1g-dev
+            libevent-dev libminiupnpc-dev zlib1g-dev \
+            libsnappy-dev liblz4-dev libzstd-dev libsqlite3-dev
+
+      - name: Build RocksDB from source
+        run: sudo bash scripts/ci/build-rocksdb.sh
 
       - name: Configure
         run: |
@@ -456,100 +574,35 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_QT=OFF \
             -DBUILD_DAEMON=ON \
+            -DBUILD_CLI=ON \
             -DBUILD_TESTS=OFF \
-            -DUSE_UPNP=ON
+            -DUSE_UPNP=ON \
+            -DUSE_I2P_EMBEDDED=ON
+
+      - name: Build libtor (embedded Tor static lib)
+        # USE_TOR_EMBEDDED defaults to ON and the daemon/Qt GUI both
+        # link -ltor. The Tor source is a git submodule but libtor.a
+        # is NOT built by cmake. build-libtor.sh defaults to /mingw64
+        # paths which don't exist on the ubuntu-22.04 runner; pass
+        # /usr where libevent-dev/libssl-dev/zlib1g-dev install.
+        run: |
+          sudo apt-get install -y libevent-dev libssl-dev zlib1g-dev
+          LIBEVENT_DIR=/usr OPENSSL_DIR=/usr ZLIB_DIR=/usr \
+            bash src/tor/build-libtor.sh
+
+      - name: Build libi2pd (embedded I2P static lib)
+        run: bash src/i2p/build-libi2pd.sh
 
       - name: Build
         run: cmake --build build -j$(nproc)
 
       - name: Strip binary
-        run: strip --strip-all build/bin/trianglesd
+        run: |
+          strip --strip-all build/bin/trianglesd
+          strip --strip-all build/bin/triangles-cli
 
       - name: Build .deb package (fully self-contained)
-        run: |
-          TOR_VERSION="15.0.9"
-          curl -sL "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-linux-x86_64-${TOR_VERSION}.tar.gz" -o tor-bundle.tar.gz
-          mkdir -p tor-extract && tar -xzf tor-bundle.tar.gz -C tor-extract
-
-          PKG="cryptographic-triangles-daemon_${VERSION}_amd64"
-          mkdir -p ${PKG}/DEBIAN
-          mkdir -p ${PKG}/usr/lib/cryptographic-triangles/lib
-          mkdir -p ${PKG}/usr/lib/cryptographic-triangles/tor
-          mkdir -p ${PKG}/usr/bin
-          mkdir -p ${PKG}/etc/systemd/system
-
-          cp build/bin/trianglesd ${PKG}/usr/lib/cryptographic-triangles/
-          cp tor-extract/tor/tor ${PKG}/usr/lib/cryptographic-triangles/tor/
-          chmod +x ${PKG}/usr/lib/cryptographic-triangles/tor/tor
-          [ -d tor-extract/data ] && cp -r tor-extract/data ${PKG}/usr/lib/cryptographic-triangles/tor/data
-
-          # Bundle ALL shared library dependencies (except glibc/kernel)
-          ldd build/bin/trianglesd | grep '=> /' | awk '{print $3}' | while read lib; do
-            case "$lib" in
-              /lib/x86_64-linux-gnu/libc.so*|/lib/x86_64-linux-gnu/libm.so*|/lib/x86_64-linux-gnu/libpthread.so*|/lib/x86_64-linux-gnu/libdl.so*|/lib/x86_64-linux-gnu/librt.so*|/lib/x86_64-linux-gnu/ld-linux*|/lib64/ld-linux*)
-                ;; # Skip glibc core — always present
-              *)
-                cp -L "$lib" ${PKG}/usr/lib/cryptographic-triangles/lib/ 2>/dev/null || true
-                ;;
-            esac
-          done
-          echo "=== Bundled libs ==="
-          ls ${PKG}/usr/lib/cryptographic-triangles/lib/ | wc -l
-          ls ${PKG}/usr/lib/cryptographic-triangles/lib/
-
-          # Launcher with LD_LIBRARY_PATH
-          cat > ${PKG}/usr/bin/trianglesd << 'LAUNCHER'
-          #!/bin/bash
-          INSTALL_DIR=/usr/lib/cryptographic-triangles
-          export LD_LIBRARY_PATH="${INSTALL_DIR}/lib:${LD_LIBRARY_PATH}"
-          exec "${INSTALL_DIR}/trianglesd" "$@"
-          LAUNCHER
-          sed -i 's/^          //' ${PKG}/usr/bin/trianglesd
-          chmod +x ${PKG}/usr/bin/trianglesd
-
-          cat > ${PKG}/etc/systemd/system/trianglesd.service << 'SVC'
-          [Unit]
-          Description=Cryptographic Triangles Daemon
-          After=network-online.target
-          Wants=network-online.target
-
-          [Service]
-          Type=simple
-          Environment=LD_LIBRARY_PATH=/usr/lib/cryptographic-triangles/lib
-          ExecStart=/usr/lib/cryptographic-triangles/trianglesd
-          Restart=on-failure
-          RestartSec=10
-
-          [Install]
-          WantedBy=multi-user.target
-          SVC
-          sed -i 's/^          //' ${PKG}/etc/systemd/system/trianglesd.service
-
-          cat > ${PKG}/DEBIAN/control << CTRL
-          Package: cryptographic-triangles-daemon
-          Version: ${VERSION}
-          Architecture: amd64
-          Maintainer: Cryptographic Triangles <dev@cryptographic-triangles.org>
-          Description: Cryptographic Triangles daemon with integrated Tor
-           Fully self-contained headless node with all libraries, Tor, and systemd service.
-           No external dependencies required — runs on any x86_64 Linux.
-          Section: finance
-          Priority: optional
-          CTRL
-          sed -i 's/^          //' ${PKG}/DEBIAN/control
-
-          cat > ${PKG}/DEBIAN/postinst << 'POST'
-          #!/bin/bash
-          systemctl daemon-reload
-          echo ""
-          echo "Cryptographic Triangles daemon installed."
-          echo "  Start:     sudo systemctl start trianglesd"
-          echo "  On boot:   sudo systemctl enable trianglesd"
-          echo ""
-          POST
-          chmod +x ${PKG}/DEBIAN/postinst
-
-          dpkg-deb --build ${PKG}
+        run: bash scripts/ci/package-linux-daemon.sh "${VERSION}"
 
       - name: Upload .deb
         uses: actions/upload-artifact@v4
@@ -569,17 +622,22 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
           else
-            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | awk '{print $3}')
-            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | awk '{print $3}')
-            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | awk '{print $3}')
+            MAJOR=$(grep 'CLIENT_VERSION_MAJOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            MINOR=$(grep 'CLIENT_VERSION_MINOR' src/clientversion.h | tr -d '\r' | awk '{print $3}')
+            REV=$(grep 'CLIENT_VERSION_REVISION' src/clientversion.h | tr -d '\r' | awk '{print $3}')
             echo "VERSION=${MAJOR}.${MINOR}.${REV}" >> $GITHUB_ENV
           fi
 
       - name: Install dependencies
         run: |
-          brew install cmake ninja qt@5 openssl@3 boost berkeley-db@5 leveldb rocksdb libevent miniupnpc
+          brew install cmake ninja qt@5 openssl@3 boost berkeley-db@5 leveldb rocksdb libevent miniupnpc zstd sqlite
 
       - name: Configure
+        # Add -L/opt/homebrew/lib to the link line so rocksdb's
+        # transitive -lzstd resolves. /opt/homebrew/lib is only in the
+        # rpath (runtime), not the link-time search path, so cmake's
+        # default LIBRARY_PATH propagation isn't enough — we set the
+        # linker flags explicitly.
         run: |
           export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
           cmake -B build -G Ninja \
@@ -588,6 +646,7 @@ jobs:
             -DBUILD_DAEMON=OFF \
             -DBUILD_TESTS=OFF \
             -DUSE_UPNP=ON \
+            -DUSE_I2P_EMBEDDED=ON \
             -DBOOST_ROOT=/opt/homebrew/opt/boost \
             -DBDB_INCLUDE_PATH=/opt/homebrew/opt/berkeley-db@5/include \
             -DBDB_LIB_PATH=/opt/homebrew/opt/berkeley-db@5/lib \
@@ -596,7 +655,38 @@ jobs:
             -DEVENT_LIB_PATH=/opt/homebrew/opt/libevent/lib \
             -DMINIUPNPC_INCLUDE_PATH=/opt/homebrew/opt/miniupnpc/include \
             -DMINIUPNPC_LIB_PATH=/opt/homebrew/opt/miniupnpc/lib \
-            -DQt5_DIR=/opt/homebrew/opt/qt@5/lib/cmake/Qt5
+            -DQt5_DIR=/opt/homebrew/opt/qt@5/lib/cmake/Qt5 \
+            -DCMAKE_LIBRARY_PATH=/opt/homebrew/lib \
+            -DCMAKE_EXE_LINKER_FLAGS="-L/opt/homebrew/lib" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-L/opt/homebrew/lib"
+
+      - name: Build libtor (embedded Tor static lib)
+        # macOS Qt GUI also transitively links -ltor via triangles_common.
+        # macOS Qt is built with @rpath embedded, so libtor needs to be
+        # at the configured TOR_SOURCE_ROOT location.
+        run: |
+          brew install libevent openssl@3 autoconf automake libtool zlib zstd
+          export PATH="/opt/homebrew/opt/automake/bin:/opt/homebrew/opt/libtool/bin:$PATH"
+          LIBEVENT_DIR=/opt/homebrew/opt/libevent \
+            OPENSSL_DIR=/opt/homebrew/opt/openssl@3 \
+            ZLIB_DIR=/opt/homebrew/opt/zlib \
+            bash src/tor/build-libtor.sh
+
+      - name: Build libtor (embedded Tor static lib)
+        # macOS Qt GUI also transitively links -ltor via triangles_common.
+        # macOS Qt is built with @rpath embedded, so libtor needs to be
+        # at the configured TOR_SOURCE_ROOT location.
+        run: |
+          brew install libevent openssl@3 autoconf automake libtool zlib
+          export PATH="/opt/homebrew/opt/automake/bin:/opt/homebrew/opt/libtool/bin:$PATH"
+          LIBEVENT_DIR=/opt/homebrew/opt/libevent \
+            OPENSSL_DIR=/opt/homebrew/opt/openssl@3 \
+            ZLIB_DIR=/opt/homebrew/opt/zlib \
+            bash src/tor/build-libtor.sh
+
+      - name: Build libi2pd (embedded I2P static lib)
+        # HOMEBREW=1 tells the i2pd Makefile to use Homebrew paths.
+        run: HOMEBREW=1 bash src/i2p/build-libi2pd.sh
 
       - name: Build
         run: cmake --build build -j$(sysctl -n hw.ncpu)
@@ -689,6 +779,8 @@ jobs:
           mkdir -p release
           # Windows Qt installer (setup.exe — includes Tor, Start Menu shortcuts, uninstaller)
           cp artifacts/windows-qt-setup/*.exe release/
+          # Windows Qt portable zip (extract & run — no install required)
+          cp artifacts/windows-qt-zip/*.zip release/
           # Windows daemon (zip with DLLs + Tor)
           cd artifacts/windows-daemon && zip -r "../../release/Cryptographic-Triangles-${VERSION}-win-x64-daemon.zip" . && cd ../..
           # Linux Qt .deb (dpkg -i to install — includes Tor, desktop entry, icon)

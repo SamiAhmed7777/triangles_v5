@@ -19,6 +19,8 @@
 #include "tor/tor_embedded.h"
 #include "tor/onion_v3.h"
 #include "tor/tor_process.h"
+#include "i2p/i2p_embedded.h"
+#include "i2p/i2pseed.h"
 #ifdef ENABLE_ZMQ
 #include "zmqpublishnotifier.h"
 #endif
@@ -28,13 +30,21 @@
 #include <memory>
 #include <thread>
 #include <vector>
+
+// Forward declaration: InitError / InitWarning are defined further down
+// in this file but referenced by AppInit (line ~423) before the definition.
+static bool InitError(const std::string& str);
+static bool InitWarning(const std::string& str);
 #include <filesystem>
 #include <fstream>
-#include <boost/interprocess/sync/file_lock.hpp>
+#include <algorithm>
 #include <openssl/crypto.h>
 
 #ifndef WIN32
 #include <signal.h>
+#include <sys/file.h>
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 // Windows.h (transitively included) defines these as macros, clobbering Checkpoints:: enum values.
@@ -49,8 +59,40 @@
 #endif
 
 using namespace std;
-using namespace boost;
 namespace fs = std::filesystem;
+
+namespace {
+// Acquire an exclusive, non-blocking advisory lock on the datadir .lock file
+// and hold it for the lifetime of the process. Replaces
+// boost::interprocess::file_lock. The descriptor/handle is intentionally never
+// released — the OS drops the lock automatically when the process exits.
+bool LockDataDirectory(const std::filesystem::path& pathLockFile)
+{
+#ifdef WIN32
+    HANDLE hFile = CreateFileA(pathLockFile.string().c_str(),
+                               GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
+                               nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE)
+        return false;
+    OVERLAPPED ov = {};
+    if (!LockFileEx(hFile, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                    0, MAXDWORD, MAXDWORD, &ov)) {
+        CloseHandle(hFile);
+        return false;
+    }
+    return true; // handle held until process exit
+#else
+    int fd = open(pathLockFile.string().c_str(), O_RDWR | O_CREAT, 0644);
+    if (fd < 0)
+        return false;
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        close(fd);
+        return false;
+    }
+    return true; // fd held until process exit
+#endif
+}
+} // namespace
 
 std::unique_ptr<CWallet> pwalletMain;
 CClientUIInterface uiInterface;
@@ -100,6 +142,97 @@ void ExitTimeout(void* parg)
     MilliSleep(5000);
     ExitProcess(0);
 #endif
+}
+
+// Wait up to maxWaitSec for at least minPeers peers to have reported their
+// chain height via the version handshake. Returns the median peer height, or
+// -1 if we couldn't get enough peers (timeout, no peers, all nStartingHeight=-1).
+int WaitForPeerHeights(int minPeers, int maxWaitSec)
+{
+    const int pollIntervalMs = 500;
+    const int64_t deadline = GetTimeMillis() + (int64_t)maxWaitSec * 1000;
+
+    while (GetTimeMillis() < deadline && !fRequestShutdown) {
+        std::vector<int> heights;
+        {
+            LOCK(cs_vNodes);
+            for (CNode* pnode : vNodes) {
+                if (pnode && pnode->nStartingHeight > 0)
+                    heights.push_back(pnode->nStartingHeight);
+            }
+        }
+        if ((int)heights.size() >= minPeers) {
+            std::sort(heights.begin(), heights.end());
+            int median = heights[heights.size() / 2];
+            printf("AutoRebuild: got %zu peer heights; median=%d\n", heights.size(), median);
+            return median;
+        }
+        MilliSleep(pollIntervalMs);
+    }
+
+    std::vector<int> heights;
+    {
+        LOCK(cs_vNodes);
+        for (CNode* pnode : vNodes) {
+            if (pnode && pnode->nStartingHeight > 0)
+                heights.push_back(pnode->nStartingHeight);
+        }
+    }
+    if (heights.empty()) {
+        printf("AutoRebuild: no peers reported heights after %ds\n", maxWaitSec);
+        return -1;
+    }
+    std::sort(heights.begin(), heights.end());
+    int median = heights[heights.size() / 2];
+    printf("AutoRebuild: timed out with %zu peers; median=%d\n", heights.size(), median);
+    return median;
+}
+
+// If -autorerebuild is set and our local chain is more than that many blocks
+// behind the median peer height, wipe the chain DB (preserving wallet.dat +
+// onion + smsg state) and request shutdown. On restart, the daemon sees no
+// chain DB and the snapshot path takes over.
+void MaybeAutoRebuild(int thresholdBlocks)
+{
+    if (thresholdBlocks <= 0)
+        return;
+
+    if (nBestHeight < 0) {
+        printf("AutoRebuild: local nBestHeight unset — skipping\n");
+        return;
+    }
+
+    printf("AutoRebuild: enabled (threshold=%d blocks). Local chain tip: %d\n",
+           thresholdBlocks, nBestHeight);
+    int medianPeer = WaitForPeerHeights(/*minPeers=*/3, /*maxWaitSec=*/60);
+    if (medianPeer <= 0) {
+        printf("AutoRebuild: could not get peer heights — skipping rebuild\n");
+        return;
+    }
+
+    int lag = medianPeer - nBestHeight;
+    printf("AutoRebuild: peer median=%d, local=%d, lag=%d\n",
+           medianPeer, nBestHeight, lag);
+
+    if (lag < thresholdBlocks) {
+        printf("AutoRebuild: lag %d < threshold %d — no rebuild needed\n",
+               lag, thresholdBlocks);
+        return;
+    }
+
+    printf("\n*** AutoRebuild: chain is %d blocks behind — wiping chain DB ***\n", lag);
+    printf("*** Preserving wallet.dat, smsgDB, onion state. ***\n");
+    printf("*** Daemon will shutdown; restart to load signed UTXO snapshot. ***\n\n");
+
+    WipeChainDataDir();
+
+    fs::path blkPath = GetDataDir() / "blk0001.dat";
+    if (fs::exists(blkPath)) {
+        fs::remove(blkPath);
+        printf("AutoRebuild: removed stale %s\n", blkPath.string().c_str());
+    }
+
+    StartShutdown();
 }
 
 void StartShutdown()
@@ -241,9 +374,14 @@ void Shutdown(void* parg)
             pScriptCheckQueue.reset();
         }
 
+        // Stop the I2P SAM session and its accept loop, then the i2pd router.
+        StopI2P();
+        StopEmbeddedI2P();
+
         // NOW safe to destroy Tor state - all threads have stopped
         ShutdownTorV3();
         StopEmbeddedTor();
+        StopEmbeddedI2P();
 
 #ifdef ENABLE_ZMQ
         if (pzmqNotifier)
@@ -320,6 +458,21 @@ bool AppInit(int argc, char* argv[])
             Shutdown(nullptr);
         }
         ReadConfigFile(mapArgs, mapMultiArgs);
+
+        // AUDIT: If notorious=1 or -notor was set in triangles.conf, scream
+        // loudly.  This is the silent path that put DNS2 on a 5+ day clearnet
+        // fork in 2026-06-23 — operator flipped it for troubleshooting, never
+        // reverted it, and the daemon happily started in clearnet-only mode.
+        // We refuse to proceed unless -recovery-mode=1 is ALSO set, even if
+        // the flag was set in the config file rather than on the command line.
+        if (mapArgs.count("-notor") && !GetBoolArg("-recovery-mode", false)) {
+            return InitError(_(
+                "-notor=1 found in triangles.conf or command line.  Triangles is "
+                "Tor-native; running without Tor is unsafe and produces silent "
+                "clearnet forks (see 2026-06-23 DNS2 incident).  If this is an "
+                "explicit recovery operation, pass -recovery-mode=1 on the command "
+                "line (in addition to the config file setting) to acknowledge."));
+        }
 
         if (mapArgs.count("-?") || mapArgs.count("--help"))
         {
@@ -414,16 +567,22 @@ std::string HelpMessage()
         "  -dbcache=<n>           " + _("Set database cache size in megabytes (default: 25)") + "\n" +
         "  -dblogsize=<n>         " + _("Set database disk log size in megabytes (default: 100)") + "\n" +
         "  -timeout=<n>           " + _("Specify connection timeout in milliseconds (default: 5000)") + "\n" +
+        "  -torconnecttimeout=<n> " + _("Max time (ms) for the SOCKS5 handshake with the Tor proxy (send+recv of SOCKS5 init/auth/connect). Bounds how long a dead/slow .onion can stall the connector thread (default: 60000, range 5000-180000)") + "\n" +
         //"  -proxy=<ip:port>       " + _("Connect through socks proxy") + "\n" +
         //"  -socks=<n>             " + _("Select the version of socks proxy to use (4-5, default: 5)") + "\n" +
         "  -tor=<ip:port>         " + _("Use proxy to reach tor hidden services (default: same as -proxy)") + "\n"
-        "  -notor                 " + _("Disable Tor (WARNING: wallet will not start - Tor is required)") + "\n" +
+        "  -notor                 " + _("Disable Tor - run in clearnet-only mode (no .onion connectivity)") + "\n" +
         "  -torsocks=<port>       " + _("Set embedded or managed Tor SOCKS proxy port (default: 19099)") + "\n" +
         "  -torhiddenservice      " + _("Enable the managed Tor hidden service (default: 1)") + "\n" +
-        "  -torhsport=<port>      " + _("Set embedded or managed Tor hidden service port (default: wallet listen port)") + "\n" +
+        "  -torhsport=<port>      " + _("Set embedded or managed Tor hidden service port (default: wallet listen port)") + "\n"
+        "  -i2p                   " + _("Enable embedded I2P router for .b32.i2p connectivity (default: 1)") + "\n"
+        "  -i2psocks=<port>       " + _("Set embedded I2P SOCKS proxy port (default: 19100)") + "\n"
+        "  -i2psam=<port>         " + _("Set embedded I2P SAM bridge port (default: 7656)") + "\n"
+        "  -i2phsport=<port>      " + _("Set I2P server tunnel forward port (default: wallet listen port)") + "\n" +
         //"  -dns                   " + _("Allow DNS lookups for -addnode, -seednode and -connect") + "\n" +
         "  -port=<port>           " + _("Listen for connections on <port> (default: 24112 or testnet: 24111)") + "\n" +
         "  -maxconnections=<n>    " + _("Maintain at most <n> connections to peers (default: 125)") + "\n" +
+        "  -maxoutboundconnections=<n> " + _("Maximum outbound connections (default: 8, range 4-32)") + "\n" +
         "  -addnode=<ip>          " + _("Add a node to connect to and attempt to keep the connection open") + "\n" +
         "  -connect=<ip>          " + _("Connect only to the specified node(s)") + "\n" +
         "  -seednode=<ip>         " + _("Connect to a node to retrieve peer addresses, and disconnect") + "\n" +
@@ -440,6 +599,7 @@ std::string HelpMessage()
         "  -onionseed             " + _("Find peers using .onion seeds (default: 1 unless -connect)") + "\n" +
         "  -seedurl=<host>        " + _("HTTP seed list host (default: seeds.cryptographic-triangles.org)") + "\n" +
         "  -noseedurl             " + _("Disable HTTP seed list fetch on startup") + "\n" +
+        "  -autorerebuild=<n>     " + _("If our chain is more than <n> blocks behind peers, wipe chain DB and shutdown for clean restart (default: 0=disabled)") + "\n" +
         "  -banscore=<n>          " + _("Threshold for disconnecting misbehaving peers (default: 100)") + "\n" +
         "  -bantime=<n>           " + _("Number of seconds to keep misbehaving peers from reconnecting (default: 86400)") + "\n" +
         "  -par=<n>               " + _("Set the number of script verification threads (default: auto, 0 = auto, 1 = single-threaded)") + "\n" +
@@ -687,6 +847,21 @@ bool AppInit2()
             nConnectTimeout = nNewTimeout;
     }
 
+    // SOCKS5/Tor negotiation timeout. Separate from -timeout (which only covers
+    // the instant local connect to the Tor SOCKS proxy); this bounds the
+    // SOCKS5 handshake (send+recv of init/auth/connect). On a dead/slow .onion
+    // the recv() in Socks5() would otherwise block until Tor's own ~120s
+    // SocksTimeout fires, holding an outbound connection slot.
+    if (mapArgs.count("-torconnecttimeout"))
+    {
+        int nTorTimeout = GetArg("-torconnecttimeout", 60000);
+        if (IsValidSocksNegotiationTimeout(nTorTimeout))
+            nSocksNegotiationTimeout = nTorTimeout;
+        else
+            InitWarning("Ignoring -torconnecttimeout=" + mapArgs["-torconnecttimeout"] +
+                        ": out of range (5000..180000 ms), using default 60000");
+    }
+
     if (mapArgs.count("-paytxfee"))
     {
         if (!ParseMoney(mapArgs["-paytxfee"], nTransactionFee))
@@ -697,6 +872,15 @@ bool AppInit2()
 
     fConfChange = GetBoolArg("-confchange", false);
     fEnforceCanonical = GetBoolArg("-enforcecanonical", true);
+
+    // Validate -maxoutboundconnections (range 4-32, default 8)
+    if (mapArgs.count("-maxoutboundconnections"))
+    {
+        int nMaxOutboundConn = GetArg("-maxoutboundconnections", 8);
+        if (nMaxOutboundConn < 4 || nMaxOutboundConn > 32)
+            InitWarning("Ignoring -maxoutboundconnections=" + mapArgs["-maxoutboundconnections"] +
+                        ": out of range (4..32), using default 8");
+    }
 
     int nScriptCheckThreads = GetArg("-par", 0);
     if (nScriptCheckThreads <= 0)
@@ -738,8 +922,7 @@ bool AppInit2()
     fs::path pathLockFile = GetDataDir() / ".lock";
     FILE* file = fopen(pathLockFile.string().c_str(), "a"); // empty lock file; created if it doesn't exist.
     if (file) fclose(file);
-    static boost::interprocess::file_lock lock(pathLockFile.string().c_str());
-    if (!lock.try_lock())
+    if (!LockDataDirectory(pathLockFile))
         return InitError(strprintf(_("Cannot obtain a lock on data directory %s.  Triangles is probably already running."), strDataDir.c_str()));
 
 #if !defined(WIN32) && !defined(QT_GUI)
@@ -927,7 +1110,8 @@ bool AppInit2()
     // v5.9.5: P2P UTXO snapshot fetch is the default for fresh installs (Step 11.6).
     // The legacy clearnet HTTP bootstrap only runs when the user explicitly requests
     // it via -bootstrap, or when -snapshot=0 disables the P2P fetcher.
-#ifndef QT_GUI
+// Bootstrap auto-download works for both GUI and daemon.
+    // GUI users get the same automatic bootstrap on fresh installs.
     {
         bool wantsBootstrap = GetBoolArg("-bootstrap", false);
         bool noBootstrap = GetBoolArg("-nobootstrap", false);
@@ -935,13 +1119,11 @@ bool AppInit2()
         fs::path dataPath = GetDataDir();
         bool needsBootstrap = Bootstrap::NeedsBootstrap(dataPath);
 
-        if (needsBootstrap && !noBootstrap && !snapshotMode) {
-            printf("Bootstrap: no blockchain data found — downloading automatically.\n");
+        if (needsBootstrap && !noBootstrap) {
+            printf("Bootstrap: no blockchain data found — downloading UTXO snapshot automatically.\n");
             printf("Bootstrap: (use -nobootstrap to skip)\n");
+            uiInterface.InitMessage(_("Downloading UTXO snapshot..."));
             wantsBootstrap = true;
-        } else if (needsBootstrap && snapshotMode && !wantsBootstrap) {
-            printf("Bootstrap: no blockchain data found — will fetch UTXO snapshot via P2P after network start.\n");
-            printf("Bootstrap: (use -bootstrap for legacy clearnet HTTP bootstrap, or -snapshot=0 to disable P2P fetcher)\n");
         }
 
     if (wantsBootstrap)
@@ -951,13 +1133,24 @@ bool AppInit2()
         std::string host = Bootstrap::DEFAULT_HOST;
         std::string strError;
 
-        auto progressFn = [](int64_t bytesDownloaded, int64_t totalBytes) {
+        int64_t lastGuiUpdate = 0;
+        auto progressFn = [&lastGuiUpdate](int64_t bytesDownloaded, int64_t totalBytes) {
             if (totalBytes > 0) {
                 printf("\rBootstrap: %lld / %lld MB (%lld%%)",
                        (long long)(bytesDownloaded / (1024*1024)),
                        (long long)(totalBytes / (1024*1024)),
                        (long long)((bytesDownloaded * 100) / totalBytes));
                 fflush(stdout);
+                // Update GUI status bar every ~1 MB
+                int64_t now = GetTimeMillis();
+                if (now - lastGuiUpdate > 1000) {
+                    lastGuiUpdate = now;
+                    std::string msg = strprintf("Downloading blockchain: %lld / %lld MB (%lld%%)",
+                        (long long)(bytesDownloaded / (1024*1024)),
+                        (long long)(totalBytes / (1024*1024)),
+                        (long long)((bytesDownloaded * 100) / totalBytes));
+                    uiInterface.InitMessage(msg);
+                }
             }
         };
 
@@ -999,7 +1192,6 @@ bool AppInit2()
             strprintf("host=%s success=%d utxo_snapshot=%d", host.c_str(), success, triedUtxoSnapshot));
     }
     } // end bootstrap scope
-#endif
 
     // ********************************************************* Step 6c: manual UTXO snapshot loading
     // If utxo-snapshot.bin exists in data dir and the chain DB hasn't been
@@ -1013,8 +1205,13 @@ bool AppInit2()
             printf("Found utxo-snapshot.bin — loading UTXO snapshot...\n");
             uiInterface.InitMessage(_("Loading UTXO snapshot..."));
 
+            // Local file load: skip the checkpoint gate. The operator has
+            // filesystem access, so the trust model is already equivalent
+            // to direct chain state modification — a malicious local file
+            // is no worse than a malicious chain DB. P2P-delivered
+            // snapshots (SnapshotNet) keep the checkpoint gate on.
             std::string strError;
-            if (UtxoSnapshot::LoadSnapshot(snapshotFile, dataPath, strError)) {
+            if (UtxoSnapshot::LoadSnapshot(snapshotFile, dataPath, strError, /*requireCheckpoint=*/false)) {
                 printf("UTXO snapshot loaded successfully.\n");
             } else {
                 printf("UTXO snapshot load failed: %s\n", strError.c_str());
@@ -1023,14 +1220,32 @@ bool AppInit2()
         }
     }
 
-    // ********************************************************* Step 6d: optional LevelDB -> RocksDB chain DB migration
-    if (GetBoolArg("-migratechaindb", false) || GetBoolArg("-migratechaindbforce", false))
+    // ********************************************************* Step 6d: LevelDB -> RocksDB chain DB migration
+    // Runs when explicitly requested (-migratechaindb[force]) OR automatically
+    // when RocksDB is the active backend and the only chain DB present is a
+    // legacy LevelDB (txleveldb). This makes the RocksDB default transparent
+    // for existing nodes: their chain state is copied (and verified) into a new
+    // rocksdb/ directory on first launch, leaving the LevelDB source untouched
+    // as a fallback. MaybeMigrateLevelDbToRocksDb() is a no-op when there is no
+    // LevelDB source or a RocksDB directory already exists, so it is safe to
+    // call on every startup.
     {
-        uiInterface.InitMessage(_("Migrating chain database to RocksDB..."));
-        std::string strMigrateError;
-        bool fForce = GetBoolArg("-migratechaindbforce", false);
-        if (!MaybeMigrateLevelDbToRocksDb(fForce, strMigrateError))
-            return InitError(strprintf(_("Chain DB migration failed: %s"), strMigrateError.c_str()));
+        bool fExplicit = GetBoolArg("-migratechaindb", false) ||
+                         GetBoolArg("-migratechaindbforce", false);
+        bool fAuto = IsRocksDbChainBackend() &&
+                     fs::exists(GetDataDir() / "txleveldb") &&
+                     !fs::exists(GetDataDir() / "rocksdb");
+        if (fExplicit || fAuto)
+        {
+            uiInterface.InitMessage(_("Migrating chain database to RocksDB..."));
+            if (fAuto && !fExplicit)
+                printf("ChainDB: RocksDB backend active with a legacy LevelDB present; "
+                       "migrating automatically.\n");
+            std::string strMigrateError;
+            bool fForce = GetBoolArg("-migratechaindbforce", false);
+            if (!MaybeMigrateLevelDbToRocksDb(fForce, strMigrateError))
+                return InitError(strprintf(_("Chain DB migration failed: %s"), strMigrateError.c_str()));
+        }
     }
 
     // ********************************************************* Step 7: load blockchain
@@ -1052,7 +1267,7 @@ bool AppInit2()
     }
 
     // Handle -reindex: delete the chain DB so it gets rebuilt from the raw
-    // blk*.dat files via FastImportBlockFile(). This recalculates money
+    // blk*.dat files. This recalculates money
     // supply, tx index, and UTXO set from scratch. Backend-agnostic via
     // WipeChainDataDir(), which resolves the directory per the configured
     // -chaindb backend.
@@ -1069,18 +1284,47 @@ bool AppInit2()
     if (!LoadBlockIndex())
         return InitError(_("Error loading blkindex.dat"));
 
-    // If the block index is empty but blk0001.dat exists (bootstrap download),
-    // fast-import: build the index directly from the block file without re-writing
-    // data. Batches LevelDB commits every 200K blocks for speed.
-    if (nBestHeight == 0 && std::filesystem::exists(GetDataDir() / "blk0001.dat")
-        && mapBlockIndex.size() <= 1)
+    // triangles fix (pitfall #61): initialize pindexFinalized from the
+    // hardcoded checkpoint on startup, BEFORE the daemon opens any peer
+    // connections or processes any block messages.
+    //
+    // Without this, pindexFinalized stays NULL on a fresh restart even when
+    // we have 2.2M blocks on disk, because the auto-checkpoint code in
+    // ActivateBestChain() at main.cpp:2459 only sets it when
+    // !IsInitialBlockDownload(). If the chain tip is more than 24h stale
+    // (which happens on every restart with a synced chain), IsInitialBlockDownload()
+    // returns true and pindexFinalized never gets set.
+    //
+    // The downstream reorg guard at main.cpp:2198 short-circuits when
+    // pindexFinalized is NULL, which allowed a 3,755-block minority fork
+    // to overwrite a healthy 2,206,004-block chain on 2026-06-16. Loading
+    // the hardcoded checkpoint from checkpoints.cpp (block 2,205,000) on
+    // startup means the reorg guard is always active whenever the
+    // checkpointed block is in our local mapBlockIndex.
     {
-        uiInterface.InitMessage(_("Importing bootstrap blocks..."));
-        printf("Block index empty but blk0001.dat exists - running fast import...\n");
-        int64_t nFastImportStart = GetTimeMillis();
-        FastImportBlockFile();
-        StartupPerfLog("bootstrap_fast_import", GetTimeMillis() - nFastImportStart, strprintf("bestheight=%d", nBestHeight));
+        CBlockIndex* pCheckpoint = Checkpoints::GetLastCheckpoint(mapBlockIndex);
+        if (pCheckpoint && pCheckpoint != pindexFinalized)
+        {
+            pindexFinalized = pCheckpoint;
+            printf("STARTUP-CHECKPOINT: pindexFinalized set to block %d (%s) from hardcoded checkpoint\n",
+                pindexFinalized->nHeight, pindexFinalized->GetBlockHash().ToString().substr(0,20).c_str());
+        }
+        else if (!pCheckpoint)
+        {
+            printf("STARTUP-CHECKPOINT: WARNING — hardcoded checkpoint not in local block index, pindexFinalized remains NULL\n");
+        }
     }
+
+    // AutoRebuild: if -autorerebuild is set and we are behind peers, wipe chain DB
+    // and shutdown for clean restart.
+    MaybeAutoRebuild(GetArg("-autorerebuild", 0));
+    if (fRequestShutdown) {
+        printf("AutoRebuild: shutdown requested before chain load complete\n");
+        return false;
+    }
+
+    // Block index loaded. With fast-import removed, the only supported sync path
+    // is the UTXO snapshot (auto-downloaded from bootstrap or placed manually in datadir).
 
     // as LoadBlockIndex can take several minutes, it's possible the user
     // requested to kill triangles-qt during the last operation. If so, exit.
@@ -1343,11 +1587,76 @@ bool AppInit2()
             #ifdef USE_UPNP
             fUseUPnP = false;
             #endif
+        } else if (GetBoolArg("-notor", false)) {
+            // -notor: explicit clearnet mode.  Triangles is Tor-native and
+            // running without Tor is unsafe for normal operation — it can
+            // produce silent clearnet forks (see 2026-06-23 DNS2 incident,
+            // 5+ days on a parallel chain because -notor=1 was left on after
+            // troubleshooting).  The flag is preserved for explicit recovery
+            // workflows (e.g. dumputxoset-from-clearnet when bootstrapping
+            // a new node) but requires an additional -recovery-mode=1
+            // confirmation flag so it cannot be flipped by accident.
+            if (!GetBoolArg("-recovery-mode", false)) {
+                return InitError(_(
+                    "-notor requires -recovery-mode=1 confirmation.  Triangles is Tor-native; "
+                    "running without Tor is unsafe and produces silent clearnet forks.  "
+                    "If you need clearnet mode for bootstrap recovery or diagnostics, "
+                    "pass BOTH -notor=1 -recovery-mode=1 on the command line."));
+            }
+            printf("WARNING: Tor disabled via -notor AND -recovery-mode=1 set.  "
+                   "Running in clearnet-only mode.\n");
+            printf("  .onion connections will NOT be available.\n");
+            printf("  This mode is for RECOVERY ONLY — exit and restart without these\n"
+                   "  flags as soon as the recovery operation completes.\n");
+            SetReachable(NET_IPV4, true);
+            SetReachable(NET_IPV6, true);
+            SetReachable(NET_TOR, false);
         } else {
             std::string torError = CTorEmbedded::GetInstance()->GetStartupError();
             if (torError.empty())
                 torError = "No detailed Tor startup error was recorded.";
             return InitError(strprintf(_("Tor failed to start. Triangles requires Tor to operate.\n\nDetails: %s"), torError.c_str()));
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // Embedded I2P (i2pd) startup
+        //
+        // I2P runs as a co-equal anonymity network alongside Tor. When Tor
+        // starts successfully (tor-native mode), I2P provides an alternative
+        // anonymous transport via .b32.i2p destinations. When Tor is disabled
+        // (-notor recovery mode), I2P is still started to maintain anonymity.
+        //
+        // I2P's SOCKS proxy (default 19100) handles outbound .i2p connections.
+        // A server tunnel forwards incoming I2P connections to the P2P port.
+        // ════════════════════════════════════════════════════════════════
+        if (torStarted || GetBoolArg("-notor", false)) {
+            uiInterface.InitMessage(_("Starting embedded I2P router..."));
+            int64_t nI2PStart = GetTimeMillis();
+            bool i2pStarted = StartEmbeddedI2P();
+            StartupPerfLog("i2p_start", GetTimeMillis() - nI2PStart,
+                           strprintf("started=%d", i2pStarted));
+
+            if (i2pStarted) {
+                int i2pSocksPort = CI2PEmbedded::GetInstance()->GetSocksPort();
+                CService i2pProxyAddr("127.0.0.1", i2pSocksPort);
+
+                // Route I2P traffic through i2pd's SOCKS proxy
+                SetProxy(NET_I2P, i2pProxyAddr, 5);
+                SetReachable(NET_I2P, true);
+
+                printf("I2P-NATIVE MODE: I2P router running\n");
+                printf("  SOCKS proxy at 127.0.0.1:%d for .b32.i2p connections\n",
+                       i2pSocksPort);
+                printf("  Dual-network anonymity: Tor (.onion) + I2P (.b32.i2p)\n");
+            } else {
+                // I2P failure is non-fatal — Tor-only operation continues.
+                // The daemon still works with .onion peers.
+                std::string i2pError = CI2PEmbedded::GetInstance()->GetStartupError();
+                printf("WARNING: Embedded I2P did not start. Running Tor-only.\n");
+                if (!i2pError.empty())
+                    printf("  I2P error: %s\n", i2pError.c_str());
+                SetReachable(NET_I2P, false);
+            }
         }
 
         // Initialize Tor V3 identity (Ed25519 keys, onion address)
@@ -1416,6 +1725,45 @@ bool AppInit2()
             if (!NewThread(ThreadTorMaintenance, nullptr))
                 printf("Warning: ThreadTorMaintenance could not be started\n");
         }
+
+        // Bring up I2P (SAM) transport alongside Tor so the wallet has both a
+        // .onion and a .b32.i2p address. On by default; disable with -i2p=0.
+        // A bundled i2pd router is launched automatically (mirroring embedded
+        // Tor); if -i2psam points at a non-loopback bridge, or a router is
+        // already running, we use that instead.
+        if (GetBoolArg("-i2p", true)) {
+            int64_t nI2PStart = GetTimeMillis();
+
+            // Resolve the SAM endpoint (default 127.0.0.1:7656).
+            std::string sam = GetArg("-i2psam", "127.0.0.1:7656");
+            int samPort = I2P_DEFAULT_SAM_PORT;
+            std::string samHost = "127.0.0.1";
+            SplitHostPort(sam, samPort, samHost);
+            if (samPort <= 0) samPort = I2P_DEFAULT_SAM_PORT;
+            bool loopback = samHost.empty() || samHost == "127.0.0.1" || samHost == "localhost";
+
+            // Auto-launch our own i2pd only when the bridge is local.
+            if (loopback) {
+                uiInterface.InitMessage(_("Starting the I2P router..."));
+                if (!StartEmbeddedI2P((GetDataDir() / "i2pd").string(), samPort)) {
+                    printf("NOTICE: bundled I2P router unavailable (%s).\n",
+                           CI2PProcess::GetInstance()->GetLastError().c_str());
+                    printf("  I2P will use an external router if one is running on %s.\n", sam.c_str());
+                }
+            }
+
+            uiInterface.InitMessage(_("Connecting to the I2P network..."));
+            bool i2pStarted = StartI2P();
+            StartupPerfLog("i2p_start", GetTimeMillis() - nI2PStart, strprintf("started=%d", i2pStarted));
+            if (i2pStarted) {
+                SetReachable(NET_I2P, true);
+                std::string i2pAddr = CI2PSession::GetInstance()->GetB32Address();
+                printf("I2P network enabled. Our address: %s\n", i2pAddr.c_str());
+            } else {
+                printf("NOTICE: I2P not available this session; continuing with Tor only\n");
+                StopEmbeddedI2P();
+            }
+        }
     }
 
     // ********************************************************* Step 9: import blocks
@@ -1464,6 +1812,28 @@ bool AppInit2()
     printf("Loaded %i addresses from peers.dat  %" PRId64 "ms\n",
            addrman.size(), GetTimeMillis() - nStart);
     StartupPerfLog("peers_load", GetTimeMillis() - nStart, strprintf("count=%d", addrman.size()));
+
+    // Add hardcoded I2P (.b32.i2p) seed addresses to the address manager.
+    // This enables cross-network peer discovery: Tor-connected nodes can learn
+    // about I2P peers and vice versa. Onion seeds are loaded separately in
+    // ThreadOnionSeed (net.cpp), but we add I2P seeds here during init so they
+    // are available immediately for the outbound connector.
+    {
+        static const char *(*strI2PSeed)[1] = fTestNet ? strTestNetI2PSeed : strMainNetI2PSeed;
+        int nI2PSeeds = 0;
+        for (unsigned int si = 0; strI2PSeed[si][0] != nullptr; si++) {
+            CNetAddr parsed;
+            if (parsed.SetSpecial(strI2PSeed[si][0])) {
+                int nOneDay = 24 * 3600;
+                CAddress addr = CAddress(CService(parsed, GetDefaultPort()));
+                addr.nTime = GetTime() - 3 * nOneDay - GetRand(4 * nOneDay);
+                addrman.Add(addr, parsed);
+                nI2PSeeds++;
+            }
+        }
+        if (nI2PSeeds > 0)
+            printf("Added %d hardcoded I2P (.b32.i2p) seed addresses to addrman\n", nI2PSeeds);
+    }
     
     
     // ********************************************************* Step 11: start node
