@@ -10,7 +10,14 @@
 
 #ifndef WIN32
 #include <sys/fcntl.h>
+#include <netinet/tcp.h>
 #endif
+
+#include <cstdlib>
+#include <cctype>
+#include <cerrno>
+#include <limits>
+#include <sstream>
 
 #include "strlcpy.h"
 
@@ -21,6 +28,13 @@ static proxyType proxyInfo[NET_MAX];
 static proxyType nameproxyInfo;
 static CCriticalSection cs_proxyInfos;
 int nConnectTimeout = 5000;
+// Bound for the SOCKS5 negotiation over Tor (ms). The recv() calls in Socks5()
+// wait for Tor to build a circuit and fetch the v3 hidden-service descriptor for
+// the target .onion; with no timeout a dead/slow onion blocks the connecting
+// thread (holding an outbound slot) until Tor's own ~120s SocksTimeout fires.
+// Configurable via -torconnecttimeout. Default 60s: long enough for a healthy
+// onion to answer, short enough that bad peers don't starve a from-zero node.
+int nSocksNegotiationTimeout = 60000;
 bool fNameLookup = false;
 
 static const unsigned char pchIPv4[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff };
@@ -222,6 +236,24 @@ bool static Socks5(string strDest, int port, SOCKET& hSocket)
     {
         closesocket(hSocket);
         return error("Hostname too long");
+    }
+
+    // Bound the blocking SOCKS5 handshake so a slow/dead .onion can't stall this
+    // thread (and hold an outbound connection slot) waiting on Tor. A timeout makes
+    // the recv() below return < expected, which the existing checks treat as a
+    // clean failure so the connector moves on to the next peer.
+    {
+#ifdef WIN32
+        DWORD tv = (DWORD)nSocksNegotiationTimeout;
+        setsockopt(hSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+        setsockopt(hSocket, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+#else
+        struct timeval tv;
+        tv.tv_sec  = nSocksNegotiationTimeout / 1000;
+        tv.tv_usec = (nSocksNegotiationTimeout % 1000) * 1000;
+        setsockopt(hSocket, SOL_SOCKET, SO_RCVTIMEO, (const void*)&tv, sizeof(tv));
+        setsockopt(hSocket, SOL_SOCKET, SO_SNDTIMEO, (const void*)&tv, sizeof(tv));
+#endif
     }
     char pszSocks5Init[] = "\5\1\0";
     if (fDebug)
@@ -426,6 +458,19 @@ bool static ConnectSocketDirectly(const CService &addrConnect, SOCKET& hSocketRe
         }
     }
 
+    // TCP_NODELAY: disable Nagle's algorithm for low-latency P2P messaging.
+    // SO_KEEPALIVE: detect dead connections faster (important for Tor/I2P
+    // tunnels that can silently drop without RST/FIN).
+    {
+        int one = 1;
+#ifdef WIN32
+        setsockopt(hSocket, IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(one));
+#else
+        setsockopt(hSocket, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+#endif
+        setsockopt(hSocket, SOL_SOCKET, SO_KEEPALIVE, (char*)&one, sizeof(one));
+    }
+
     // this isn't even strictly necessary
     // CNode::ConnectNode immediately turns the socket back to non-blocking
     // but we'll turn it back to blocking just in case
@@ -560,6 +605,33 @@ bool ConnectSocketByName(CService &addr, SOCKET& hSocketRet, const char *pszDest
 
     SOCKET hSocket = INVALID_SOCKET;
 
+    // I2P routing: .b32.i2p destinations go through i2pd's SOCKS proxy, not
+    // the Tor name proxy. This is the key routing decision for dual-network
+    // anonymity — Tor handles .onion, i2pd handles .b32.i2p.
+    bool isI2PDest = (strDest.size() > 7 &&
+                      strDest.substr(strDest.size() - 7, 7) == ".b32.i2p");
+
+    if (isI2PDest) {
+        // Route through the I2P SOCKS proxy
+        proxyType i2pProxy;
+        if (GetProxy(NET_I2P, i2pProxy)) {
+            addr = CService("0.0.0.0:0");
+            printf("ConnectSocketByName(): routing .b32.i2p via I2P SOCKS proxy\n");
+            if (!ConnectSocketDirectly(i2pProxy.first, hSocket, nTimeout))
+                return false;
+            // i2pd's SOCKS proxy accepts .b32.i2p domain names via SOCKS5 ATYP=domain
+            if (!Socks5(strDest, port, hSocket)) {
+                printf("ConnectSocketByName(): I2P SOCKS5 handshake failed\n");
+                return false;
+            }
+            printf("ConnectSocketByName(): connected via I2P SOCKS5\n");
+            hSocketRet = hSocket;
+            return true;
+        }
+        // No I2P proxy configured — fall through to nameproxy (will likely fail)
+        printf("ConnectSocketByName(): WARNING - .b32.i2p dest but no I2P proxy set\n");
+    }
+
     proxyType nameproxy;
     GetNameProxy(nameproxy);
 
@@ -600,6 +672,7 @@ void CNetAddr::Init()
     memset(ip, 0, sizeof(ip));
     memset(tor_v3_pubkey, 0, sizeof(tor_v3_pubkey));
     m_is_tor_v3 = false;
+    m_is_i2p = false;
 }
 
 void CNetAddr::SetIP(const CNetAddr& ipIn)
@@ -607,6 +680,7 @@ void CNetAddr::SetIP(const CNetAddr& ipIn)
     memcpy(ip, ipIn.ip, sizeof(ip));
     memcpy(tor_v3_pubkey, ipIn.tor_v3_pubkey, sizeof(tor_v3_pubkey));
     m_is_tor_v3 = ipIn.m_is_tor_v3;
+    m_is_i2p = ipIn.m_is_i2p;
 }
 
 static const unsigned char pchOnionCat[] = {0xFD,0x87,0xD8,0x7E,0xEB,0x43};
@@ -641,13 +715,41 @@ bool CNetAddr::SetSpecial(const std::string &strName)
         m_is_tor_v3 = false;
         return true;
     }
-    if (strName.size()>11 && strName.substr(strName.size() - 11, 11) == ".oc.b32.i2p") {
-        std::vector<unsigned char> vchAddr = DecodeBase32(strName.substr(0, strName.size() - 11).c_str());
-        if (vchAddr.size() != 16-sizeof(pchGarliCat))
+    // Standard I2P b32 address: <52 base32 chars>.b32.i2p
+    // (SHA-256 hash of destination key, base32-encoded)
+    if (strName.size()>7 && strName.substr(strName.size() - 7, 7) == ".b32.i2p") {
+        std::string b32Part = strName.substr(0, strName.size() - 7);
+        std::vector<unsigned char> vchAddr = DecodeBase32(b32Part.c_str());
+        if (vchAddr.size() == 32) {
+            // Standard 32-byte I2P destination hash
+            memcpy(ip, pchGarliCat, sizeof(pchGarliCat));
+            // Store as many bytes as fit (16 - prefix_size)
+            for (unsigned int i = 0; i < 16 - sizeof(pchGarliCat) && i < vchAddr.size(); i++)
+                ip[i + sizeof(pchGarliCat)] = vchAddr[i];
+            return true;
+        }
+        // Also handle the legacy .oc.b32.i2p format (10 bytes)
+        if (vchAddr.size() == 16 - sizeof(pchGarliCat)) {
+            memcpy(ip, pchGarliCat, sizeof(pchGarliCat));
+            for (unsigned int i = 0; i < 16 - sizeof(pchGarliCat); i++)
+                ip[i + sizeof(pchGarliCat)] = vchAddr[i];
+            return true;
+        }
+    }
+    // Modern I2P base32 address: 52 base32 chars = SHA-256(destination) (32 bytes)
+    // rendered as "<b32>.b32.i2p". Store the hash and flag this as an I2P address.
+    if (strName.size()>8 && strName.substr(strName.size() - 8, 8) == ".b32.i2p") {
+        std::string addrPart = strName.substr(0, strName.size() - 8);
+        std::vector<unsigned char> vchAddr = DecodeBase32(addrPart.c_str());
+        if (vchAddr.size() != 32)
             return false;
-        memcpy(ip, pchOnionCat, sizeof(pchGarliCat));
-        for (unsigned int i=0; i<16-sizeof(pchGarliCat); i++)
-            ip[i + sizeof(pchGarliCat)] = vchAddr[i];
+        // Keep the GarliCat prefix in ip[] so legacy reachability checks that
+        // look for unique-local space still treat this as a routable overlay.
+        memcpy(ip, pchGarliCat, sizeof(pchGarliCat));
+        memset(ip + sizeof(pchGarliCat), 0, 16 - sizeof(pchGarliCat));
+        memcpy(tor_v3_pubkey, vchAddr.data(), 32);
+        m_is_i2p = true;
+        m_is_tor_v3 = false;
         return true;
     }
     return false;
@@ -772,7 +874,7 @@ bool CNetAddr::IsTorV3() const
 
 bool CNetAddr::IsI2P() const
 {
-    return (memcmp(ip, pchGarliCat, sizeof(pchGarliCat)) == 0);
+    return m_is_i2p || (memcmp(ip, pchGarliCat, sizeof(pchGarliCat)) == 0);
 }
 
 bool CNetAddr::IsLocal() const
@@ -878,8 +980,15 @@ std::string CNetAddr::ToStringIP() const
     }
     if (IsTor())
         return EncodeBase32(&ip[6], 10) + ".onion";
+    if (m_is_i2p) {
+        // Modern I2P: base32 of the 32-byte destination hash, unpadded.
+        std::string b32 = EncodeBase32(tor_v3_pubkey, 32);
+        while (!b32.empty() && b32[b32.size() - 1] == '=')
+            b32.erase(b32.size() - 1);
+        return b32 + ".b32.i2p";
+    }
     if (IsI2P())
-        return EncodeBase32(&ip[6], 10) + ".oc.b32.i2p";
+        return EncodeBase32(&ip[6], 10) + ".b32.i2p";
     CService serv(*this, 0);
 #ifdef USE_IPV6
     struct sockaddr_storage sockaddr;
@@ -911,12 +1020,14 @@ bool operator==(const CNetAddr& a, const CNetAddr& b)
 {
     if (a.m_is_tor_v3 || b.m_is_tor_v3)
         return a.m_is_tor_v3 == b.m_is_tor_v3 && memcmp(a.tor_v3_pubkey, b.tor_v3_pubkey, 32) == 0;
+    if (a.m_is_i2p || b.m_is_i2p)
+        return a.m_is_i2p == b.m_is_i2p && memcmp(a.tor_v3_pubkey, b.tor_v3_pubkey, 32) == 0;
     return (memcmp(a.ip, b.ip, 16) == 0);
 }
 
 bool operator!=(const CNetAddr& a, const CNetAddr& b)
 {
-    return (memcmp(a.ip, b.ip, 16) != 0);
+    return !(a == b);
 }
 
 bool operator<(const CNetAddr& a, const CNetAddr& b)
@@ -924,6 +1035,10 @@ bool operator<(const CNetAddr& a, const CNetAddr& b)
     if (a.m_is_tor_v3 != b.m_is_tor_v3)
         return !a.m_is_tor_v3; // non-v3 sorts before v3
     if (a.m_is_tor_v3)
+        return memcmp(a.tor_v3_pubkey, b.tor_v3_pubkey, 32) < 0;
+    if (a.m_is_i2p != b.m_is_i2p)
+        return !a.m_is_i2p; // non-i2p sorts before i2p
+    if (a.m_is_i2p)
         return memcmp(a.tor_v3_pubkey, b.tor_v3_pubkey, 32) < 0;
     return (memcmp(a.ip, b.ip, 16) < 0);
 }
@@ -948,6 +1063,17 @@ bool CNetAddr::GetIn6Addr(struct in6_addr* pipv6Addr) const
 // no two connections will be attempted to addresses with the same group
 std::vector<unsigned char> CNetAddr::GetGroup() const
 {
+    // Modern I2P addresses keep their identifying bytes in the 32-byte
+    // destination-hash field (ip[] only holds the overlay prefix), so derive
+    // the group from the hash to keep peers in distinct groups.
+    if (m_is_i2p) {
+        std::vector<unsigned char> vch;
+        vch.push_back(NET_I2P);
+        vch.push_back(tor_v3_pubkey[0]);
+        vch.push_back(tor_v3_pubkey[1]);
+        return vch;
+    }
+
     std::vector<unsigned char> vchRet;
     int nClass = NET_IPV6;
     int nStartByte = 0;
@@ -1022,7 +1148,7 @@ std::vector<unsigned char> CNetAddr::GetGroup() const
 uint64_t CNetAddr::GetHash() const
 {
     uint256 hash;
-    if (m_is_tor_v3)
+    if (m_is_tor_v3 || m_is_i2p)
         hash = Hash(&tor_v3_pubkey[0], &tor_v3_pubkey[32]);
     else
         hash = Hash(&ip[0], &ip[16]);
@@ -1286,4 +1412,152 @@ void CService::print() const
 void CService::SetPort(unsigned short portIn)
 {
     port = portIn;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v5.9.22 hardening: pure helper functions for the HTTPS seed-list path.
+// See netbase.h for the contract. These are intentionally free of SSL/Tor
+// dependencies so they can be unit-tested in isolation.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+bool IsValidSocksNegotiationTimeout(int nMs)
+{
+    // Range bounds match the documented -torconnecttimeout contract. 5000ms
+    // is the lower edge that still tolerates a slow SOCKS handshake over a
+    // congested link; 180000ms (3 min) is the upper edge to prevent a stuck
+    // thread from holding an outbound connection slot indefinitely. These
+    // constants are duplicated in src/init.cpp's HelpMessage text and the
+    // test suite — keep all three in sync.
+    return nMs >= 5000 && nMs <= 180000;
+}
+
+int DechunkTransferEncoding(const std::string& body, std::string& decoded)
+{
+    decoded.clear();
+    if (body.empty())
+        return DECHUNK_EMPTY;
+
+    // HTTP chunked framing requires every chunk-size line to be terminated
+    // by CRLF. We walk the body one chunk at a time and validate each piece.
+    // The previous implementation silently dropped malformed chunks and
+    // treated them as the last-chunk marker, which lost the entire seed list
+    // for any non-conforming server. This version returns an explicit error
+    // code for each failure mode.
+    size_t pos = 0;
+    const size_t n = body.size();
+    bool sawLastChunk = false;
+
+    while (pos < n) {
+        // Find end of chunk-size line. Required: CRLF.
+        size_t eol = body.find("\r\n", pos);
+        if (eol == std::string::npos)
+            return DECHUNK_NO_CHUNK_TERMINATOR;
+
+        std::string sizeLine = body.substr(pos, eol - pos);
+        pos = eol + 2; // consume CRLF
+
+        // Strip chunk extensions per RFC 7230 §4.1.1: ";name[=value]" after
+        // the hex size. Extensions are part of the framing protocol, not
+        // data, so we drop them here.
+        size_t semi = sizeLine.find(';');
+        std::string hexSize = (semi == std::string::npos) ? sizeLine : sizeLine.substr(0, semi);
+
+        // Strict hex validation: every character must be [0-9A-Fa-f]. Empty
+        // size lines (e.g. a stray CRLF) are rejected as malformed, not
+        // silently treated as 0. strtoul alone would also accept leading
+        // whitespace, '+', and '-' which we don't want.
+        if (hexSize.empty())
+            return DECHUNK_INVALID_HEX;
+        for (size_t i = 0; i < hexSize.size(); ++i) {
+            if (!isxdigit(static_cast<unsigned char>(hexSize[i])))
+                return DECHUNK_INVALID_HEX;
+        }
+
+        // strtoul returns ULONG_MAX on overflow. We also need to guard
+        // against chunks larger than the remaining input, which the old
+        // code clamped silently. Use strtoull so we can detect overflow
+        // without truncation surprises on 32-bit builds.
+        errno = 0;
+        char* endp = nullptr;
+        unsigned long long chunkSize = strtoull(hexSize.c_str(), &endp, 16);
+        if (errno == ERANGE || chunkSize > std::numeric_limits<size_t>::max())
+            return DECHUNK_INVALID_HEX;
+        if (endp == hexSize.c_str())
+            return DECHUNK_INVALID_HEX;
+
+        if (chunkSize == 0) {
+            // Last-chunk: payload is empty, trailer part (which we ignore)
+            // follows and is terminated by a final CRLF on its own line.
+            sawLastChunk = true;
+            break;
+        }
+
+        // Bounds check before reading the chunk data. Catching this
+        // explicitly (rather than clamping) is what lets callers
+        // distinguish "truncated network read" from "server sent us junk".
+        if (chunkSize > n - pos)
+            return DECHUNK_OVERSIZE_CHUNK;
+
+        decoded.append(body, pos, static_cast<size_t>(chunkSize));
+        pos += static_cast<size_t>(chunkSize);
+
+        // Per RFC 7230 each chunk's data must be followed by a CRLF. We
+        // tolerate the final chunk missing its trailing CRLF (some clients
+        // do this when the connection is being closed anyway), but for any
+        // non-final chunk a missing CRLF is a hard framing error.
+        if (pos + 1 < n && body[pos] == '\r' && body[pos + 1] == '\n') {
+            pos += 2;
+        } else if (pos >= n) {
+            // End of input immediately after chunk data — no CRLF, but
+            // nothing left to misframe. Reject to be strict.
+            return DECHUNK_MISSING_DATA_CRLF;
+        } else {
+            return DECHUNK_MISSING_DATA_CRLF;
+        }
+    }
+
+    if (!sawLastChunk) {
+        // Body ended without a last-chunk marker. Treat as malformed
+        // rather than accepting a truncated body.
+        return DECHUNK_NO_CHUNK_TERMINATOR;
+    }
+
+    return DECHUNK_OK;
+}
+
+std::vector<std::string> ParseSeedListBody(const std::string& body)
+{
+    std::vector<std::string> out;
+    std::istringstream lines(body);
+    std::string line;
+    while (std::getline(lines, line)) {
+        // Strip inline '#' comments. Per common seed-list convention, the
+        // first '#' to end-of-line is comment.
+        size_t hashPos = line.find('#');
+        if (hashPos != std::string::npos)
+            line = line.substr(0, hashPos);
+
+        // Split on whitespace, comma, or semicolon so multiple addresses
+        // on one line are all captured. CR/LF are already consumed by
+        // std::getline but a trailing CR (LF-only line endings) is trimmed
+        // implicitly by skipping it as a separator below.
+        size_t start = 0;
+        while (start <= line.size()) {
+            size_t sep = line.find_first_of(" \t,;", start);
+            std::string tok = (sep == std::string::npos)
+                ? line.substr(start)
+                : line.substr(start, sep - start);
+            // Trim CR and any leftover whitespace from the token. The
+            // 'sep' loop above eats spaces/tabs but a bare CR survives.
+            while (!tok.empty() && (tok.back() == '\r' || tok.back() == ' ' || tok.back() == '\t'))
+                tok.pop_back();
+            while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t'))
+                tok.erase(tok.begin());
+            if (!tok.empty())
+                out.push_back(tok);
+            if (sep == std::string::npos) break;
+            start = sep + 1;
+        }
+    }
+    return out;
 }

@@ -1418,7 +1418,7 @@ a:active { color:#f26522; text-decoration: underline; }
 &lt;/style&gt;
 &lt;/head&gt;
 &lt;body&gt;
-&lt;a href=&quot;http://triangles.technology&quot;&gt; &amp;#187; TRI home&lt;/a&gt;&lt;/body&gt;</source>
+&lt;a href=&quot;https://cryptographic-triangles.org/&quot;&gt; &amp;#187; TRI home&lt;/a&gt;&lt;/body&gt;</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -1446,7 +1446,7 @@ a:active { color:#f26522; text-decoration: underline; }
 &lt;/style&gt;
 &lt;/head&gt;
 &lt;body&gt;
-&lt;a href=&quot;http://explorer.triangles.technology&quot;&gt; &amp;#187; TRI block explorer&lt;/a&gt;&lt;/body&gt;</source>
+&lt;a href=&quot;https://blocks.cryptographic-triangles.org&quot;&gt; &amp;#187; TRI block explorer&lt;/a&gt;&lt;/body&gt;</source>
         <translation type="unfinished"></translation>
     </message>
     <message>

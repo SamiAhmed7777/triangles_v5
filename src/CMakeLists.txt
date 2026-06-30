@@ -54,17 +54,12 @@ set(CORE_SOURCES
     net.cpp
     net_bootstrap.cpp
     netbase.cpp
-    i2p.cpp
-    i2p_process.cpp
     protocol.cpp
     script.cpp
     sync.cpp
     util.cpp
     version.cpp
     walletdb.cpp
-    walletdb-sqlite.cpp
-    walletdb-factory.cpp
-    walletmigrate.cpp
     kernel.cpp
     pbkdf2.cpp
     scrypt.cpp
@@ -113,6 +108,14 @@ endif()
 # for the rationale — RocksDB also backs the smessage store).
 list(APPEND CORE_SOURCES txdb-rocksdb.cpp)
 
+# Modernization: SQLite wallet DB backend + Berkeley→SQLite migration.
+# Built unconditionally; selection happens at runtime via -walletdb.
+list(APPEND CORE_SOURCES
+    walletdb-factory.cpp
+    walletdb-sqlite.cpp
+    walletmigrate.cpp
+)
+
 add_library(triangles_common OBJECT ${CORE_SOURCES})
 
 target_include_directories(triangles_common PUBLIC
@@ -132,10 +135,10 @@ target_link_libraries(triangles_common PUBLIC
     OpenSSL::SSL
     OpenSSL::Crypto
     BerkeleyDB::BerkeleyDB
-    SQLite::SQLite3
     Libevent::Libevent
     ZLIB::ZLIB
     Threads::Threads
+    SQLite::SQLite3
 )
 
 # Optional: UPnP

@@ -2369,6 +2369,13 @@ void CTorV3Manager::HandleWalletAddrResponse(CNode* pfrom, const std::string& tr
     // Signature valid — cache the mapping
     CacheOnionAddress(peerOnion, triAddr);
 
+    // Signed peer bonus: this peer cryptographically proved they own their
+    // .onion via the walletaddr handshake. Mark them as a signed peer so
+    // syncmanager peer selection (syncmanager.cpp:495) prefers them.
+    pfrom->nSignedPeerBonus = 1;
+    printf("SYNC-SIGN: marked %s as signed peer (proved identity via walletaddr)\n",
+           peerOnion.c_str());
+
     // Fire any pending resolve callbacks
     std::function<void(bool, const std::string&)> callback;
     {

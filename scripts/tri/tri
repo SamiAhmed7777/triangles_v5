@@ -1,0 +1,691 @@
+#!/usr/bin/env bash
+#
+# tri — Cryptographic Triangles command interface
+#
+# A friendly wrapper around trianglesd RPC for both human and agent use.
+# Designed for Hermes, Krystie, and Sami to manage TRI wallets, monitor
+# nodes, and communicate via the built-in secure messaging system.
+#
+# Config: /etc/tri/nodes.conf (or ~/.config/tri/nodes.conf)
+# Completion: /etc/bash_completion.d/tri-completion.bash
+#
+# Usage: tri <command> [subcommand] [args]
+#   tri                    Status overview
+#   tri help               Full command list
+#   tri status             Detailed node status
+#   tri balance            Wallet balance
+#   tri peers              Connected peers
+#   tri stake              Staking info
+#   tri address new        Generate new wallet address
+#   tri address list       List wallet addresses
+#   tri address balance    Per-address balances
+#   tri send <addr> <amt> [memo]   Send TRI
+#   tri tx [N]             Recent N transactions (default 10)
+#   tri tx <txid>          Transaction details
+#   tri msg inbox          Secure message inbox
+#   tri msg outbox         Sent messages
+#   tri msg send <from> <to> <msg>   Send encrypted message
+#   tri msg anon <to> <msg>          Send anonymous message
+#   tri msg keys           List messaging keys
+#   tri msg enable         Enable secure messaging
+#   tri msg pubkey <addr>  Get public key for address
+#   tri msg unlock [secs]  Unlock wallet for messaging (default 60s)
+#   tri raw <method> [params...]  Raw RPC passthrough
+#
+
+set -euo pipefail
+
+# ─── Config ──────────────────────────────────────────────────────────────────
+
+TRI_CONFIG="/etc/tri/nodes.conf"
+[[ -f "$HOME/.config/tri/nodes.conf" ]] && TRI_CONFIG="$HOME/.config/tri/nodes.conf"
+
+# Defaults (overridden by config file)
+TRI_RPC_HOST="127.0.0.1"
+TRI_RPC_PORT="19112"
+TRI_RPC_USER=""
+TRI_RPC_PASS=""
+TRI_SSH_HOST=""        # If set, RPC calls are tunneled via SSH to this host
+TRI_SSH_USER="root"
+TRI_WALLET_PASSPHRASE=""  # For unlocking wallet when sending/messages
+TRI_DEFAULT_FROM=""    # Default sender address for messages
+
+# Load config
+if [[ -f "$TRI_CONFIG" ]]; then
+    source "$TRI_CONFIG"
+fi
+
+# Allow env overrides
+[[ -n "${TRI_RPC_HOST_ENV:-}" ]] && TRI_RPC_HOST="$TRI_RPC_HOST_ENV"
+[[ -n "${TRI_RPC_PORT_ENV:-}" ]] && TRI_RPC_PORT="$TRI_RPC_PORT_ENV"
+[[ -n "${TRI_SSH_HOST_ENV:-}" ]] && TRI_SSH_HOST="$TRI_SSH_HOST_ENV"
+
+# ─── Colors ──────────────────────────────────────────────────────────────────
+
+if [[ -t 1 ]]; then
+    C_RESET="\033[0m"
+    C_BOLD="\033[1m"
+    C_DIM="\033[2m"
+    C_RED="\033[31m"
+    C_GREEN="\033[32m"
+    C_YELLOW="\033[33m"
+    C_BLUE="\033[34m"
+    C_CYAN="\033[36m"
+    C_MAGENTA="\033[35m"
+else
+    C_RESET=""; C_BOLD=""; C_DIM=""; C_RED=""; C_GREEN=""; C_YELLOW=""
+    C_BLUE=""; C_CYAN=""; C_MAGENTA=""
+fi
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+# Core RPC call function. Executes JSON-RPC against the node.
+# Usage: _tri_rpc <method> [param1] [param2] ...
+_tri_rpc() {
+    local method="$1"; shift
+    local params="[]"
+    
+    if [[ $# -gt 0 ]]; then
+        # Build JSON params array
+        local json_params=()
+        for p in "$@"; do
+            # Try to detect numbers and booleans
+            if [[ "$p" =~ ^-?[0-9]+\.?[0-9]*$ ]]; then
+                json_params+=("$p")
+            elif [[ "$p" == "true" || "$p" == "false" || "$p" == "null" ]]; then
+                json_params+=("\"$p\"")
+            else
+                # Escape for JSON string
+                local escaped="${p//\\/\\\\}"
+                escaped="${escaped//\"/\\\"}"
+                json_params+=("\"$escaped\"")
+            fi
+        done
+        params="[$(IFS=,; echo "${json_params[*]}")]"
+    fi
+    
+    local payload="{\"jsonrpc\":\"1.0\",\"id\":\"tri\",\"method\":\"$method\",\"params\":$params}"
+    
+    if [[ -n "$TRI_SSH_HOST" ]]; then
+        # Tunnel via SSH
+        local auth="$TRI_RPC_USER:$TRI_RPC_PASS"
+        ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no \
+            "${TRI_SSH_USER}@${TRI_SSH_HOST}" \
+            "curl -s --connect-timeout 10 http://127.0.0.1:${TRI_RPC_PORT}/ \
+             -u '${auth}' \
+             -H 'Content-Type: application/json' \
+             -d '${payload//\'/\'\\\'\'}'" 2>/dev/null
+    else
+        # Local connection
+        curl -s --connect-timeout 10 "http://${TRI_RPC_HOST}:${TRI_RPC_PORT}/" \
+             -u "${TRI_RPC_USER}:${TRI_RPC_PASS}" \
+             -H 'Content-Type: application/json' \
+             -d "$payload" 2>/dev/null
+    fi
+}
+
+# Pretty RPC call — extracts .result and pretty-prints JSON
+# Usage: _tri_rpc_pretty <method> [param1] [param2] ...
+_tri_rpc_pretty() {
+    local raw
+    raw=$(_tri_rpc "$@")
+    
+    if [[ -z "$raw" ]]; then
+        echo -e "${C_RED}Error: No response from node${C_RESET}" >&2
+        return 1
+    fi
+    
+    # Check for error
+    local err
+    err=$(echo "$raw" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error',{}).get('message','') if d.get('error') else '',end='')" 2>/dev/null || echo "")
+    if [[ -n "$err" ]]; then
+        echo -e "${C_RED}RPC Error: ${err}${C_RESET}" >&2
+        return 1
+    fi
+    
+    echo "$raw" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin).get('result',''),indent=2))" 2>/dev/null
+}
+
+# Raw RPC call — print full JSON response as-is
+_tri_rpc_raw() {
+    _tri_rpc "$@"
+}
+
+# Extract a single field from RPC result
+# Usage: _tri_rpc_field <method> <field> [params...]
+_tri_rpc_field() {
+    local method="$1"; shift
+    local field="$1"; shift
+    _tri_rpc "$method" "$@" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+r=d.get('result',{})
+if isinstance(r,dict):
+    print(r.get('$field',''))
+else:
+    print(r)
+" 2>/dev/null
+}
+
+# Extract multiple fields
+_tri_rpc_fields() {
+    local method="$1"; shift
+    _tri_rpc "$method" "$@" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+r=d.get('result',{})
+if isinstance(r, dict):
+    for k,v in r.items():
+        if isinstance(v,(str,int,float,bool)) or v is None:
+            print(f'{k}: {v}')
+" 2>/dev/null
+}
+
+# Unlock wallet for messaging
+_tri_unlock() {
+    local duration="${1:-60}"
+    if [[ -z "$TRI_WALLET_PASSPHRASE" ]]; then
+        echo -e "${C_YELLOW}Warning: TRI_WALLET_PASSPHRASE not set in config${C_RESET}" >&2
+        return 1
+    fi
+    _tri_rpc walletpassphrase "$TRI_WALLET_PASSPHRASE" "$duration" >/dev/null 2>&1
+}
+
+# ─── Commands: Info ──────────────────────────────────────────────────────────
+
+cmd_status() {
+    echo -e "${C_BOLD}${C_CYAN}Triangles Node Status${C_RESET}"
+    echo -e "${C_DIM}$(date -u '+%Y-%m-%d %H:%M:%S UTC')${C_RESET}"
+    echo ""
+    
+    local info
+    info=$(_tri_rpc getinfo 2>/dev/null)
+    
+    if [[ -z "$info" ]]; then
+        echo -e "${C_RED}Cannot connect to node${C_RESET}"
+        if [[ -n "$TRI_SSH_HOST" ]]; then
+            echo -e "  Target: ${TRI_SSH_USER}@${TRI_SSH_HOST} → RPC ${TRI_RPC_PORT}"
+        else
+            echo -e "  Target: ${TRI_RPC_HOST}:${TRI_RPC_PORT}"
+        fi
+        return 1
+    fi
+    
+    echo "$info" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)['result']
+print(f\"  Version:      {d.get('version','?')}\")
+print(f\"  Blocks:       {d.get('blocks','?'):,}\")
+print(f\"  Connections:  {d.get('connections','?')}\")
+print(f\"  Balance:      {d.get('balance',0):.4f} TRI\")
+print(f\"  Stake:        {d.get('stake',0):.4f} TRI\")
+print(f\"  Money Supply: {d.get('moneysupply',0):,.2f} TRI\")
+print(f\"  Difficulty:   {d.get('difficulty','?')}\")
+print(f\"  Testnet:      {d.get('testnet',False)}\")
+" 2>/dev/null
+    
+    # Peer summary
+    local peer_count
+    peer_count=$(_tri_rpc_field getconnectioncount "result" 2>/dev/null || echo "?")
+    echo ""
+    echo -e "  ${C_DIM}Node: ${TRI_SSH_HOST:-${TRI_RPC_HOST}}:${TRI_RPC_PORT}${C_RESET}"
+}
+
+cmd_balance() {
+    local balance
+    balance=$(_tri_rpc_field getbalance "balance" 2>/dev/null || echo "error")
+    
+    if [[ "$balance" == "error" ]]; then
+        echo -e "${C_RED}Cannot connect to node${C_RESET}" >&2
+        return 1
+    fi
+    
+    local stake
+    stake=$(_tri_rpc_field getinfo "stake" 2>/dev/null || echo "0")
+    
+    echo -e "${C_BOLD}Wallet Balance${C_RESET}"
+    echo -e "  Available: ${C_GREEN}${balance} TRI${C_RESET}"
+    echo -e "  Staking:   ${C_YELLOW}${stake} TRI${C_RESET}"
+    
+    # UTXO count
+    local utxo_count
+    utxo_count=$(_tri_rpc listunspent 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('result',[])))" 2>/dev/null || echo "?")
+    [[ "$utxo_count" != "?" ]] && echo -e "  UTXOs:     ${utxo_count}"
+}
+
+cmd_peers() {
+    local raw
+    raw=$(_tri_rpc getpeerinfo 2>/dev/null)
+    
+    echo -e "${C_BOLD}Connected Peers${C_RESET}"
+    echo "$raw" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+peers=d.get('result',[])
+if not peers:
+    print('  (no peers connected)')
+else:
+    for p in peers:
+        addr = p.get('addr','?')
+        subver = p.get('subver','?').replace('/','')
+        height = p.get('startingheight','?')
+        ping = p.get('pingtime',0)
+        if isinstance(ping,(int,float)) and ping > 0:
+            ping_ms = ping * 1000
+            print(f'  {addr:30s} {subver:25s} height={height}  ping={ping_ms:.0f}ms')
+        else:
+            print(f'  {addr:30s} {subver:25s} height={height}')
+    print(f'\n  Total: {len(peers)} peer(s)')
+" 2>/dev/null
+}
+
+cmd_stake() {
+    echo -e "${C_BOLD}Staking Information${C_RESET}"
+    _tri_rpc_fields getstakinginfo 2>/dev/null | while read -r line; do
+        echo "  $line"
+    done
+}
+
+# ─── Commands: Wallet ────────────────────────────────────────────────────────
+
+cmd_address() {
+    local sub="${1:-list}"; shift || true
+    
+    case "$sub" in
+        new)
+            local addr
+            addr=$(_tri_rpc_field getnewaddress "result" 2>/dev/null)
+            if [[ -n "$addr" ]]; then
+                echo "$addr"
+            else
+                echo -e "${C_RED}Failed to generate address${C_RESET}" >&2
+                return 1
+            fi
+            ;;
+        list)
+            echo -e "${C_BOLD}Wallet Addresses${C_RESET}"
+            _tri_rpc getaddressesbyaccount "" 2>/dev/null | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+addrs=d.get('result',[])
+if not addrs:
+    print('  (no addresses)')
+else:
+    for a in addrs:
+        print(f'  {a}')
+    print(f'\n  Total: {len(addrs)}')
+" 2>/dev/null
+            ;;
+        balance)
+            echo -e "${C_BOLD}Address Balances${C_RESET}"
+            _tri_rpc listaddressgroupings 2>/dev/null | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+groups=d.get('result',[])
+if not groups:
+    print('  (no address balances)')
+else:
+    for group in groups:
+        for item in group:
+            addr=item[0] if isinstance(item,list) and len(item)>0 else '?'
+            amt=item[1] if isinstance(item,list) and len(item)>1 else '?'
+            print(f'  {addr:40s} {amt} TRI')
+" 2>/dev/null
+            ;;
+        *)
+            echo -e "${C_RED}Unknown subcommand: $sub${C_RESET}" >&2
+            echo "Usage: tri address [new|list|balance]" >&2
+            return 1
+            ;;
+    esac
+}
+
+cmd_send() {
+    if [[ $# -lt 2 ]]; then
+        echo -e "${C_RED}Usage: tri send <address> <amount> [memo]${C_RESET}" >&2
+        return 1
+    fi
+    
+    local addr="$1"
+    local amount="$2"
+    local memo="${3:-}"
+    
+    echo -e "${C_YELLOW}Sending ${amount} TRI to ${addr}...${C_RESET}"
+    
+    local result
+    if [[ -n "$memo" ]]; then
+        result=$(_tri_rpc sendtoaddress "$addr" "$amount" "$memo" 2>/dev/null)
+    else
+        result=$(_tri_rpc sendtoaddress "$addr" "$amount" 2>/dev/null)
+    fi
+    
+    local txid
+    txid=$(echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('result','') if d.get('result') else d.get('error',{}).get('message','FAILED'),end='')" 2>/dev/null)
+    
+    if [[ "$txid" == "FAILED" ]] || [[ -z "$txid" ]]; then
+        echo -e "${C_RED}Send failed: $txid${C_RESET}" >&2
+        return 1
+    fi
+    
+    echo -e "${C_GREEN}Sent! TXID: ${txid}${C_RESET}"
+}
+
+cmd_tx() {
+    if [[ $# -eq 0 ]]; then
+        # Recent transactions
+        echo -e "${C_BOLD}Recent Transactions${C_RESET}"
+        _tri_rpc listtransactions "*" 10 2>/dev/null | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+txs=d.get('result',[])
+if not txs:
+    print('  (no transactions)')
+else:
+    for t in reversed(txs):
+        category = t.get('category','?')
+        amount = t.get('amount',0)
+        addr = t.get('address','?')
+        confirmations = t.get('confirmations',0)
+        txid = t.get('txid','?')
+        time = t.get('time',0)
+        
+        from datetime import datetime
+        dt = datetime.fromtimestamp(time) if time else None
+        datestr = dt.strftime('%Y-%m-%d %H:%M') if dt else '???'
+        
+        # Color by category
+        if category == 'receive' or category == 'generate' or category == 'mint':
+            amt_str = f'+{amount} TRI'
+        else:
+            amt_str = f'-{amount} TRI'
+        
+        conf_str = f'{confirmations} conf' if confirmations > 0 else 'unconfirmed'
+        print(f'  {datestr}  {amt_str:>15s}  {category:10s}  {conf_str:>12s}  {addr}')
+        print(f'           {txid}')
+" 2>/dev/null
+    else
+        # Transaction details
+        local txid="$1"
+        echo -e "${C_BOLD}Transaction: ${txid}${C_RESET}"
+        _tri_rpc_fields gettransaction "$txid" 2>/dev/null | while read -r line; do
+            echo "  $line"
+        done
+    fi
+}
+
+# ─── Commands: Secure Messaging ──────────────────────────────────────────────
+
+cmd_msg() {
+    local sub="${1:-inbox}"; shift || true
+    
+    case "$sub" in
+        inbox)
+            # Unlock wallet first if passphrase is configured
+            if [[ -n "$TRI_WALLET_PASSPHRASE" ]]; then
+                _tri_unlock 60 2>/dev/null || true
+            fi
+            
+            echo -e "${C_BOLD}${C_MAGENTA}Secure Message Inbox${C_RESET}"
+            _tri_rpc smsginbox "all" 2>/dev/null | python3 -c "
+import sys,json
+raw=json.load(sys.stdin)
+d=raw.get('result',{})
+msg = d.get('message')
+count_str = d.get('result','0 messages shown.')
+# Extract count from result string like 'N messages shown.'
+try:
+    count = int(count_str.split()[0])
+except:
+    count = 0
+
+if count == 0 or msg is None:
+    print('  (inbox is empty)')
+else:
+    # The daemon returns one message per RPC call (last one only).
+    # For full inbox dump, use: tri raw smsginbox all
+    frm = msg.get('from','?')
+    to = msg.get('to','?')
+    text = msg.get('text','(no text)')
+    sent = msg.get('sent','')
+    rcvd = msg.get('received','')
+    print(f'  Latest message (of {count}):')
+    print(f'    Sent:     {sent}')
+    print(f'    Received: {rcvd}')
+    print(f'    From: {frm}')
+    print(f'    To:   {to}')
+    print(f'    Text: {text[:200]}')
+    if count > 1:
+        print(f'')
+        print(f'    ({count-1} more messages — use: tri raw smsginbox all)')
+" 2>/dev/null
+            ;;
+            
+        outbox)
+            if [[ -n "$TRI_WALLET_PASSPHRASE" ]]; then
+                _tri_unlock 60 2>/dev/null || true
+            fi
+            
+            echo -e "${C_BOLD}${C_MAGENTA}Sent Messages${C_RESET}"
+            _tri_rpc smsgoutbox "all" 2>/dev/null | python3 -c "
+import sys,json
+raw=json.load(sys.stdin)
+d=raw.get('result',{})
+msg = d.get('message')
+count_str = d.get('result','0 sent messages shown.')
+try:
+    count = int(count_str.split()[0])
+except:
+    count = 0
+
+if count == 0 or msg is None:
+    print('  (outbox is empty)')
+else:
+    to = msg.get('to','?')
+    frm = msg.get('from','?')
+    text = msg.get('text','(no text)')
+    sent = msg.get('sent','')
+    print(f'  Latest sent (of {count}):')
+    print(f'    Sent: {sent}')
+    print(f'    From: {frm}')
+    print(f'    To:   {to}')
+    print(f'    Text: {text[:200]}')
+    if count > 1:
+        print(f'')
+        print(f'    ({count-1} more — use: tri raw smsgoutbox all)')
+" 2>/dev/null
+            ;;
+            
+        send)
+            if [[ $# -lt 3 ]]; then
+                echo -e "${C_RED}Usage: tri msg send <from_address> <to_address> <message>${C_RESET}" >&2
+                return 1
+            fi
+            
+            local from_addr="$1"
+            local to_addr="$2"
+            shift 2
+            local message="$*"
+            
+            # Unlock for send
+            if [[ -n "$TRI_WALLET_PASSPHRASE" ]]; then
+                _tri_unlock 60 2>/dev/null || true
+            fi
+            
+            echo -e "${C_YELLOW}Sending encrypted message...${C_RESET}"
+            local result
+            result=$(_tri_rpc smsgsend "$from_addr" "$to_addr" "$message" 2>/dev/null)
+            
+            local status
+            status=$(echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',{}); print(r.get('result','') if isinstance(r,dict) else str(r),end='')" 2>/dev/null)
+            
+            if [[ "$status" == "Sent." ]]; then
+                echo -e "${C_GREEN}Message sent to ${to_addr}${C_RESET}"
+            else
+                local err
+                err=$(echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',{}); print(r.get('error','unknown error') if isinstance(r,dict) else str(r),end='')" 2>/dev/null)
+                echo -e "${C_RED}Send failed: ${err}${C_RESET}" >&2
+                return 1
+            fi
+            ;;
+            
+        anon)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${C_RED}Usage: tri msg anon <to_address> <message>${C_RESET}" >&2
+                return 1
+            fi
+            
+            local to_addr="$1"
+            shift
+            local message="$*"
+            
+            echo -e "${C_YELLOW}Sending anonymous encrypted message...${C_RESET}"
+            local result
+            result=$(_tri_rpc smsgsendanon "$to_addr" "$message" 2>/dev/null)
+            
+            local status
+            status=$(echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',{}); print(r.get('result','') if isinstance(r,dict) else str(r),end='')" 2>/dev/null)
+            
+            if [[ "$status" == "Sent." ]]; then
+                echo -e "${C_GREEN}Anonymous message sent to ${to_addr}${C_RESET}"
+            else
+                echo -e "${C_RED}Send failed${C_RESET}" >&2
+                return 1
+            fi
+            ;;
+            
+        keys)
+            echo -e "${C_BOLD}${C_MAGENTA}Messaging Keys${C_RESET}"
+            _tri_rpc smsglocalkeys "all" 2>/dev/null | python3 -c "
+import sys,json
+raw=json.load(sys.stdin)
+d=raw.get('result',{})
+if isinstance(d, dict):
+    key_line = d.get('key','')
+    count_line = d.get('result','')
+    if key_line:
+        print(f'  {key_line}')
+    if count_line:
+        print(f'  {count_line}')
+elif isinstance(d, str):
+    print(f'  {d}')
+else:
+    print('  (no keys registered)')
+" 2>/dev/null
+            ;;
+            
+        enable)
+            echo -e "${C_YELLOW}Enabling secure messaging...${C_RESET}"
+            _tri_rpc_pretty smsgenable 2>/dev/null
+            ;;
+            
+        pubkey)
+            if [[ $# -lt 1 ]]; then
+                echo -e "${C_RED}Usage: tri msg pubkey <address>${C_RESET}" >&2
+                return 1
+            fi
+            _tri_rpc_pretty smsggetpubkey "$1" 2>/dev/null
+            ;;
+            
+        unlock)
+            local duration="${1:-60}"
+            if [[ -z "$TRI_WALLET_PASSPHRASE" ]]; then
+                echo -e "${C_RED}TRI_WALLET_PASSPHRASE not set in config${C_RESET}" >&2
+                return 1
+            fi
+            _tri_rpc walletpassphrase "$TRI_WALLET_PASSPHRASE" "$duration" >/dev/null 2>&1
+            echo -e "${C_GREEN}Wallet unlocked for ${duration}s${C_RESET}"
+            ;;
+            
+        *)
+            echo -e "${C_RED}Unknown msg subcommand: $sub${C_RESET}" >&2
+            echo "Usage: tri msg [inbox|outbox|send|anon|keys|enable|pubkey|unlock]" >&2
+            return 1
+            ;;
+    esac
+}
+
+# ─── Commands: Raw RPC ───────────────────────────────────────────────────────
+
+cmd_raw() {
+    if [[ $# -eq 0 ]]; then
+        echo -e "${C_RED}Usage: tri raw <method> [params...]${C_RESET}" >&2
+        echo "Example: tri raw getblockhash 2200000" >&2
+        return 1
+    fi
+    
+    _tri_rpc_pretty "$@"
+}
+
+# ─── Help ────────────────────────────────────────────────────────────────────
+
+cmd_help() {
+    cat << 'EOF'
+
+ tri — Cryptographic Triangles Command Interface
+
+ INFO
+   tri                       Status overview (blocks, connections, balance)
+   tri status                Detailed node status
+   tri balance               Wallet balance + UTXO count
+   tri peers                 Connected peers with ping times
+   tri stake                 Staking information
+
+ WALLET
+   tri address new           Generate new wallet address
+   tri address list          List all wallet addresses
+   tri address balance       Per-address balance breakdown
+   tri send <addr> <amt> [memo]   Send TRI to address
+   tri tx [N]                Recent N transactions (default 10)
+   tri tx <txid>             Transaction details
+
+ SECURE MESSAGING
+   tri msg inbox             Read inbox messages (wallet auto-unlocks)
+   tri msg outbox            Read sent messages
+   tri msg send <from> <to> <msg>   Send encrypted message
+   tri msg anon <to> <msg>          Send anonymous message
+   tri msg keys              List messaging keys
+   tri msg enable            Enable secure messaging
+   tri msg pubkey <addr>     Get public key for an address
+   tri msg unlock [secs]     Unlock wallet for messaging (default 60s)
+
+ ADVANCED
+   tri raw <method> [params...]    Raw RPC passthrough
+   tri help                  This help screen
+
+ CONFIG
+   /etc/tri/nodes.conf              System-wide config
+   ~/.config/tri/nodes.conf         Per-user config override
+
+ AGENTS (Hermes, Krystie)
+   Both agents use the same config and can execute all commands.
+   For messaging between agents, each needs its own TRI address
+   registered in the wallet. Use 'tri msg keys' to verify.
+
+EOF
+}
+
+# ─── Main ────────────────────────────────────────────────────────────────────
+
+main() {
+    local cmd="${1:-status}"; shift || true
+    
+    case "$cmd" in
+        status|info)    cmd_status "$@" ;;
+        balance)        cmd_balance "$@" ;;
+        peers)          cmd_peers "$@" ;;
+        stake|staking)  cmd_stake "$@" ;;
+        address|addr)   cmd_address "$@" ;;
+        send)           cmd_send "$@" ;;
+        tx|transactions) cmd_tx "$@" ;;
+        msg|message|messages) cmd_msg "$@" ;;
+        raw)            cmd_raw "$@" ;;
+        help|-h|--help) cmd_help "$@" ;;
+        *)
+            echo -e "${C_RED}Unknown command: $cmd${C_RESET}" >&2
+            echo "Run 'tri help' for available commands" >&2
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

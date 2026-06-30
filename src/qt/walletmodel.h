@@ -68,6 +68,7 @@ public:
     OptionsModel *getOptionsModel();
     AddressTableModel *getAddressTableModel();
     TransactionTableModel *getTransactionTableModel();
+    bool abandonTransaction(const QString &hash);
 
     qint64 getBalance() const;
     qint64 getStake() const;
@@ -102,6 +103,12 @@ public:
     bool changePassphrase(const SecureString &oldPass, const SecureString &newPass);
     // Wallet backup
     bool backupWallet(const QString &filename);
+
+    // ---- HD wallet (BIP39/BIP32) ----
+    bool hdEnabled() const;
+    bool hdNew(QString &mnemonicOut, QString &errorOut);
+    bool hdRestore(const QString &mnemonic, QString &errorOut);
+    bool hdShow(QString &mnemonicOut, QString &errorOut);
 
     // RAI object for unlocking wallet, returned by requestUnlock()
     class UnlockContext

@@ -25,13 +25,18 @@ namespace Checkpoints
         {  2101, uint256("0xd4ea1ac45b63c8162a7fc8033cec441db8d532ba988202849d7831e32fe2d059")},
         {  2847, uint256("0xb5015e2835f13fd3bb6135cff9b31ac33310c9b77d694bdb592b8680d98d018e")},
         {  3589, uint256("0xb12a2ca3db4e288cada98aa2139768532bd4474c49dd7b8158031032dac08d51")},
-        {  3935, uint256("0xe16290c9757d1368b8d7c35de4f8f70c2c9f9c785b667df0c3bff85086ca6")},
+        {  3935, uint256("0xe16290c9757d1368b8d7c35de07d4f8f70c2c9f9c785b667df0c3bff85086ca6")},
         {  5703, uint256("0x587db07bb2172ad7db72c5fabc2518262a1b27f503f99417510b2c6fafa6557b")},
         {  9000, uint256("0x00000000019ef6b2f5e7c324c7d083ee94502305aabc7e9cd73a7fb2a57bb8db")},
         {  9001, uint256("0x6d5c6c5f201cc9e59659ee0da30d1430dc6bf3b12a8ff4c3864ab8d6286b0007")},
         {  9002, uint256("0xa1e20fb1d44688b763690cf74d6aefe859e4cc32981f9e3f2b2ae9702bbcf249")},
         { 10881, uint256("0x4b6554c45e1e6764a6f3c309c47baf53c9edd81f624e52b072518cd15da237e6")},
         { 17650, uint256("0x224940e1f986a202209b8e762728d1452ab45870c308abf84905674acf326a47")},
+        // Recent finality pin (PoS era). Closes the long unchecked span from
+        // 17650 to the live tip so stale-bootstrap / low-trust forks below
+        // this height are rejected outright. Hash from the canonical chain.
+        { 2205000, uint256("0x6bdd3c5e5a32e1dd9a70e705f1a28d1dd84929f89579bd2696d41bc87f39446f")},
+        { 2206004, uint256("0xb34e8e6a7bb7f52167d81aaad4d26f87a876898fdd0fce860916fc1aaf9a2a46")},
     };
 
     // Published UTXO snapshot file SHA256, keyed by snapshot height.
@@ -43,6 +48,7 @@ namespace Checkpoints
     // here. The corresponding (height, blockhash) must already exist in
     // mapCheckpoints / mapCheckpointsTestnet.
     static std::map<int, uint256> mapSnapshotHashes = {
+        { 2206004, uint256("0x1419282dae817315ee1b955543f6248233fe5800f5e8488734a0ece5bd6781ea")},
     };
 
     static std::map<int, uint256> mapSnapshotHashesTestnet = {
@@ -54,7 +60,7 @@ namespace Checkpoints
         {  2101, uint256("0xd4ea1ac45b63c8162a7fc8033cec441db8d532ba988202849d7831e32fe2d059")},
         {  2847, uint256("0xb5015e2835f13fd3bb6135cff9b31ac33310c9b77d694bdb592b8680d98d018e")},
         {  3589, uint256("0xb12a2ca3db4e288cada98aa2139768532bd4474c49dd7b8158031032dac08d51")},
-        {  3935, uint256("0xe16290c9757d1368b8d7c35de4f8f70c2c9f9c785b667df0c3bff85086ca6")},
+        {  3935, uint256("0xe16290c9757d1368b8d7c35de07d4f8f70c2c9f9c785b667df0c3bff85086ca6")},
         {  5703, uint256("0x587db07bb2172ad7db72c5fabc2518262a1b27f503f99417510b2c6fafa6557b")},
         {  9000, uint256("0x00000000019ef6b2f5e7c324c7d083ee94502305aabc7e9cd73a7fb2a57bb8db")},
         {  9001, uint256("0x6d5c6c5f201cc9e59659ee0da30d1430dc6bf3b12a8ff4c3864ab8d6286b0007")},

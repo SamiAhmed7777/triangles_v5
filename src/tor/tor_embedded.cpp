@@ -16,6 +16,8 @@
 #include <thread>
 #include <fstream>
 #include <cstring>
+#include <chrono>
+#include <ctime>
 #include <vector>
 #include <string>
 
@@ -122,11 +124,59 @@ bool CTorEmbedded::Start(int socks, int hsPort, bool enableHiddenService)
     // Prepare Tor data directory under the wallet's data dir
     torDataDir = (::GetDataDir() / "tor_data").string();
     fs::create_directories(torDataDir);
+    // CRITICAL: Tor refuses to use a DataDirectory readable by other users.
+    // Without 0700, tor_run_main() returns -1 and the embedded Tor never starts.
+    fs::permissions(torDataDir, fs::perms::owner_all, fs::perm_options::replace);
+
+    // triangles fix: auto-repair `state`-as-file corruption (pitfall #19).
+    // Tor's atomic state-write pattern is: write `state.tmp` → rename to `state`.
+    // If the daemon is killed or the process crashes mid-write, the rename can
+    // fail and `state` may be left as a regular file (or a partial file). On
+    // next start, Tor sees "State file ... is not a file? Failing." and dies
+    // with code -1 ("Reading config failed"). This was hit on DNS3 on
+    // 2026-05-24 and on the TRI-LAPTOP GUI wallet on 2026-06-15. The user-facing
+    // symptom is "Tor failed to start. Triangles requires Tor to operate." and
+    // the only fix was manually renaming the corrupt file. Detect this state
+    // here and auto-rename so the daemon is self-healing.
+    {
+        fs::path statePath = fs::path(torDataDir) / "state";
+        std::error_code ec;
+        if (fs::exists(statePath, ec) && !fs::is_directory(statePath, ec)) {
+            // state is a file (or symlink to one) — quarantine it
+            auto now = std::chrono::system_clock::now();
+            auto t = std::chrono::system_clock::to_time_t(now);
+            char ts[32];
+            std::strftime(ts, sizeof(ts), "%Y%m%d-%H%M%S", std::gmtime(&t));
+            fs::path quarantine = fs::path(torDataDir) /
+                (std::string("state.corrupt-") + ts);
+            try {
+                fs::rename(statePath, quarantine, ec);
+                if (ec) {
+                    // rename can fail on Windows if dest exists; remove then rename
+                    fs::remove(quarantine, ec);
+                    fs::rename(statePath, quarantine, ec);
+                }
+                printf("Tor state was a file (corrupt) — quarantined to %s for inspection. Tor will recreate state/ as a directory.\n",
+                       quarantine.filename().string().c_str());
+            } catch (const std::exception& e) {
+                printf("WARNING: could not quarantine corrupt Tor state file %s: %s\n",
+                       statePath.string().c_str(), e.what());
+                // Last resort: try to remove it so Tor can proceed
+                fs::remove(statePath, ec);
+            }
+        }
+    }
 
     std::string hsDir;
     if (hiddenServiceEnabled) {
         hsDir = (fs::path(torDataDir) / "hidden_service").string();
         fs::create_directories(hsDir);
+        // CRITICAL: Tor rejects hidden service directories that are not 0700
+        // ("Permissions on directory ... are too permissive") and aborts config
+        // validation with code -1. This was the root cause of "Embedded Tor
+        // exited with code -1" — fs::create_directories honors umask (0022 on
+        // most Linux systems), leaving the dir at 0755. Force 0700 after creation.
+        fs::permissions(hsDir, fs::perms::owner_all, fs::perm_options::replace);
     }
 
     // Build the argv for tor_run_main

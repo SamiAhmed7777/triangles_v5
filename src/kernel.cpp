@@ -36,8 +36,18 @@ int64_t GetWeight(int64_t nIntervalBeginning, int64_t nIntervalEnd)
     // comes back with massively amplified staking power and dominates blocks.
     // The 7-day cap still allows generous accumulation while limiting abuse.
     static const int64_t STAKE_AGE_SOFT_CAP = 7 * 24 * 60 * 60; // 7 days
+    // Activation gate: the soft cap shipped 2026-04-20 without a height/time
+    // gate, retroactively invalidating earlier blocks staked with long-aged
+    // coins (e.g. coins idle through the 2022-2026 freeze).  Apply the cap
+    // only to stakes after the activation timestamp; historical stakes
+    // validate under the rules they were created with (uncapped age).
+    static const int64_t STAKE_AGE_SOFT_CAP_ACTIVATION = 1776000000; // 2026-04-12 ~13:20 UTC
     if (pindexBest && pindexBest->nHeight >= FORK_HEIGHT_V5)
-        return min(nAge, STAKE_AGE_SOFT_CAP);
+    {
+        if (nIntervalEnd >= STAKE_AGE_SOFT_CAP_ACTIVATION)
+            return min(nAge, STAKE_AGE_SOFT_CAP);
+        return nAge;
+    }
 
     return min(nAge, (int64_t)nStakeMaxAge);
 }

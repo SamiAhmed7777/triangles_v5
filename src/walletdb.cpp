@@ -6,6 +6,7 @@
 #include "walletdb.h"
 #include "wallet.h"
 #include <filesystem>
+#include <boost/version.hpp>
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -670,7 +671,11 @@ bool BackupWallet(const CWallet& wallet, const string& strDest)
                     pathDest /= wallet.strWalletFile;
 
                 try {
+#if BOOST_VERSION >= 104000
                     fs::copy_file(pathSrc, pathDest, fs::copy_options::overwrite_existing);
+#else
+                    fs::copy_file(pathSrc, pathDest);
+#endif
                     printf("copied wallet.dat to %s\n", pathDest.string().c_str());
                     return true;
                 } catch(const fs::filesystem_error &e) {

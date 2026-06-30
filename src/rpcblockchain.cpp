@@ -5,11 +5,14 @@
 
 #include "main.h"
 #include "net.h"
+#include "init.h"
 #include "trianglesrpc.h"
 #include "addressindex.h"
 #include "txdb.h"
 #include "base58.h"
 #include "utxosnapshot.h"
+#include "checkpointpublisher.h"
+#include "wallet.h"
 
 #include <filesystem>
 
@@ -753,6 +756,178 @@ Value gencheckpoints(const Array& params, bool fHelp)
     }
     result += "\n};\n";
 
+    return result;
+}
+
+// publishcheckpoint [interval] [signing_address] [output_path]
+//
+// Builds a signed-checkpoints JSON document for every <interval> blocks
+// from genesis to the current chain tip, signs it with the private key of
+// <signing_address> (defaults to the wallet's default receiving address),
+// and writes the result to <output_path> (defaults to the standard
+// bootstrap server location).
+//
+// The output file is what gets uploaded to
+// https://bootstrap.cryptographic-triangles.org/signed-checkpoints.json
+// and consumed by the daemon's startup-time LoadSignedCheckpoints().
+//
+// Returns the full JSON document (so the operator can inspect it before
+// uploading). Also writes it to disk so a cron-style uploader can pick it up.
+//
+// Example:
+//   triangles-cli publishcheckpoint 5000 \
+//       TG8f76yktTxDrT7JJymY3wVAusXiD3fVvX \
+//       /var/www/triangles-bootstrap/signed-checkpoints.json
+//
+// The signing address MUST be in the trusted signers list at every node
+// that consumes this document, or the document will be rejected at startup.
+Value publishcheckpoint(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() > 3)
+        throw runtime_error(
+            "publishcheckpoint [interval] [signing_address] [output_path]\n"
+            "Build a signed-checkpoints JSON document and optionally write it to disk.\n"
+            "\nArguments:\n"
+            "1. interval          (numeric, optional, default=5000)  blocks between checkpoints\n"
+            "2. signing_address   (string, optional)                 wallet address to sign with (default: wallet default)\n"
+            "3. output_path       (string, optional)                 where to write the JSON (default: bootstrap server path)\n"
+            "\nResult:\n"
+            "{ json: '...', path: '...', entries: N, signing_address: '...', sha256: '...' }\n"
+            "\nThe 'signing_address' MUST be in every consumer's trusted signers list,\n"
+            "otherwise the document will be rejected at startup.");
+
+    if (!pwalletMain)
+        throw JSONRPCError(RPC_WALLET_ERROR, "Wallet not loaded");
+
+    // 1. Resolve signing address — explicit param wins; otherwise pull from
+    //    the keypool (the wallet's stable receiving address). Operators can
+    //    always override via the signing_address argument if they want to
+    //    pin a specific key.
+    std::string strSigningAddr;
+    if (params.size() >= 2 && !params[1].get_str().empty()) {
+        strSigningAddr = params[1].get_str();
+    } else {
+        CPubKey pubKey;
+        if (!pwalletMain->GetKeyFromPool(pubKey, /*fAllowReuse=*/true)) {
+            throw JSONRPCError(RPC_WALLET_ERROR,
+                "publishcheckpoint: cannot determine default signing address — "
+                "please specify explicitly via the signing_address argument");
+        }
+        strSigningAddr = CTrianglesAddress(pubKey.GetID()).ToString();
+    }
+
+    // 2. Validate signing address and resolve to key
+    CTrianglesAddress addr(strSigningAddr);
+    if (!addr.IsValid())
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
+            "publishcheckpoint: invalid signing address " + strSigningAddr);
+    CKeyID keyID;
+    if (!addr.GetKeyID(keyID))
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
+            "publishcheckpoint: address does not refer to a key");
+    EnsureWalletIsUnlocked();  // signmessage-style signing needs unlocked wallet
+    CKey key;
+    if (!pwalletMain->GetKey(keyID, key))
+        throw JSONRPCError(RPC_WALLET_ERROR,
+            "publishcheckpoint: private key for " + strSigningAddr + " not available");
+
+    // 3. Resolve interval
+    int nInterval = 5000;
+    if (params.size() >= 1) {
+        nInterval = params[0].get_int();
+        if (nInterval < 1)
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "interval must be >= 1");
+    }
+
+    // 4. Walk the chain backward from pindexBest, collecting checkpoints
+    //    every <interval> blocks. Always include the chain tip (nBestHeight).
+    std::vector<Checkpoints::SignedCheckpoint> entries;
+    CBlockIndex* pindex = mapBlockIndex[hashBestChain];
+    if (!pindex)
+        throw JSONRPCError(RPC_INTERNAL_ERROR, "publishcheckpoint: no best chain");
+    int64_t nNow = GetTime();
+    while (pindex) {
+        if (pindex->nHeight % nInterval == 0 || pindex == mapBlockIndex[hashBestChain]) {
+            Checkpoints::SignedCheckpoint e;
+            e.nHeight = pindex->nHeight;
+            // Serialize hash as lowercase hex WITHOUT 0x prefix, no leading zeros
+            e.hashHex = pindex->GetBlockHash().GetHex();
+            e.nTimestamp = nNow;
+            entries.push_back(e);
+        }
+        if (pindex->nHeight == 0) break;
+        pindex = pindex->pprev;
+    }
+    if (entries.empty())
+        throw JSONRPCError(RPC_INTERNAL_ERROR, "publishcheckpoint: no entries generated");
+
+    // 5. Build the canonical message + sign it
+    std::string message = Checkpoints::SerializeEntriesForSigning(entries);
+    CDataStream ss(SER_GETHASH, 0);
+    ss << strMessageMagic;
+    ss << message;
+    std::vector<unsigned char> vchSig;
+    if (!key.SignCompact(Hash(ss.begin(), ss.end()), vchSig))
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
+            "publishcheckpoint: SignCompact failed");
+    std::string sigBase64 = EncodeBase64(&vchSig[0], vchSig.size());
+
+    // 6. Build the JSON document
+    std::string json, buildErr;
+    if (!Checkpoints::BuildSignedCheckpointsJson(
+            entries, strSigningAddr, sigBase64, message, json, buildErr)) {
+        throw JSONRPCError(RPC_INTERNAL_ERROR,
+            "publishcheckpoint: BuildSignedCheckpointsJson failed: " + buildErr);
+    }
+
+    // 7. Self-verify before returning — defense in depth. If our own signed
+    //    document doesn't verify, we want to know immediately rather than
+    //    ship a bad document.
+    std::vector<Checkpoints::SignedCheckpoint> verifyEntries;
+    std::string verifySigner;
+    std::string verifyErr;
+    if (!Checkpoints::VerifySignedCheckpoints(json, verifyEntries, verifySigner, verifyErr)) {
+        throw JSONRPCError(RPC_INTERNAL_ERROR,
+            "publishcheckpoint: self-verification FAILED: " + verifyErr);
+    }
+    if (verifyEntries.size() != entries.size()) {
+        throw JSONRPCError(RPC_INTERNAL_ERROR,
+            "publishcheckpoint: self-verification returned wrong entry count");
+    }
+
+    // 8. Optionally write to disk
+    std::string outPath;
+    if (params.size() >= 3 && !params[2].get_str().empty()) {
+        outPath = params[2].get_str();
+    } else {
+        outPath = Checkpoints::SIGNED_CHECKPOINTS_DEFAULT_OUT;
+    }
+    FILE* f = fopen(outPath.c_str(), "wb");
+    if (f) {
+        fwrite(json.data(), 1, json.size(), f);
+        fclose(f);
+        printf("publishcheckpoint: wrote %zu entries (%zu bytes) to %s\n",
+               entries.size(), json.size(), outPath.c_str());
+    } else {
+        // Don't fail the RPC just because the disk write failed — the operator
+        // still has the JSON in the response and can save it manually.
+        printf("publishcheckpoint: WARNING — could not write to %s, returning JSON in response\n",
+               outPath.c_str());
+        outPath = "";
+    }
+
+    // 9. Compute a hex SHA256 of the JSON for operator verification
+    //    (uses the standard util helper; available everywhere)
+    std::string sha = Hash(reinterpret_cast<const unsigned char*>(json.data()),
+                           reinterpret_cast<const unsigned char*>(json.data() + json.size())
+                          ).ToString();
+
+    Object result;
+    result.push_back(Pair("entries", (int)entries.size()));
+    result.push_back(Pair("signing_address", strSigningAddr));
+    result.push_back(Pair("path", outPath));
+    result.push_back(Pair("sha256", sha.substr(0, 16) + "..."));
+    result.push_back(Pair("json", json));
     return result;
 }
 

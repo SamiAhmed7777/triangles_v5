@@ -110,7 +110,10 @@ private:
     QLabel *labelConnectionsIcon;
     QLabel *labelBlocksIcon;
     QLabel *labelOnionAddress;
+    QLabel *labelI2PAddress;
     QLabel *labelV3Icon;
+    QLabel *labelI2PIcon;
+    QLabel *labelTorIcon;
     QLabel *progressBarLabel;
     QProgressBar *progressBar;
 
@@ -131,6 +134,7 @@ private:
     QAction *encryptWalletAction;
     QAction *backupWalletAction;
     QAction *changePassphraseAction;
+    QAction *hdSeedAction;
     QAction *unlockWalletAction;
     QAction *unlockWalletStakingAction;
     QAction *lockWalletAction;
@@ -177,6 +181,7 @@ public slots:
     void setWalletTransactionSyncState(bool syncing);
     void setWalletTransactionSyncProgress(bool syncing, int pendingNotifications);
     void updateOnionAddress();
+    void updateI2PAddress();
 
     /** Notify the user of an error in the network or transaction handling code. */
     void error(const QString &title, const QString &message, bool modal);
@@ -243,6 +248,8 @@ private slots:
     void backupWallet();
     /** Change encrypted wallet passphrase */
     void changePassphrase();
+    /** Open the HD seed phrase (generate/restore/backup) dialog */
+    void hdSeedManager();
     /** Ask for passphrase to unlock wallet temporarily */
     void unlockWallet();
     /** Ask for passphrase to unlock wallet temporarily - FOR STAKING ONLY */

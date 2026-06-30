@@ -3,7 +3,7 @@
 # Run from the packaging/debian directory
 set -e
 
-VERSION="5.7.6"
+VERSION="5.9.24"
 PKGDIR="triangles_${VERSION}-1_amd64"
 RELEASE_URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}"
 

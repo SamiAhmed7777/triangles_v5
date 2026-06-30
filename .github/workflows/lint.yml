@@ -57,7 +57,7 @@ jobs:
           sudo apt-get install -y build-essential cmake ninja-build clang-tidy-15 \
             libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
             libevent-dev libminiupnpc-dev zlib1g-dev \
-            libsnappy-dev liblz4-dev libzstd-dev libsqlite3-dev
+            libsnappy-dev liblz4-dev libzstd-dev
           sudo ln -sf /usr/bin/clang-tidy-15 /usr/local/bin/clang-tidy
 
       - name: Build RocksDB from source

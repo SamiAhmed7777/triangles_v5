@@ -259,10 +259,34 @@ bool CTorProcess::WriteTorrc()
     // SOCKS proxy for wallet connections
     torrc << "SocksPort " << socksPort << "\n";
 
-    // Data directory for Tor state
-    fs::path torStateDir = dataPath / "state";
-    fs::create_directories(torStateDir);
-    torrc << "DataDirectory " << torStateDir.string() << "\n";
+    // Data directory for Tor state.
+    // Use the tor_data directory itself as DataDirectory so that Tor creates
+    // its internal 'state' FILE at <tor_data>/state.  Older wallet builds
+    // erroneously created a subdirectory called 'state' and pointed
+    // DataDirectory at it; newer Tor versions (0.4.9+) reject that because
+    // they expect to write a plain file called 'state' inside DataDirectory.
+    //
+    // Recovery: if 'state' exists as a directory, move its contents up and
+    // remove it so that Tor can create its state file in the normal location.
+    {
+        fs::path badStateDir = dataPath / "state";
+        if (fs::exists(badStateDir) && fs::is_directory(badStateDir)) {
+            // Migrate any files inside the bad 'state/' directory up to dataPath
+            try {
+                for (auto& entry : fs::directory_iterator(badStateDir)) {
+                    fs::path dest = dataPath / entry.path().filename();
+                    if (!fs::exists(dest)) {
+                        fs::rename(entry.path(), dest);
+                    }
+                }
+                fs::remove(badStateDir);
+                printf("Auto-recovered: removed legacy 'state' directory from %s\n", dataPath.string().c_str());
+            } catch (const fs::filesystem_error& e) {
+                printf("WARNING: Could not auto-recover tor_data/state directory: %s\n", e.what());
+            }
+        }
+    }
+    torrc << "DataDirectory " << dataPath.string() << "\n";
 
     // Persistent Tor log for post-mortem debugging on user machines.
     fs::path torLogPath = dataPath / "tor.log";
@@ -286,6 +310,24 @@ bool CTorProcess::WriteTorrc()
     // Disable unused features
     torrc << "AvoidDiskWrites 1\n";
     torrc << "Log notice stderr\n";
+
+    // Append user-supplied extra Tor configuration if present. This lets
+    // operators on censored / DPI-filtered networks add Bridge lines,
+    // ClientTransportPlugin (obfs4), or a Socks5Proxy/HTTPSProxy upstream so
+    // Tor can reach the network when direct connections are blocked. The file
+    // is never overwritten by the wallet; only the auto-generated torrc is.
+    {
+        fs::path extraPath = dataPath / "torrc.extra";
+        if (fs::exists(extraPath)) {
+            std::ifstream extra(extraPath.string().c_str());
+            if (extra.is_open()) {
+                torrc << "\n# ---- appended from torrc.extra (user-managed) ----\n";
+                torrc << extra.rdbuf();
+                torrc << "\n";
+                printf("Tor: appended user configuration from %s\n", extraPath.string().c_str());
+            }
+        }
+    }
 
     torrc.close();
 

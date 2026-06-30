@@ -8,6 +8,7 @@
 
 #include <filesystem>
 
+#include <boost/version.hpp>
 
 #include <rocksdb/cache.h>
 #include <rocksdb/filter_policy.h>
@@ -30,6 +31,7 @@ namespace fs = std::filesystem;
 // Global pointer for the RocksDB instance, shared across CRocksTxDB instances
 // the same way the LevelDB backend shares its txdb singleton.
 static rocksdb::DB* g_rocksdb = nullptr;
+static rocksdb::ColumnFamilyHandle* g_cf_handles[5] = {};  // indexed by CF_ enum
 static bool g_cf_enabled = false;
 
 // Non-batched writes bypass WAL fsync. The TxnCommit path handles durability;
@@ -128,8 +130,27 @@ static rocksdb::Options GetRocksOptions()
     return opts;
 }
 
-// Column-family partitioning is disabled (see CRocksTxDB::GetCF). All keys live
-// in the default column family, mirroring the single-keyspace LevelDB backend.
+// ─── Column family names ───────────────────────────────────────────────────
+static const std::string CF_NAMES[] = {
+    rocksdb::kDefaultColumnFamilyName,  // CF_DEFAULT (index 0)
+    "blockindex",                       // CF_BLOCKINDEX (index 1)
+    "txindex",                          // CF_TXINDEX (index 2)
+    "utxo",                             // CF_UTXO (index 3)
+    "addrindex",                        // CF_ADDRINDEX (index 4)
+};
+static constexpr int CF_COUNT = 5;
+
+// Prefix-to-CF routing table. Keys starting with these prefixes go to
+// the indicated CF index. Everything else stays in CF_DEFAULT (metadata).
+struct CfPrefixEntry { const char* prefix; int len; int cf_index; };
+static CfPrefixEntry prefixMap_[] = {
+    {"b",     1, 1},  // CF_BLOCKINDEX
+    {"t",     1, 2},  // CF_TXINDEX
+    {"u",     1, 3},  // CF_UTXO
+    {"addrbal",  7, 4},  // CF_ADDRINDEX
+    {"addrutxo", 8, 4},  // CF_ADDRINDEX
+    {"addrtxid", 8, 4},  // CF_ADDRINDEX
+};
 
 static void open_rocksdb(rocksdb::Options& options, bool fRemoveOld = false)
 {
@@ -142,38 +163,37 @@ static void open_rocksdb(rocksdb::Options& options, bool fRemoveOld = false)
     fs::create_directory(directory);
     printf("Opening RocksDB in %s\n", directory.string().c_str());
 
-    // Column-family partitioning is disabled (see CRocksTxDB::GetCF): all data
-    // lives in the default CF so writes, point reads, and full-keyspace
-    // iteration stay mutually consistent. New databases are therefore created
-    // single-CF.
-    //
-    // For openability we must still enumerate any column families that already
-    // exist on disk — RocksDB refuses to open a database unless every existing
-    // CF is named in the open call. Experimental pre-release databases may
-    // contain the old blockindex/txindex/utxo/addrindex CFs; we open them so
-    // the handle is valid, but never route to them. (Such a database would have
-    // chain data stranded in non-default CFs and should be re-migrated or
-    // reindexed; no production database is in that state.)
+    // Try opening with column families. First, list existing CFs.
     std::vector<std::string> existingCFs;
     rocksdb::Options listOpts = options;
     listOpts.create_if_missing = false;
     rocksdb::DB::ListColumnFamilies(listOpts, directory.string(), &existingCFs);
 
+    bool needsCreate = (existingCFs.size() <= 1);  // Only "default" or empty
+
     std::vector<rocksdb::ColumnFamilyDescriptor> cfDescs;
-    cfDescs.push_back(rocksdb::ColumnFamilyDescriptor(
-        rocksdb::kDefaultColumnFamilyName, rocksdb::ColumnFamilyOptions(options)));
-    for (const auto& name : existingCFs) {
-        if (name == rocksdb::kDefaultColumnFamilyName)
-            continue;  // default already added above
-        cfDescs.push_back(rocksdb::ColumnFamilyDescriptor(
-            name, rocksdb::ColumnFamilyOptions(options)));
+    for (int i = 0; i < CF_COUNT; i++) {
+        // Include this CF if it already exists OR if we're creating new
+        bool exists = false;
+        for (auto& name : existingCFs)
+            if (name == CF_NAMES[i]) { exists = true; break; }
+        if (exists || needsCreate) {
+            rocksdb::ColumnFamilyOptions cfOpts = options;
+            // Per-CF tuning:
+            if (i == 3) {  // UTXO: optimize for point lookups
+                cfOpts.OptimizeForPointLookup(static_cast<size_t>(GetArg("-dbcache", 2048)));
+            } else if (i == 4) {  // addrindex: optimize for scans
+                cfOpts.OptimizeLevelStyleCompaction(cfOpts.write_buffer_size);
+            }
+            cfDescs.push_back(rocksdb::ColumnFamilyDescriptor(CF_NAMES[i], cfOpts));
+        }
     }
 
     std::vector<rocksdb::ColumnFamilyHandle*> handles;
     rocksdb::Status status = OpenRocksDBCF(options, directory.string(),
                                                 cfDescs, &handles, &g_rocksdb);
     if (!status.ok()) {
-        // Fallback: open without an explicit CF list (plain single-CF database).
+        // Fallback: open without CFs (old-style single-CF database)
         printf("RocksDB CF open failed (%s), falling back to single-CF\n", status.ToString().c_str());
         status = OpenRocksDB(options, directory.string(), &g_rocksdb);
         if (!status.ok()) {
@@ -183,10 +203,18 @@ static void open_rocksdb(rocksdb::Options& options, bool fRemoveOld = false)
         return;
     }
 
-    // We only ever route to the default CF, so keep CF routing off. Any extra
-    // handles opened above for legacy-database compatibility are intentionally
-    // left unused.
-    g_cf_enabled = false;
+    // Store handles in the global array (CF names map directly to indices)
+    for (size_t i = 0; i < handles.size() && i < CF_COUNT; i++) {
+        // Match handle to our index by name
+        std::string hname = handles[i]->GetName();
+        for (int j = 0; j < CF_COUNT; j++) {
+            if (hname == CF_NAMES[j]) {
+                g_cf_handles[j] = handles[i];
+                break;
+            }
+        }
+    }
+    g_cf_enabled = true;
 }
 
 CRocksTxDB::CRocksTxDB(const char* pszMode)
@@ -323,30 +351,15 @@ bool CRocksTxDB::ScanBatch(const std::string& key, std::string* value, bool* del
 }
 
 // ─── CF routing helper ──────────────────────────────────────────────────────
-// IMPORTANT: column-family partitioning is intentionally DISABLED.
-//
-// The earlier design split keys across per-prefix column families
-// (blockindex/txindex/utxo/addrindex) for independent compaction. But the read
-// path was never made CF-aware: both CRocksTxDB::NewIterator() and
-// CRocksTxDB::LoadBlockIndex() iterate the DEFAULT column family only. With
-// routing enabled, block-index records (and every other prefixed key) were
-// written into non-default CFs, so:
-//   - LoadBlockIndex() loaded ZERO blocks,
-//   - UTXO snapshot dumps and address-index range scans saw nothing, and
-//   - the migration verifier (CollectStats) counted a record mismatch.
-// This is why -chaindb=rocksdb "compiled clean but was never runtime-valid."
-//
-// Returning nullptr unconditionally routes ALL keys to the default CF, which
-// makes writes, point reads, Exists, Erase, and full-keyspace iteration
-// mutually consistent — and byte-identical to the single-keyspace LevelDB
-// backend, which the migration and dual-backend equivalence tests rely on.
-//
-// Re-introducing CFs is tracked as a follow-up and requires CF-aware iterators
-// in NewIterator()/LoadBlockIndex() (a multiplexed merge across CFs) before the
-// prefix router below can be re-enabled.
-rocksdb::ColumnFamilyHandle* CRocksTxDB::GetCF(const std::string& /*key*/) const
+rocksdb::ColumnFamilyHandle* CRocksTxDB::GetCF(const std::string& key) const
 {
-    return nullptr;  // single keyspace: always the default column family
+    if (!g_cf_enabled)
+        return nullptr;  // nullptr = default CF
+    for (auto& entry : prefixMap_) {
+        if ((int)key.size() >= entry.len && key.compare(0, entry.len, entry.prefix) == 0)
+            return g_cf_handles[entry.cf_index];
+    }
+    return nullptr;  // default CF for metadata keys
 }
 
 bool CRocksTxDB::ReadRaw(const std::string& key, std::string& value) const

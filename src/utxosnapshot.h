@@ -11,7 +11,7 @@
 static const unsigned int UTXO_SNAPSHOT_MAGIC = 0x53585455; // "UTXS" little-endian
 
 // UTXO snapshot format version
-static const unsigned int UTXO_SNAPSHOT_VERSION = 1;
+static const unsigned int UTXO_SNAPSHOT_VERSION = 2;
 
 // Number of block index entries to include in snapshot (covers difficulty,
 // median time, stake modifier, and reorg depth requirements)
@@ -29,10 +29,14 @@ namespace UtxoSnapshot {
     // Load a UTXO snapshot from a file into a fresh LevelDB.
     // Writes block index entries, UTXOs, hashBestChain, and dbformat.
     // The LevelDB must NOT be open yet (call before LoadBlockIndex).
+    // `requireCheckpoint` enforces that the snapshot tip is a known
+    // checkpoint (for P2P-delivered snapshots). Local loads from a
+    // trusted operator pass false.
     // Returns true on success, sets strError on failure.
     bool LoadSnapshot(const std::filesystem::path& snapshotPath,
                       const std::filesystem::path& dataDir,
-                      std::string& strError);
+                      std::string& strError,
+                      bool requireCheckpoint);
 
 } // namespace UtxoSnapshot
 

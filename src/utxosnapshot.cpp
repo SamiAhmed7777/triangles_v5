@@ -8,6 +8,12 @@
 #include "checkpoints.h"
 #include "util.h"
 #include "ui_interface.h"
+#include "addressindex.h"
+
+#include <variant>
+
+// defined in main.cpp
+extern bool fAddressIndex;
 
 #include <filesystem>
 
@@ -36,20 +42,28 @@ bool DumpSnapshot(const fs::path& destPath,
         return false;
     }
 
-    // Collect block index entries (last nHeaders blocks, height ascending)
+    // v2: collect ALL block index entries (genesis → tip). Required so a
+    // snapshot-loaded node can address every block via mapBlockIndex +
+    // blk0001.dat. The nHeaders argument is honored only when strictly less
+    // than chain height for v1-compat diagnostic snapshots.
     std::vector<std::pair<uint256, CDiskBlockIndex>> vHeaders;
-    vHeaders.reserve(nHeaders);
     {
         CBlockIndex* pindex = pindexBest;
-        unsigned int nCollected = 0;
-        while (pindex && nCollected < nHeaders) {
+        while (pindex) {
             CDiskBlockIndex diskindex(pindex);
             vHeaders.push_back({*pindex->phashBlock, diskindex});
             pindex = pindex->pprev;
-            nCollected++;
         }
-        // Reverse to height ascending order
+        // Reverse to height ascending order (genesis first)
         std::reverse(vHeaders.begin(), vHeaders.end());
+
+        // Legacy v1 fallback: if caller passed a specific count smaller than
+        // the full chain, trim from the front (keep newest nHeaders).
+        if (nHeaders > 0 && nHeaders < (unsigned int)nBestHeight &&
+            vHeaders.size() > nHeaders) {
+            vHeaders.erase(vHeaders.begin(),
+                           vHeaders.begin() + (vHeaders.size() - nHeaders));
+        }
     }
 
     // Open the chain DB once and reuse for both the UTXO count and the
@@ -85,6 +99,18 @@ bool DumpSnapshot(const fs::path& destPath,
     int64_t moneySupply = pindexBest->nMoneySupply;
     unsigned int numHeaders = (unsigned int)vHeaders.size();
     unsigned int numUtxos = (unsigned int)nUtxoCount;
+    // v2: size of raw blk0001.dat content embedded in this snapshot. v1
+    // snapshots always write 0 here (no embedded blocks).
+    unsigned int numBlocks = 0;
+    {
+        FILE* blkFile = fopen((GetDataDir() / "blk0001.dat").string().c_str(), "rb");
+        if (blkFile) {
+            fseek(blkFile, 0, SEEK_END);
+            long blkSize = ftell(blkFile);
+            fclose(blkFile);
+            if (blkSize > 0) numBlocks = (unsigned int)blkSize;
+        }
+    }
     uint256 contentHash; // placeholder, filled after writing data
 
     fwrite(&magic, sizeof(magic), 1, file);
@@ -95,6 +121,7 @@ bool DumpSnapshot(const fs::path& destPath,
     fwrite(&moneySupply, sizeof(moneySupply), 1, file);
     fwrite(&numHeaders, sizeof(numHeaders), 1, file);
     fwrite(&numUtxos, sizeof(numUtxos), 1, file);
+    fwrite(&numBlocks, sizeof(numBlocks), 1, file); // v2+
     long contentHashPos = ftell(file);
     fwrite(&contentHash, sizeof(contentHash), 1, file); // placeholder
 
@@ -176,6 +203,35 @@ bool DumpSnapshot(const fs::path& destPath,
         }
     }
 
+    // v2: After UTXOs, append raw blk0001.dat content. Streams in chunks;
+    // SHA256 covers the bytes. A snapshot-loaded node has full block data
+    // ready in datadir/blk0001.dat — no separate bootstrap needed.
+    if (numBlocks > 0) {
+        FILE* blkFile = fopen((GetDataDir() / "blk0001.dat").string().c_str(), "rb");
+        if (!blkFile) {
+            fclose(file);
+            strError = "Cannot open blk0001.dat for snapshot embedding";
+            return false;
+        }
+        printf("UtxoSnapshot: embedding blk0001.dat (%u bytes) into snapshot\n", numBlocks);
+        unsigned char blkBuf[64 * 1024];
+        size_t nLeft = numBlocks;
+        while (nLeft > 0) {
+            size_t nWant = nLeft > sizeof(blkBuf) ? sizeof(blkBuf) : nLeft;
+            size_t nRead = fread(blkBuf, 1, nWant, blkFile);
+            if (nRead != nWant) {
+                fclose(blkFile);
+                fclose(file);
+                strError = "Short read on blk0001.dat during snapshot embed";
+                return false;
+            }
+            fwrite(blkBuf, 1, nRead, file);
+            SHA256_Update(&sha256, blkBuf, nRead);
+            nLeft -= nRead;
+        }
+        fclose(blkFile);
+    }
+
     // Finalize content hash and write it to the header
     SHA256_Final((unsigned char*)&contentHash, &sha256);
     fseek(file, contentHashPos, SEEK_SET);
@@ -183,20 +239,45 @@ bool DumpSnapshot(const fs::path& destPath,
 
     fclose(file);
 
-    printf("UtxoSnapshot: wrote %s (%d headers, %d UTXOs, hash=%s)\n",
-           destPath.string().c_str(), numHeaders, numUtxos,
+    printf("UtxoSnapshot: wrote %s (%d headers, %d UTXOs, %u block bytes, hash=%s)\n",
+           destPath.string().c_str(), numHeaders, numUtxos, numBlocks,
            contentHash.ToString().c_str());
 
     return true;
 }
 
+// Extract (type, hash160) from a scriptPubKey for the address index.
+// Mirrors GetAddressFromScript() in main.cpp (which is file-static there).
+static bool SnapAddressFromScript(const CScript& script, int& nType, uint160& hashBytes)
+{
+    CTxDestination dest;
+    if (!ExtractDestination(script, dest))
+        return false;
+    if (const CKeyID* keyId = std::get_if<CKeyID>(&dest)) {
+        nType = ADDR_TYPE_P2PKH; hashBytes = *keyId; return true;
+    }
+    if (const CScriptID* scriptId = std::get_if<CScriptID>(&dest)) {
+        nType = ADDR_TYPE_P2SH; hashBytes = *scriptId; return true;
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // LoadSnapshot - load a UTXO snapshot into a fresh LevelDB
+//
+// `requireCheckpoint` controls whether the snapshot's tip block must be a
+// known checkpoint. This gate exists to prevent malicious P2P peers from
+// tricking the daemon into accepting a fake UTXO set at an arbitrary
+// height on an alternate chain. Local file loads (operator already has
+// filesystem access, so the trust model is the same as editing the chain
+// state directly) skip the gate via requireCheckpoint=false. P2P-delivered
+// snapshots (SnapshotNet) keep the gate on.
 // ---------------------------------------------------------------------------
 
 bool LoadSnapshot(const fs::path& snapshotPath,
                   const fs::path& /*dataDir — unused; resolved per-backend via GetChainDataDir()*/,
-                  std::string& strError)
+                  std::string& strError,
+                  bool requireCheckpoint)
 {
     FILE* file = fopen(snapshotPath.string().c_str(), "rb");
     if (!file) {
@@ -209,7 +290,7 @@ bool LoadSnapshot(const fs::path& snapshotPath,
     int height;
     uint256 blockHash;
     int64_t moneySupply;
-    unsigned int numHeaders, numUtxos;
+    unsigned int numHeaders = 0, numUtxos = 0, numBlocks = 0;
     uint256 expectedContentHash;
 
     if (fread(&magic, sizeof(magic), 1, file) != 1 ||
@@ -219,10 +300,22 @@ bool LoadSnapshot(const fs::path& snapshotPath,
         fread(&blockHash, sizeof(blockHash), 1, file) != 1 ||
         fread(&moneySupply, sizeof(moneySupply), 1, file) != 1 ||
         fread(&numHeaders, sizeof(numHeaders), 1, file) != 1 ||
-        fread(&numUtxos, sizeof(numUtxos), 1, file) != 1 ||
-        fread(&expectedContentHash, sizeof(expectedContentHash), 1, file) != 1) {
+        fread(&numUtxos, sizeof(numUtxos), 1, file) != 1) {
         fclose(file);
-        strError = "Truncated snapshot header";
+        strError = "Truncated snapshot header (common fields)";
+        return false;
+    }
+    // v2+ has numBlocks between numUtxos and contentHash. v1 stops here.
+    if (version >= 2) {
+        if (fread(&numBlocks, sizeof(numBlocks), 1, file) != 1) {
+            fclose(file);
+            strError = "Truncated snapshot header (numBlocks)";
+            return false;
+        }
+    }
+    if (fread(&expectedContentHash, sizeof(expectedContentHash), 1, file) != 1) {
+        fclose(file);
+        strError = "Truncated snapshot header (contentHash)";
         return false;
     }
 
@@ -252,8 +345,9 @@ bool LoadSnapshot(const fs::path& snapshotPath,
         return false;
     }
 
-    // Verify snapshot block is a known checkpoint
-    if (!Checkpoints::IsKnownCheckpoint(height, blockHash)) {
+    // Verify snapshot block is a known checkpoint (only for P2P-delivered
+    // snapshots — local files are operator-trusted and can be at any height)
+    if (requireCheckpoint && !Checkpoints::IsKnownCheckpoint(height, blockHash)) {
         fclose(file);
         strError = "Snapshot block " + blockHash.ToString() + " at height "
                  + std::to_string(height) + " is not a known checkpoint";
@@ -281,6 +375,20 @@ bool LoadSnapshot(const fs::path& snapshotPath,
 
     bool success = true;
     unsigned int nBatchSize = 0;
+
+    // CRITICAL: Set fSerializeChainTrust=true before writing CDiskBlockIndex records.
+    // LoadBlockIndex later reads with fSerializeChainTrust=true (derived from
+    // dbformat >= 2), so writes must include nChainTrust to match. Without this,
+    // every LoadSnapshot is followed by an "end of data: iostream error" in
+    // LoadBlockIndex because the reader expects a field the writer omitted.
+    //
+    // The default value is false; nothing else in the daemon sets it to true
+    // BEFORE LoadSnapshot runs (only the in-place upgrade path inside
+    // LoadBlockIndex sets it true, which is too late). The snapshot writer
+    // (an external daemon or our own DumpSnapshot) may have set it differently;
+    // but for a fresh LevelDB created by LoadSnapshot, we want the resulting
+    // DB to be self-consistent, so we always write with the field included.
+    CDiskBlockIndex::fSerializeChainTrust = true;
 
     if (!txdb.TxnBegin()) {
         fclose(file);
@@ -383,6 +491,19 @@ bool LoadSnapshot(const fs::path& snapshotPath,
                 strError = "WriteUtxo failed at index " + std::to_string(i);
                 break;
             }
+
+            // Address index: snapshot UTXOs are all unspent -> credit balance + record UTXO.
+            if (::fAddressIndex && !entry.scriptPubKey.empty() && entry.nValue != 0) {
+                int nAType; uint160 aHash;
+                if (SnapAddressFromScript(entry.scriptPubKey, nAType, aHash)) {
+                    txdb.WriteAddressUtxo(nAType, aHash, txhash, nIndex,
+                                          entry.nValue, entry.nHeight, entry.scriptPubKey);
+                    int64_t nABal = 0;
+                    txdb.ReadAddressBalance(nAType, aHash, nABal);
+                    nABal += entry.nValue;
+                    txdb.WriteAddressBalance(nAType, aHash, nABal);
+                }
+            }
             nBatchSize++;
 
             if (nBatchSize >= 50000) {
@@ -399,6 +520,36 @@ bool LoadSnapshot(const fs::path& snapshotPath,
 
         if (success && !flushBatch())
             success = false;
+    }
+
+    // v2: After UTXOs, extract the raw blk0001.dat content. This makes the
+    // loaded node fully self-contained — no separate bootstrap needed.
+    if (success && version >= 2 && numBlocks > 0) {
+        printf("UtxoSnapshot: extracting %u block bytes to blk0001.dat...\n", numBlocks);
+        fs::path blkOut = GetDataDir() / "blk0001.dat";
+        FILE* blkOutFile = fopen(blkOut.string().c_str(), "wb");
+        if (!blkOutFile) {
+            success = false;
+            strError = "Cannot create blk0001.dat for snapshot extract: " + blkOut.string();
+        } else {
+            unsigned char blkBuf[64 * 1024];
+            size_t nLeft = numBlocks;
+            while (nLeft > 0 && success) {
+                size_t nWant = nLeft > sizeof(blkBuf) ? sizeof(blkBuf) : nLeft;
+                size_t nRead = fread(blkBuf, 1, nWant, file);
+                if (nRead != nWant) {
+                    success = false;
+                    strError = "Short read on snapshot blocks section";
+                    break;
+                }
+                fwrite(blkBuf, 1, nRead, blkOutFile);
+                SHA256_Update(&sha256, blkBuf, nRead);
+                nLeft -= nRead;
+            }
+            fclose(blkOutFile);
+            if (success)
+                printf("UtxoSnapshot: wrote blk0001.dat (%u bytes)\n", numBlocks);
+        }
     }
 
     // Verify content hash
@@ -445,6 +596,8 @@ bool LoadSnapshot(const fs::path& snapshotPath,
 
     printf("UtxoSnapshot: successfully loaded %d headers + %d UTXOs at height %d\n",
            numHeaders, numUtxos, height);
+
+    fLoadedFromSnapshot = true;
 
     return true;
 }

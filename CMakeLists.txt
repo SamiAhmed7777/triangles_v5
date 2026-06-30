@@ -47,16 +47,36 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 # ── User-facing options ──
 option(BUILD_QT           "Build triangles-qt (Qt5 GUI wallet)"              ON)
 option(BUILD_DAEMON       "Build trianglesd (headless daemon)"               ON)
+option(BUILD_CLI          "Build triangles-cli (JSON-RPC client)"            ON)
 option(BUILD_TESTS        "Build test_triangles (Boost.Test unit tests)"     ON)
 option(USE_UPNP           "Enable UPnP support via miniupnpc"               ON)
 option(USE_IPV6           "Enable IPv6 support"                              ON)
 option(USE_QRCODE         "Enable QR code generation via libqrencode"        OFF)
 option(USE_DBUS           "Enable D-Bus notifications (Linux only)"          ON)
 option(USE_ZMQ            "Enable ZMQ publisher support"                     OFF)
-option(USE_TOR_EMBEDDED   "Enable embedded Tor library linking"              OFF)
+# Triangles is Tor-native.  Tor is REQUIRED — disabling it at build time is
+# not a supported configuration.  The 2026-06-23 DNS2 clearnet-fork incident
+# (5+ days on a parallel chain because someone flipped -notor=1 for
+# troubleshooting and never reverted it) motivated this.  We keep the option
+# for legacy recovery workflows, but default it ON and abort the build if
+# anyone explicitly disables it.
+option(USE_TOR_EMBEDDED   "Enable embedded Tor library linking"              ON)
+if(DEFINED USE_TOR_EMBEDDED AND NOT USE_TOR_EMBEDDED)
+    message(FATAL_ERROR
+        "USE_TOR_EMBEDDED=OFF is not supported. Triangles is Tor-native. "
+        "If you need clearnet mode for bootstrap recovery, build with "
+        "USE_TOR_EMBEDDED=ON and pass -notor=1 -recovery-mode=1 at runtime "
+        "instead.")
+endif()
 option(USE_O3             "Use -O3 optimization instead of -O2"              OFF)
 option(ENABLE_PIE         "Build position-independent executables"           OFF)
 option(ENABLE_STATIC      "Prefer static linking (Linux release builds)"     OFF)
+
+# Embedded I2P (i2pd) — runs an I2P router in-process alongside Tor.
+# When enabled, Triangles supports dual-network anonymity: Tor (.onion) +
+# I2P (.b32.i2p). Disabled by default until seed nodes are deployed.
+option(USE_I2P_EMBEDDED   "Enable embedded I2P (i2pd) library linking"       OFF)
+set(I2P_SOURCE_ROOT   "" CACHE PATH "Path to i2pd source tree (for USE_I2P_EMBEDDED)")
 
 # Cache variables for custom dependency paths
 set(BDB_INCLUDE_PATH "" CACHE PATH "Path to Berkeley DB headers")
@@ -74,6 +94,7 @@ include(AddCompilerFlags)
 find_package(OpenSSL REQUIRED)
 find_package(Boost 1.71 REQUIRED COMPONENTS
     program_options thread chrono
+    OPTIONAL_COMPONENTS filesystem system
 )
 if(BUILD_TESTS)
     find_package(Boost REQUIRED COMPONENTS unit_test_framework)
@@ -133,6 +154,78 @@ if(NOT TARGET RocksDB::rocksdb AND NOT TARGET PkgConfig::RocksDB)
     message(STATUS "Found RocksDB (manual probe): ${ROCKSDB_LIBRARY}")
 endif()
 
+# Modernization: SQLite3 for the new wallet DB backend.
+find_package(SQLite3 REQUIRED)
+
+# Triangles uses RocksDB features that only exist in 7.4+ (XXH3 per-block
+# checksum, type 4). Building against an older RocksDB produces a binary
+# whose smsgDB Open() fails on any SST file written by RocksDB 7.4+ —
+# instead of just bailing, src/smessage.cpp::SecMsgDB::Open now
+# quarantines the offending file and recovers. We still fail loudly at
+# configure time so this drift doesn't sneak back in unnoticed.
+
+# rocksdb/version.h ships with every RocksDB release (3.x onward) and
+# defines ROCKSDB_MAJOR / ROCKSDB_MINOR / ROCKSDB_PATCH. If neither
+# find_package nor pkg-config exposed RocksDB_VERSION (e.g. Ubuntu 22.04's
+# librocksdb-dev, which ships no CMake config and no .pc file), we can
+# still recover the version directly from the header. This closes the
+# "manual probe silently allows old RocksDB" gap that let v5.9.24 ship
+# linked to librocksdb 6.11.
+function(_tri_detect_rocksdb_version_from_header)
+    if(RocksDB_VERSION)
+        return()
+    endif()
+    foreach(_dir ${ARGN})
+        if(NOT IS_DIRECTORY "${_dir}")
+            continue()
+        endif()
+        set(_vh "${_dir}/rocksdb/version.h")
+        if(EXISTS "${_vh}")
+            file(STRINGS "${_vh}" _maj REGEX "^#define ROCKSDB_MAJOR ")
+            file(STRINGS "${_vh}" _min REGEX "^#define ROCKSDB_MINOR ")
+            file(STRINGS "${_vh}" _pat REGEX "^#define ROCKSDB_PATCH ")
+            if(_maj AND _min AND _pat)
+                string(REGEX MATCH "[0-9]+" _maj "${_maj}")
+                string(REGEX MATCH "[0-9]+" _min "${_min}")
+                string(REGEX MATCH "[0-9]+" _pat "${_pat}")
+                set(RocksDB_VERSION "${_maj}.${_min}.${_pat}")
+                set(RocksDB_VERSION "${_maj}.${_min}.${_pat}" PARENT_SCOPE)
+                message(STATUS "Detected RocksDB version from version.h: ${RocksDB_VERSION}")
+                return()
+            endif()
+        endif()
+    endforeach()
+endfunction()
+
+if(NOT RocksDB_VERSION AND TARGET RocksDB::rocksdb)
+    get_target_property(_rocksdb_inc RocksDB::rocksdb INTERFACE_INCLUDE_DIRECTORIES)
+    if(_rocksdb_inc)
+        _tri_detect_rocksdb_version_from_header(${_rocksdb_inc})
+    endif()
+endif()
+
+if(NOT RocksDB_VERSION AND ROCKSDB_INCLUDE_DIR)
+    _tri_detect_rocksdb_version_from_header(${ROCKSDB_INCLUDE_DIR})
+endif()
+
+if(RocksDB_VERSION AND RocksDB_VERSION VERSION_LESS "7.4.0")
+    message(FATAL_ERROR
+        "Triangles requires RocksDB >= 7.4.0 (got ${RocksDB_VERSION}). "
+        "Older versions cannot read smsgDB files written by RocksDB 7.4+ "
+        "(XXH3 per-block checksum). "
+        "On Debian/Ubuntu: install librocksdb-dev >= 7.4 from a backports "
+        "repo or build RocksDB from source into /usr/local.")
+elseif(NOT RocksDB_VERSION)
+    # No version detectable: headers missing entirely, or ROCKSDB_INCLUDE_DIR
+    # not pointing at one with rocksdb/version.h. Runtime fallback in
+    # SecMsgDB::Open covers the gap; print WARNING so build logs flag it.
+    message(WARNING
+        "Could not determine RocksDB version (no CMake config, no "
+        "pkg-config metadata, and no rocksdb/version.h found). "
+        "Triangles prefers RocksDB >= 7.4.0; older versions are recovered "
+        "at runtime via SecMsgDB::Open's quarantine fallback.")
+endif()
+
 # libsecp256k1 — vendored as a git submodule under src/secp256k1. Provides
 # ECDSA signing/verification, pubkey recovery (via the recovery module), and
 # ECDH for secure messaging. Configure the submodule's build for our needs:
@@ -158,7 +251,7 @@ set(SECP256K1_ENABLE_MODULE_ELLSWIFT    OFF CACHE INTERNAL "")
 add_subdirectory(src/secp256k1 EXCLUDE_FROM_ALL)
 
 if(BUILD_QT)
-    find_package(Qt5 5.9 REQUIRED COMPONENTS Core Gui Widgets)
+    find_package(Qt5 5.9 REQUIRED COMPONENTS Core Gui Widgets Network)
     find_package(Qt5 COMPONENTS LinguistTools QUIET)
     if(USE_DBUS AND UNIX AND NOT APPLE)
         find_package(Qt5 COMPONENTS DBus QUIET)
@@ -185,6 +278,7 @@ message(STATUS "")
 message(STATUS "Triangles ${PROJECT_VERSION} build configuration:")
 message(STATUS "  Build Qt GUI:       ${BUILD_QT}")
 message(STATUS "  Build daemon:       ${BUILD_DAEMON}")
+message(STATUS "  Build CLI:          ${BUILD_CLI}")
 message(STATUS "  Build tests:        ${BUILD_TESTS}")
 message(STATUS "  UPnP:               ${USE_UPNP}")
 message(STATUS "  IPv6:               ${USE_IPV6}")
@@ -192,6 +286,7 @@ message(STATUS "  QR code:            ${USE_QRCODE}")
 message(STATUS "  D-Bus:              ${USE_DBUS}")
 message(STATUS "  ZMQ:                ${USE_ZMQ}")
 message(STATUS "  Embedded Tor:       ${USE_TOR_EMBEDDED}")
+message(STATUS "  Embedded I2P:       ${USE_I2P_EMBEDDED}")
 message(STATUS "  Static linking:     ${ENABLE_STATIC}")
 message(STATUS "  ccache:             ${CCACHE_PROGRAM}")
 message(STATUS "  Unity build:        ${ENABLE_UNITY_BUILD}")

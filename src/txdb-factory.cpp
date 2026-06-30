@@ -23,10 +23,7 @@ enum class ChainDbKind { LevelDB, RocksDB };
 
 ChainDbKind ResolveChainDbKind()
 {
-    // RocksDB is the default backend. LevelDB remains selectable with
-    // -chaindb=leveldb and is retained as the migration source and fallback;
-    // its removal is deferred to a later phase after live-chain validation.
-    std::string s = GetArg("-chaindb", std::string("rocksdb"));
+    std::string s = GetArg("-chaindb", std::string("leveldb"));
     for (auto& c : s) c = std::tolower(static_cast<unsigned char>(c));
 
     if (s == "leveldb")

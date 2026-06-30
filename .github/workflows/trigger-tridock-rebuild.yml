@@ -1,0 +1,104 @@
+# trigger-tridock-rebuild.yml
+#
+# Triangles v5.9.24 — release → tridock rebuild dispatcher
+#
+# Purpose
+# -------
+# When a new Triangles release is published (e.g. v5.9.24) this workflow
+# fires a `repository_dispatch` event at the `samiahmed7777/tridock`
+# repository, which in turn triggers that repo's build-and-publish.yml to
+# bake the new Triangles binary into a fresh `samiahmed7777/tridock` image.
+#
+# Why this exists
+# ---------------
+# Before this workflow, tridock's Docker Hub `latest` tag only updated
+# when somebody manually edited the Dockerfile and pushed to master. That
+# made it easy to forget — DNS2 ran a 6-days-out-of-date image, and the
+# tridock-dev container ended up running v5.9.9 while DNS2 prod ran v5.9.23.
+# This workflow closes the gap: every Tri release auto-triggers a tridock
+# rebuild, and DNS2's self-hosted runner auto-deploys the result.
+#
+# Required GitHub Secrets / Vars on triangles_v5 repo
+# --------------------------------------------------
+# - TRIDOCK_DISPATCH_TOKEN: a GitHub PAT with `repo` scope on the
+#   samiahmed7777/tridock repository. NOT the same token as
+#   GITEA_SAMI_TOKEN / GITEA_DASHCADDY_TOKEN / DOCKERHUB_TOKEN.
+
+name: Trigger tridock rebuild on Tri release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Override version (e.g. 5.9.24). Leave blank to use the published release tag.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    name: Notify tridock repo
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Resolve version
+        id: version
+        run: |
+          # On release:published, github.event.release.tag_name is like "v5.9.24"
+          # Strip the leading "v" so the dispatched payload uses "5.9.24"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+            VERSION="${TAG#v}"
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not resolve a version (event=${{ github.event_name }}, tag=${{ github.event.release.tag_name }})"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Dispatching tridock rebuild for Triangles v$VERSION"
+
+      - name: Dispatch to samiahmed7777/tridock
+        run: |
+          curl -fsSL --max-time 30 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.TRIDOCK_DISPATCH_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -X POST \
+            https://api.github.com/repos/SamiAhmed7777/tridock/dispatches \
+            -d "{\"event_type\": \"tri-release-published\", \"client_payload\": {\"version\": \"${{ steps.version.outputs.version }}\", \"source_repo\": \"SamiAhmed7777/triangles_v5\", \"source_sha\": \"${{ github.sha }}\"}}"
+
+          # Verify the dispatch landed
+          RC=$?
+          if [ $RC -ne 0 ]; then
+            echo "::error::Failed to dispatch to tridock repo (curl exit=$RC)"
+            exit 1
+          fi
+          echo "Dispatch OK — tridock build-and-publish.yml will pick this up."
+
+      - name: Send Telegram alert
+        if: always()
+        continue-on-error: true
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
+            echo "Telegram secrets not set — skipping alert"
+            exit 0
+          fi
+          STATUS="${{ job.status }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          MSG="Tri release v$VERSION → tridock dispatch: $STATUS"
+          curl -fsSL --max-time 10 \
+            "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -d "chat_id=${TG_CHAT}" \
+            -d "text=${MSG}" \
+            -d "parse_mode=HTML" \
+            > /dev/null || echo "Telegram send failed (non-fatal)"

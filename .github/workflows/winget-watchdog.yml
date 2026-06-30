@@ -1,0 +1,69 @@
+name: WinGet PR watchdog
+
+# Catches failing WinGet submissions within an hour of opening them.
+# Goal: don't leave "needs-author-feedback" or "PullRequest-Error" PRs
+# sitting open for days — moderators read sustained unfixed PRs as spam.
+#
+# Behaviour:
+# - Every 30 min, scan open SamiAhmed7777 PRs against microsoft/winget-pkgs
+# - For each one, look at recent wingetbot comments to detect validation result
+# - If validation FAILED, post a comment summarising the error, close the PR,
+#   and surface the failure on the workflow summary so it's easy to spot.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watchdog:
+    name: Scan + auto-close failed WinGet PRs
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install gh CLI
+        run: |
+          which gh >/dev/null 2>&1 || (curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null && sudo apt update && sudo apt install -y gh jq)
+
+      - name: Scan + auto-close
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          set -e
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::WINGET_TOKEN not set — watchdog can scan but cannot close PRs."
+          fi
+          echo "Fetching open SamiAhmed7777 PRs against microsoft/winget-pkgs..."
+          PRS=$(gh api 'repos/microsoft/winget-pkgs/pulls?state=open&per_page=30' --jq '.[] | select(.user.login=="SamiAhmed7777") | "\(.number)|\(.head.ref)|\(.title)|\(.created_at)"')
+          if [ -z "$PRS" ]; then
+            echo "OK no open SamiAhmed7777 PRs."
+            exit 0
+          fi
+          echo "$PRS" | while IFS='|' read -r NUM BRANCH TITLE CREATED; do
+            echo ""
+            echo "--- PR #$NUM: $TITLE (branch $BRANCH, created $CREATED) ---"
+            LAST_VALIDATION=$(gh api "repos/microsoft/winget-pkgs/issues/$NUM/comments?per_page=20" --jq '[.[] | select(.user.login=="wingetbot" or .user.login=="stephengillie") | select(.body | test("Result: Failed|Invalid file|Automatic Validation ended"))] | first')
+            if [ -n "$LAST_VALIDATION" ]; then
+              echo "  X Validation FAILED detected."
+              SUMMARY=$(echo "$LAST_VALIDATION" | jq -r '.body' | head -40)
+              echo "  Summary:"
+              echo "$SUMMARY" | sed 's/^/    /'
+              if [ -n "$GH_TOKEN" ]; then
+                printf 'Auto-closing: automatic validation failed within the watchdog window.\n\n```\n%s\n```\n\nThe watchdog (winget-watchdog.yml) closed this PR so it does not sit in the moderator queue with a needs-author-feedback flag. Reopen after fixing the issue, or open a fresh PR for a known-good version.\n' "$SUMMARY" > /tmp/watchdog-comment.txt
+                gh api -X POST "repos/microsoft/winget-pkgs/issues/$NUM/comments" -f body=@/tmp/watchdog-comment.txt || echo "  (comment failed, continuing)"
+                gh api -X PATCH "repos/microsoft/winget-pkgs/pulls/$NUM" -f state=closed || echo "  (close failed, continuing)"
+                echo "  OK Closed PR #$NUM"
+                echo "::warning::Closed failing PR #$NUM -- $TITLE"
+              else
+                echo "  (no WINGET_TOKEN, skipping close)"
+              fi
+            elif gh api "repos/microsoft/winget-pkgs/issues/$NUM/comments?per_page=20" --jq '[.[] | select(.user.login=="wingetbot") | select(.body | test("Validation Pipeline Run"))] | first' | grep -q .; then
+              echo "  ? Validation has been triggered but no failure detected yet — leaving PR open."
+            else
+              echo "  ? No validation result yet — leaving PR open."
+            fi
+          done

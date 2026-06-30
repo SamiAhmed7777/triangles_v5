@@ -7,12 +7,14 @@
 #include "wallet.h"
 #include "walletdb.h"
 #include "crypter.h"
+#include "hdwallet.h"
 #include "ui_interface.h"
 #include "base58.h"
 #include "kernel.h"
 #include "coincontrol.h"
 #include "addressindex.h"
 #include "util.h"
+#include <cstring>
 #include <memory>
 #include <algorithm>
 #include <random>
@@ -129,7 +131,12 @@ CPubKey CWallet::GenerateNewKey()
 
     RandAddSeedPerfmon();
     CKey key;
-    key.MakeNewKey(fCompressed);
+    bool fUsedHD = false;
+    if (fHDEnabled && !hdMnemonic.empty()) {
+        if (DeriveHDKey(nHDChainIndex, key)) { fUsedHD = true; fCompressed = true; }
+    }
+    if (!fUsedHD)
+        key.MakeNewKey(fCompressed);
 
     // Compressed public keys were introduced in version 0.6.0
     if (fCompressed)
@@ -145,6 +152,11 @@ CPubKey CWallet::GenerateNewKey()
 
     if (!AddKey(key))
         throw std::runtime_error("CWallet::GenerateNewKey() : AddKey failed");
+    if (fUsedHD) {
+        nHDChainIndex++;
+        if (fFileBacked)
+            CWalletDB(strWalletFile).WriteHDChain(nHDChainIndex);
+    }
     return key.GetPubKey();
 }
 
@@ -209,6 +221,9 @@ bool CWallet::Lock()
     if (fDebug)
         printf("Locking wallet.\n");
 
+    if (IsCrypted())
+        hdMnemonic.clear(); // keep only the encrypted copy while locked
+
     {
         LOCK(cs_wallet);
         CWalletDB wdb(strWalletFile);
@@ -233,8 +248,14 @@ bool CWallet::Unlock(const SecureString& strWalletPassphrase)
                 return false;
             if (!crypter.Decrypt(pMasterKey.second.vchCryptedKey, vMasterKey))
                 return false;
-            if (CCryptoKeyStore::Unlock(vMasterKey))
+            if (CCryptoKeyStore::Unlock(vMasterKey)) {
+                if (fHDEnabled && hdMnemonic.empty() && !vchCryptedHDMnemonic.empty()) {
+                    CSecret sec;
+                    if (DecryptSecret(vMasterKey, vchCryptedHDMnemonic, hdMnemonicIV, sec))
+                        hdMnemonic.assign(sec.begin(), sec.end());
+                }
                 return true;
+            }
         }
 
         SecureMsgWalletUnlocked();
@@ -405,6 +426,15 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
             {
                 dbEnc->TxnAbort();
                 return false;
+            }
+
+            if (fHDEnabled && !hdMnemonic.empty()) {
+                CSecret sec(hdMnemonic.begin(), hdMnemonic.end());
+                uint256 iv = GetRandHash();
+                std::vector<unsigned char> cipher;
+                if (!EncryptSecret(vMasterKey, sec, iv, cipher)) { dbEnc->TxnAbort(); return false; }
+                hdMnemonicIV = iv; vchCryptedHDMnemonic = cipher;
+                dbEnc->WriteHDCryptedMnemonic(iv, cipher);
             }
 
             SetMinVersion(WalletFeature::WalletCrypt, dbEnc.get(), true);
@@ -701,6 +731,56 @@ bool CWallet::EraseFromWallet(uint256 hash)
             CWalletDB(strWalletFile).EraseTx(hash);
     }
     return true;
+}
+
+// triangles: mark an in-wallet transaction as abandoned, freeing its inputs
+// for re-spending. Use for stuck or conflicted transactions that will never
+// confirm. Returns false if the transaction is not eligible (already
+// confirmed, not in this wallet, or not from us).
+bool CWallet::AbandonTransaction(const uint256& hashTx)
+{
+    LOCK2(cs_main, cs_wallet);
+
+    if (!mapWallet.count(hashTx))
+        return false;
+
+    CWalletTx& wtx = mapWallet[hashTx];
+
+    // Cannot abandon a transaction that is already in the main chain
+    if (wtx.GetDepthInMainChain() > 0)
+        return false;
+
+    // Only allow abandoning transactions that involve this wallet
+    if (!wtx.IsFromMe())
+        return false;
+
+    // Find descendant wallet txs (those spending this tx's outputs) so the
+    // caller can refresh the UI. The descendants are not modified here; they
+    // will simply stop being marked as having a valid parent.
+    std::set<uint256> sDescendants;
+    for (unsigned int i = 0; i < wtx.vout.size(); i++) {
+        if (!IsMine(wtx.vout[i]))
+            continue;
+        for (std::map<uint256, CWalletTx>::iterator it = mapWallet.begin(); it != mapWallet.end(); ++it) {
+            CWalletTx& candidate = it->second;
+            if (candidate.GetHash() == hashTx)
+                continue;
+            for (const CTxIn& txin : candidate.vin) {
+                if (txin.prevout.hash == hashTx && txin.prevout.n == i) {
+                    sDescendants.insert(candidate.GetHash());
+                    break;
+                }
+            }
+        }
+    }
+
+    // Erase the original tx from the wallet and the wallet DB. This releases
+    // the inputs (vfSpent was tracked on the wtx) and resolves the conflict.
+    bool fErased = EraseFromWallet(hashTx);
+
+    LogPrintf("CWallet::AbandonTransaction: %s abandoned (%u descendant(s) noted)\n",
+              hashTx.ToString().c_str(), sDescendants.size());
+    return fErased;
 }
 
 
@@ -2848,3 +2928,66 @@ void CWallet::GetKeyBirthTimes(std::map<CKeyID, int64_t> &mapKeyBirth) const {
 }
 
 
+// ---- HD wallet (BIP39/BIP32) implementation ----
+bool CWallet::DeriveHDKey(int64_t index, CKey& keyOut) const
+{
+    if (hdMnemonic.empty())
+        return false;
+    unsigned char priv[32];
+    if (!hd::DeriveTriangles(hdMnemonic, "", 0, 0, (uint32_t)index, priv))
+        return false;
+    CSecret secret(priv, priv + 32);
+    memset(priv, 0, sizeof(priv));
+    keyOut.SetSecret(secret, true); // HD keys are compressed
+    return true;
+}
+
+bool CWallet::GetHDMnemonic(std::string& mnemonicOut) const
+{
+    if (!fHDEnabled || hdMnemonic.empty())
+        return false;
+    mnemonicOut = hdMnemonic;
+    return true;
+}
+
+bool CWallet::SetHDSeed(const std::string& mnemonicIn, const std::string& passphrase, bool fGenerate, std::string& mnemonicOut, std::string& strError)
+{
+    LOCK(cs_wallet);
+    if (IsLocked()) { strError = "Wallet is locked; unlock it before setting an HD seed."; return false; }
+
+    std::string m = mnemonicIn;
+    if (m.empty()) {
+        if (!fGenerate) { strError = "No mnemonic supplied."; return false; }
+        m = hd::GenerateMnemonic(256);
+        if (m.empty()) { strError = "Failed to generate mnemonic."; return false; }
+    }
+    if (!hd::CheckMnemonic(m)) { strError = "Invalid mnemonic (unknown word or bad checksum)."; return false; }
+
+    unsigned char priv[32];
+    if (!hd::DeriveTriangles(m, passphrase, 0, 0, 0, priv)) { strError = "Key derivation failed."; return false; }
+    memset(priv, 0, sizeof(priv));
+
+    hdMnemonic = m;
+    fHDEnabled = true;
+    nHDChainIndex = 0;
+
+    if (fFileBacked) {
+        CWalletDB wdb(strWalletFile);
+        if (IsCrypted()) {
+            CSecret sec(m.begin(), m.end());
+            uint256 iv = GetRandHash();
+            std::vector<unsigned char> cipher;
+            if (!EncryptSecret(vMasterKey, sec, iv, cipher)) { strError = "Failed to encrypt seed."; return false; }
+            hdMnemonicIV = iv; vchCryptedHDMnemonic = cipher;
+            wdb.WriteHDCryptedMnemonic(iv, cipher);
+        } else {
+            wdb.WriteHDMnemonic(m);
+        }
+        wdb.WriteHDChain(nHDChainIndex);
+    }
+    // Replace any pre-existing (random) keypool with HD-derived keys so that
+    // getnewaddress immediately hands out deterministic m/44'/2222'/0'/0/i keys.
+    NewKeyPool();
+    mnemonicOut = m;
+    return true;
+}

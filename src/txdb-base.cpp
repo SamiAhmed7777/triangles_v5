@@ -9,6 +9,7 @@
 #include "main.h"
 #include "sync.h"
 
+#include <list>
 #include <unordered_map>
 
 using namespace std;
@@ -320,13 +321,41 @@ struct COutPointHasher {
 struct CUtxoCacheEntry {
     CUtxoEntry utxo;
     bool fPresent;  // true = exists, false = known absent (negative cache)
+    std::list<COutPoint>::iterator lruIt;  // Position in g_utxoLruList
     CUtxoCacheEntry() : fPresent(false) {}
     CUtxoCacheEntry(const CUtxoEntry& u, bool p) : utxo(u), fPresent(p) {}
 };
 
+// Access-order list for LRU eviction. Front = most recently used, back = LRU.
+std::list<COutPoint> g_utxoLruList;
 std::unordered_map<COutPoint, CUtxoCacheEntry, COutPointHasher> g_mapUtxoCache;
 CCriticalSection g_cs_utxoCache;
 const size_t UTXO_CACHE_MAX_ENTRIES = 2000000;  // ~400MB at ~200 bytes each
+
+// Promote an existing cache entry to most-recently-used.
+inline void TouchUtxoEntry(
+    std::unordered_map<COutPoint, CUtxoCacheEntry, COutPointHasher>::iterator it)
+{
+    g_utxoLruList.splice(g_utxoLruList.begin(), g_utxoLruList, it->second.lruIt);
+}
+
+// Insert or update a cache entry, promoting to most-recently-used.
+inline void PutUtxoCacheEntry(const COutPoint& outpoint,
+                              const CUtxoEntry& utxo, bool fPresent)
+{
+    auto it = g_mapUtxoCache.find(outpoint);
+    if (it != g_mapUtxoCache.end()) {
+        it->second.utxo = utxo;
+        it->second.fPresent = fPresent;
+        g_utxoLruList.splice(g_utxoLruList.begin(), g_utxoLruList, it->second.lruIt);
+    } else {
+        g_utxoLruList.push_front(outpoint);
+        CUtxoCacheEntry& e = g_mapUtxoCache[outpoint];
+        e.utxo = utxo;
+        e.fPresent = fPresent;
+        e.lruIt = g_utxoLruList.begin();
+    }
+}
 
 } // anonymous namespace
 
@@ -340,6 +369,7 @@ bool CTxDBBase::ReadUtxo(const uint256& hash, unsigned int n, CUtxoEntry& entry)
         auto it = g_mapUtxoCache.find(outpoint);
         if (it != g_mapUtxoCache.end())
         {
+            TouchUtxoEntry(it);
             if (it->second.fPresent) {
                 entry = it->second.utxo;
                 return true;
@@ -353,12 +383,7 @@ bool CTxDBBase::ReadUtxo(const uint256& hash, unsigned int n, CUtxoEntry& entry)
     {
         LOCK(g_cs_utxoCache);
         if (g_mapUtxoCache.size() < UTXO_CACHE_MAX_ENTRIES)
-        {
-            if (fFound)
-                g_mapUtxoCache[outpoint] = CUtxoCacheEntry(entry, true);
-            else
-                g_mapUtxoCache[outpoint] = CUtxoCacheEntry(CUtxoEntry(), false);
-        }
+            PutUtxoCacheEntry(outpoint, entry, fFound);
     }
 
     return fFound;
@@ -370,16 +395,17 @@ bool CTxDBBase::WriteUtxo(const uint256& hash, unsigned int n, const CUtxoEntry&
 
     {
         LOCK(g_cs_utxoCache);
-        g_mapUtxoCache[outpoint] = CUtxoCacheEntry(entry, true);
+        PutUtxoCacheEntry(outpoint, entry, true);
 
-        // Periodic eviction: clear half when over the limit. Simple but
-        // effective — the cache repopulates with the hot working set.
+        // LRU eviction: evict least-recently-used entries when over the limit.
         if (g_mapUtxoCache.size() > UTXO_CACHE_MAX_ENTRIES)
         {
             size_t nTarget = UTXO_CACHE_MAX_ENTRIES / 2;
-            auto it = g_mapUtxoCache.begin();
-            while (g_mapUtxoCache.size() > nTarget && it != g_mapUtxoCache.end())
-                it = g_mapUtxoCache.erase(it);
+            while (g_mapUtxoCache.size() > nTarget)
+            {
+                g_mapUtxoCache.erase(g_utxoLruList.back());
+                g_utxoLruList.pop_back();
+            }
         }
     }
 
@@ -392,7 +418,7 @@ bool CTxDBBase::EraseUtxo(const uint256& hash, unsigned int n)
 
     {
         LOCK(g_cs_utxoCache);
-        g_mapUtxoCache[outpoint] = CUtxoCacheEntry(CUtxoEntry(), false);
+        PutUtxoCacheEntry(outpoint, CUtxoEntry(), false);
     }
 
     return Erase(make_pair(string("u"), make_pair(hash, n)));
@@ -405,8 +431,10 @@ bool CTxDBBase::HaveUtxo(const uint256& hash, unsigned int n)
     {
         LOCK(g_cs_utxoCache);
         auto it = g_mapUtxoCache.find(outpoint);
-        if (it != g_mapUtxoCache.end())
+        if (it != g_mapUtxoCache.end()) {
+            TouchUtxoEntry(it);
             return it->second.fPresent;
+        }
     }
 
     if (Exists(make_pair(string("u"), make_pair(hash, n))))

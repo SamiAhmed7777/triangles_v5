@@ -31,6 +31,7 @@
 #include "trianglesunits.h"
 #include "guiconstants.h"
 #include "askpassphrasedialog.h"
+#include "hdseeddialog.h"
 #include "notificator.h"
 #include "guiutil.h"
 #include "rpcconsole.h"
@@ -42,6 +43,7 @@
 #include "wallet.h"
 #include "tor/tor_embedded.h"
 #include "tor/onion_v3.h"
+#include "i2p/i2p_embedded.h"
 
 #ifdef Q_OS_MAC
 #include "macdockiconhandler.h"
@@ -347,14 +349,37 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     labelOnionAddress->setCursor(Qt::PointingHandCursor);
     labelOnionAddress->installEventFilter(this);
 
+    // I2P address, stacked directly above the .onion address (click to copy)
+    labelI2PAddress = ui->label_i2p;
+    labelI2PAddress->setVisible(false);
+    labelI2PAddress->setCursor(Qt::PointingHandCursor);
+    labelI2PAddress->installEventFilter(this);
+
     // V3 indicator next to staking icon (hidden until onion is active)
     labelV3Icon = ui->label_v3;
     labelV3Icon->setVisible(false);
+
+    // Tor icon next to onion address in the stacked address group (hidden until populated)
+    labelTorIcon = ui->label_tor_icon;
+    labelTorIcon->setVisible(false);
 
     QTimer *timerOnion = new QTimer(this);
     connect(timerOnion, SIGNAL(timeout()), this, SLOT(updateOnionAddress()));
     timerOnion->start(5000);
     updateOnionAddress();
+
+    // I2P address in status bar (hidden until populated, click to copy)
+    labelI2PAddress = ui->label_i2p;
+    labelI2PAddress->setVisible(false);
+    labelI2PAddress->setCursor(Qt::PointingHandCursor);
+    labelI2PAddress->installEventFilter(this);
+
+    labelI2PIcon = ui->label_i2p_icon;
+    labelI2PIcon->setVisible(false);
+    QTimer *timerI2P = new QTimer(this);
+    connect(timerI2P, SIGNAL(timeout()), this, SLOT(updateI2PAddress()));
+    timerI2P->start(5000);
+    updateI2PAddress();
 
     QTimer *timerShutdown = new QTimer(this);
     connect(timerShutdown, SIGNAL(timeout()), this, SLOT(detectShutdown()));
@@ -484,6 +509,8 @@ void TrianglesGUI::createActions(bool fIsTestnet)
     backupWalletAction->setStatusTip(tr("Backup wallet to another location"));
     changePassphraseAction = new QAction(QIcon(":/menu_16/passphrase"), tr("&Change Passphrase..."), this);
     changePassphraseAction->setStatusTip(tr("Change the passphrase used for wallet encryption"));
+    hdSeedAction = new QAction(QIcon(":/menu_16/passphrase"), tr("&Seed Phrase (HD Backup)..."), this);
+    hdSeedAction->setStatusTip(tr("Generate, restore, or back up your 24-word HD seed phrase"));
     unlockWalletAction = new QAction(QIcon(":/menu_16/unlock"), tr("&Unlock Wallet..."), this);
     unlockWalletAction->setStatusTip(tr("Unlock wallet"));
     unlockWalletStakingAction = new QAction(QIcon(":/menu_16/unlock"), tr("&Unlock Wallet for staking..."), this);
@@ -509,6 +536,7 @@ void TrianglesGUI::createActions(bool fIsTestnet)
     connect(encryptWalletAction, SIGNAL(triggered(bool)), this, SLOT(encryptWallet(bool)));
     connect(backupWalletAction, SIGNAL(triggered()), this, SLOT(backupWallet()));
     connect(changePassphraseAction, SIGNAL(triggered()), this, SLOT(changePassphrase()));
+    connect(hdSeedAction, SIGNAL(triggered()), this, SLOT(hdSeedManager()));
     connect(unlockWalletAction, SIGNAL(triggered()), this, SLOT(unlockWallet()));
     connect(unlockWalletStakingAction, SIGNAL(triggered()), this, SLOT(unlockWalletStaking()));
     connect(lockWalletAction, SIGNAL(triggered()), this, SLOT(lockWallet()));
@@ -538,6 +566,7 @@ void TrianglesGUI::createMenuBar()
     QMenu *settings = appMenuBar->addMenu(tr("&Settings"));
     settings->addAction(encryptWalletAction);
     settings->addAction(changePassphraseAction);
+    settings->addAction(hdSeedAction);
     settings->addAction(unlockWalletAction);
     settings->addAction(lockWalletAction);
     settings->addSeparator();
@@ -1322,6 +1351,16 @@ bool TrianglesGUI::eventFilter(QObject *object, QEvent *event)
         }
         return true;
     }
+    if (object == labelI2PAddress && event->type() == QEvent::MouseButtonPress)
+    {
+        QString addr = labelI2PAddress->text();
+        if (!addr.isEmpty())
+        {
+            QApplication::clipboard()->setText(addr);
+            QToolTip::showText(QCursor::pos(), tr("Copied!"), labelI2PAddress);
+        }
+        return true;
+    }
     return QMainWindow::eventFilter(object, event);
 }
 
@@ -1448,6 +1487,7 @@ void TrianglesGUI::menuOperationsRequested()
     QAction* unlockWalletStaking = menu.addAction(QIcon(":/menu_16/unlock"), tr("&Unlock Wallet...").remove('&').remove("..."));
     QAction* lockWallet = menu.addAction(QIcon(":/menu_16/lock"), tr("&Lock Wallet...").remove('&').remove("..."));
     QAction* changePassword = menu.addAction(QIcon(":/menu_16/passphrase"), tr("&Change Passphrase...").remove('&').remove("..."));
+    QAction* hdSeed = menu.addAction(QIcon(":/menu_16/passphrase"), tr("Seed Phrase (HD Backup)..."));
     QAction* signMessage = menu.addAction(QIcon(":/menu_16/sign"), tr("Sign &message...").remove('&').remove("..."));
     QAction* verifySignature = menu.addAction(QIcon(":/menu_16/verify"), tr("&Verify message...").remove('&').remove("..."));
 
@@ -1507,6 +1547,10 @@ void TrianglesGUI::menuOperationsRequested()
     {
         if (walletModel->getEncryptionStatus() == WalletModel::Unlocked || walletModel->getEncryptionStatus() == WalletModel::Locked)
             changePassphrase();
+    }
+    else if (selected == hdSeed)
+    {
+        hdSeedManager();
     }
     else if (selected == signMessage)
     {
@@ -1610,6 +1654,15 @@ void TrianglesGUI::backupWallet()
 void TrianglesGUI::changePassphrase()
 {
     AskPassphraseDialog dlg(AskPassphraseDialog::ChangePass, this);
+    dlg.setModel(walletModel);
+    dlg.exec();
+}
+
+void TrianglesGUI::hdSeedManager()
+{
+    if (!walletModel)
+        return;
+    HDSeedDialog dlg(this);
     dlg.setModel(walletModel);
     dlg.exec();
 }
@@ -1767,6 +1820,15 @@ void TrianglesGUI::updateOnionAddress()
         labelV3Icon->setVisible(true);
     }
 
+    // Tor icon in the stacked address group — green when onion present, hidden otherwise
+    if (hasOnion) {
+        labelTorIcon->setStyleSheet("color: #7eb6ff; font-weight: bold;");
+        labelTorIcon->setToolTip(tr("Tor V3 hidden service active"));
+        labelTorIcon->setVisible(true);
+    } else {
+        labelTorIcon->setVisible(false);
+    }
+
     // Onion address text — respects user preference
     if (clientModel && clientModel->getOptionsModel() &&
         !clientModel->getOptionsModel()->getShowOnionAddress()) {
@@ -1780,8 +1842,38 @@ void TrianglesGUI::updateOnionAddress()
     }
 
     labelOnionAddress->setText(QString::fromStdString(onionAddress));
-    labelOnionAddress->setToolTip(tr("This wallet's Tor .onion address. Selectable — right-click to copy."));
+    labelOnionAddress->setToolTip(tr("This wallet's Tor .onion address. Click to copy."));
     labelOnionAddress->setVisible(true);
+}
+
+void TrianglesGUI::updateI2PAddress()
+{
+    std::string i2pAddress = CI2PEmbedded::GetInstance()->GetI2PAddress();
+    bool hasI2P = CI2PEmbedded::GetInstance()->IsRunning() && !i2pAddress.empty();
+
+    // I2P indicator
+    if (hasI2P) {
+        labelI2PIcon->setStyleSheet("color: #6a4cff; font-weight: bold;");
+        labelI2PIcon->setToolTip(tr("I2P router active"));
+        labelI2PIcon->setVisible(true);
+    } else if (CI2PEmbedded::GetInstance()->IsRunning()) {
+        labelI2PIcon->setStyleSheet("color: #aaaa00; font-weight: bold;");
+        labelI2PIcon->setToolTip(tr("I2P router running (building tunnels...)"));
+        labelI2PIcon->setVisible(true);
+    } else {
+        labelI2PIcon->setStyleSheet("color: #555555; font-weight: bold;");
+        labelI2PIcon->setToolTip(tr("I2P not active"));
+        labelI2PIcon->setVisible(false);
+    }
+
+    if (!hasI2P) {
+        labelI2PAddress->setVisible(false);
+        return;
+    }
+
+    labelI2PAddress->setText(QString::fromStdString(i2pAddress));
+    labelI2PAddress->setToolTip(tr("This node's I2P .b32.i2p address. Click to copy."));
+    labelI2PAddress->setVisible(true);
 }
 
 

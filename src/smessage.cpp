@@ -31,6 +31,7 @@ Notes:
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cctype>
 #include <stdint.h>
 #include <time.h>
@@ -568,7 +569,44 @@ bool SecMsgDB::Open(const char* pszMode)
     rocksdb::Options options;
     options.create_if_missing = fCreate;
     rocksdb::Status s = OpenSmsgDB(options, fullpath.string(), &smsgDB);
-    
+
+    // Self-heal: when smsgDB was written by a newer RocksDB (>=7.4 uses
+    // XXH3, checksum type 4) and this build is linked against an older
+    // RocksDB that doesn't recognise the type, Open() fails with
+    // "Corruption: unknown checksum type N in <path>/<file>.sst ...".
+    // Quarantine the offending SST and retry — RocksDB only needs the
+    // missing file to recover; the rest of the DB is intact. Without this
+    // fallback the daemon burns 99% CPU retrying open() on every RPC.
+    if (!s.ok() && s.ToString().find("unknown checksum type") != std::string::npos)
+    {
+        auto msg = s.ToString();
+        auto pos = msg.find(fullpath.string());
+        if (pos != std::string::npos)
+        {
+            auto rest = msg.substr(pos + fullpath.string().size() + 1);
+            auto end  = rest.find_first_of(" \t");
+            std::string sstName = (end == std::string::npos) ? rest : rest.substr(0, end);
+            fs::path badFile = fullpath / sstName;
+            if (fs::exists(badFile))
+            {
+                auto stamp = std::to_string(
+                    std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count());
+                fs::path quarantine = fullpath / (sstName + ".quarantined-" + stamp);
+                std::error_code ec;
+                fs::rename(badFile, quarantine, ec);
+                if (!ec)
+                {
+                    printf("SecMsgDB::open() - quarantined %s "
+                           "(newer-RocksDB checksum type not supported by this build)\n",
+                           badFile.c_str());
+                }
+            }
+        }
+        smsgDB = nullptr;
+        s = OpenSmsgDB(options, fullpath.string(), &smsgDB);
+    }
+
     if (!s.ok())
     {
         printf("SecMsgDB::open() - Error opening db: %s.\n", s.ToString().c_str());

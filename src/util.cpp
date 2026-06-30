@@ -41,6 +41,18 @@
 #include "version.h"
 #include "ui_interface.h"
 
+// Work around clang compilation problem in Boost 1.46:
+// /usr/include/boost/program_options/detail/config_file.hpp:163:17: error: call to function 'to_internal' that is neither visible in the template definition nor found by argument-dependent lookup
+// See also: http://stackoverflow.com/questions/10020179/compilation-fail-in-boost-librairies-program-options
+//           http://clang.debian.net/status.php?version=3.0&key=CANNOT_FIND_FUNCTION
+namespace boost {
+    namespace program_options {
+        std::string to_internal(const std::string&);
+    }
+}
+
+#include <boost/program_options/detail/config_file.hpp>
+#include <boost/program_options/parsers.hpp>
 #include <filesystem>
 #include <fstream>
 #include <thread>
@@ -1129,45 +1141,20 @@ void ReadConfigFile(map<string, string>& mapSettingsRet,
     if (!streamConfig.good())
         return; // No triangles.conf file is OK
 
-    // Minimal INI-style parser (replaces boost::program_options). Each line is
-    // "name = value"; lines whose first non-whitespace character is '#' are
-    // comments, and blank lines are ignored. Inline '#' is NOT treated as a
-    // comment, so values such as rpcpassword may contain '#'. This matches the
-    // lenient behavior of the previous config_file_iterator.
-    auto trim = [](std::string s) -> std::string {
-        const char* ws = " \t\r\n";
-        size_t b = s.find_first_not_of(ws);
-        if (b == std::string::npos)
-            return std::string();
-        size_t e = s.find_last_not_of(ws);
-        return s.substr(b, e - b + 1);
-    };
+    set<string> setOptions;
+    setOptions.insert("*");
 
-    std::string line;
-    while (std::getline(streamConfig, line))
+    for (boost::program_options::detail::config_file_iterator it(streamConfig, setOptions), end; it != end; ++it)
     {
-        std::string trimmed = trim(line);
-        if (trimmed.empty() || trimmed[0] == '#')
-            continue;
-
-        size_t nEq = trimmed.find('=');
-        if (nEq == std::string::npos)
-            continue; // malformed line without '='; skip
-
-        std::string strName = trim(trimmed.substr(0, nEq));
-        std::string strValue = trim(trimmed.substr(nEq + 1));
-        if (strName.empty())
-            continue;
-
-        string strKey = string("-") + strName;
         // Don't overwrite existing settings so command line settings override triangles.conf
+        string strKey = string("-") + it->string_key;
         if (mapSettingsRet.count(strKey) == 0)
         {
-            mapSettingsRet[strKey] = strValue;
+            mapSettingsRet[strKey] = it->value[0];
             // interpret nofoo=1 as foo=0 (and nofoo=0 as foo=1) as long as foo not set)
             InterpretNegativeSetting(strKey, mapSettingsRet);
         }
-        mapMultiSettingsRet[strKey].push_back(strValue);
+        mapMultiSettingsRet[strKey].push_back(it->value[0]);
     }
 }
 

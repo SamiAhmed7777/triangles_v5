@@ -90,6 +90,7 @@ TransactionView::TransactionView(QWidget *parent) :
     QAction *copyTxIDAction = new QAction(QIcon(":/menu_16/copy"), tr("Copy transaction ID"), this);
     QAction *editLabelAction = new QAction(QIcon(":/menu_16/edit"), tr("Edit label"), this);
     QAction *showDetailsAction = new QAction(QIcon(":/menu_16/search"), tr("Show transaction details"), this);
+    abandonAction = new QAction(QIcon(":/menu_16/remove"), tr("Abandon transaction"), this);
 
     contextMenu = new QMenu();
     contextMenu->addAction(copyAddressAction);
@@ -98,6 +99,8 @@ TransactionView::TransactionView(QWidget *parent) :
     contextMenu->addAction(copyTxIDAction);
     contextMenu->addAction(editLabelAction);
     contextMenu->addAction(showDetailsAction);
+    contextMenu->addSeparator();
+    contextMenu->addAction(abandonAction);
     contextMenu->setStyleSheet("QMenu {\
                                background-color: #000; \
                                border: 1px solid #f26522;\
@@ -129,6 +132,7 @@ TransactionView::TransactionView(QWidget *parent) :
     connect(copyTxIDAction, SIGNAL(triggered()), this, SLOT(copyTxID()));
     connect(editLabelAction, SIGNAL(triggered()), this, SLOT(editLabel()));
     connect(showDetailsAction, SIGNAL(triggered()), this, SLOT(showDetails()));
+    connect(abandonAction, SIGNAL(triggered()), this, SLOT(abandonTransaction()));
 
     connect(view->horizontalHeader(), SIGNAL(sectionClicked(int)), this, SLOT(headerCol0Clicked(int)));
 }
@@ -310,6 +314,17 @@ void TransactionView::contextualMenu(const QPoint &point)
     QModelIndex index = transactionView->indexAt(point);
     if(index.isValid())
     {
+        // Only enable "Abandon transaction" for unconfirmed / conflicted txs
+        QModelIndexList selection = transactionView->selectionModel()->selectedRows();
+        bool fCanAbandon = false;
+        if (!selection.isEmpty()) {
+            int status = selection.at(0).data(TransactionTableModel::StatusRole).toInt();
+            fCanAbandon = (status == TransactionStatus::Unconfirmed ||
+                           status == TransactionStatus::Conflicted ||
+                           status == TransactionStatus::Offline);
+        }
+        abandonAction->setEnabled(fCanAbandon);
+
         contextMenu->exec(QCursor::pos());
     }
 }
@@ -390,6 +405,37 @@ void TransactionView::showDetails()
         TransactionDescDialog dlg(selection.at(0));
         dlg.exec();
     }
+}
+
+void TransactionView::abandonTransaction()
+{
+    if(!transactionView->selectionModel() || !model)
+        return;
+    QModelIndexList selection = transactionView->selectionModel()->selectedRows();
+    if(selection.isEmpty())
+        return;
+
+    QString hash = selection.at(0).data(TransactionTableModel::TxIDRole).toString();
+    if(hash.isEmpty())
+        return;
+
+    // Confirm with the user
+    QMessageBox::StandardButton reply = QMessageBox::question(
+        this, tr("Abandon transaction"),
+        tr("Abandon transaction %1?\n\nThis will mark the transaction as abandoned and free its inputs for re-spending. Use this only for stuck or conflicted transactions that will never confirm.").arg(hash),
+        QMessageBox::Yes | QMessageBox::No);
+    if(reply != QMessageBox::Yes)
+        return;
+
+    if(!model->abandonTransaction(hash))
+    {
+        QMessageBox::warning(this, tr("Abandon transaction"),
+            tr("Failed to abandon transaction. It may already be confirmed, or it does not belong to this wallet."));
+        return;
+    }
+
+    // Refresh the transactions table
+    model->getTransactionTableModel()->refreshWallet();
 }
 
 QWidget *TransactionView::createDateRangeWidget()
