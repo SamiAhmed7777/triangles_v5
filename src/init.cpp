@@ -340,14 +340,12 @@ void Shutdown(void* parg)
             pScriptCheckQueue.reset();
         }
 
-        // Stop the I2P SAM session and its accept loop, then the i2pd router.
-        StopI2P();
+        // Stop the embedded I2P router.
         StopEmbeddedI2P();
 
         // NOW safe to destroy Tor state - all threads have stopped
         ShutdownTorV3();
         StopEmbeddedTor();
-        StopEmbeddedI2P();
 
 #ifdef ENABLE_ZMQ
         if (pzmqNotifier)
@@ -1683,26 +1681,8 @@ bool AppInit2()
         if (GetBoolArg("-i2p", true)) {
             int64_t nI2PStart = GetTimeMillis();
 
-            // Resolve the SAM endpoint (default 127.0.0.1:7656).
-            std::string sam = GetArg("-i2psam", "127.0.0.1:7656");
-            int samPort = I2P_DEFAULT_SAM_PORT;
-            std::string samHost = "127.0.0.1";
-            SplitHostPort(sam, samPort, samHost);
-            if (samPort <= 0) samPort = I2P_DEFAULT_SAM_PORT;
-            bool loopback = samHost.empty() || samHost == "127.0.0.1" || samHost == "localhost";
-
-            // Auto-launch our own i2pd only when the bridge is local.
-            if (loopback) {
-                uiInterface.InitMessage(_("Starting the I2P router..."));
-                if (!StartEmbeddedI2P((GetDataDir() / "i2pd").string(), samPort)) {
-                    printf("NOTICE: bundled I2P router unavailable (%s).\n",
-                           CI2PProcess::GetInstance()->GetLastError().c_str());
-                    printf("  I2P will use an external router if one is running on %s.\n", sam.c_str());
-                }
-            }
-
-            uiInterface.InitMessage(_("Connecting to the I2P network..."));
-            bool i2pStarted = StartI2P();
+            uiInterface.InitMessage(_("Starting the I2P router..."));
+            bool i2pStarted = StartEmbeddedI2P();
             StartupPerfLog("i2p_start", GetTimeMillis() - nI2PStart, strprintf("started=%d", i2pStarted));
             if (i2pStarted) {
                 SetReachable(NET_I2P, true);
@@ -1710,7 +1690,6 @@ bool AppInit2()
                 printf("I2P network enabled. Our address: %s\n", i2pAddr.c_str());
             } else {
                 printf("NOTICE: I2P not available this session; continuing with Tor only\n");
-                StopEmbeddedI2P();
             }
         }
     }
