@@ -4,6 +4,8 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #include "txdb.h"
 #include "walletdb.h"
+#include "walletdb-recover.h"   // BerkeleyRecoverWallet / BerkeleyZapWalletTx
+#include "walletmigrate.h"      // MaybeMigrateBerkeleyWalletToSQLite / IsSQLiteFile
 #include "trianglesrpc.h"
 #include "net.h"
 #include "netbase.h"
@@ -43,6 +45,8 @@ static bool InitWarning(const std::string& str);
 #ifndef WIN32
 #include <signal.h>
 #include <sys/file.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
 #endif
@@ -977,21 +981,37 @@ bool AppInit2()
 
     if (GetBoolArg("-salvagewallet"))
     {
-        // Recover readable keypairs:
-        if (!CWalletDB::Recover(bitdb, strWalletFileName, true))
+        // Recover readable keypairs (Berkeley path; only relevant for legacy
+        // wallet.dat files that haven't been migrated to SQLite yet):
+        if (!BerkeleyRecoverWallet(bitdb, strWalletFileName, true))
             return false;
     }
 
     if (GetBoolArg("-zapwallettxes") && fs::exists(GetDataDir() / strWalletFileName))
     {
         uiInterface.InitMessage(_("Zapping all transactions from wallet..."));
-        if (!CWalletDB::ZapWalletTx(strWalletFileName))
+        if (!BerkeleyZapWalletTx(strWalletFileName))
             return InitError(_("Error: could not zap wallet transactions"));
+    }
+
+    // ── Wallet backend migration ──────────────────────────────────────────────
+    // The daemon now defaults to SQLite (-walletdb=sqlite). If the wallet file
+    // on disk is still a Berkeley DB, convert it non-destructively to a SQLite
+    // wallet here, before the CWalletDB handle is opened downstream. The
+    // Berkeley original is preserved as "<name>.bdb.bak" alongside.
+    if (ResolveWalletDbKind() == WalletDbKind::SQLite &&
+        fs::exists(GetDataDir() / strWalletFileName) &&
+        !IsSQLiteFile(GetDataDir() / strWalletFileName))
+    {
+        uiInterface.InitMessage(_("Migrating wallet from Berkeley DB to SQLite..."));
+        std::string migErr;
+        if (!MaybeMigrateBerkeleyWalletToSQLite(GetDataDir() / strWalletFileName, migErr))
+            return InitError(_("Wallet migration failed: ") + migErr);
     }
 
     if (fs::exists(GetDataDir() / strWalletFileName))
     {
-        CDBEnv::VerifyResult r = bitdb.Verify(strWalletFileName, CWalletDB::Recover);
+        CDBEnv::VerifyResult r = bitdb.Verify(strWalletFileName, BerkeleyRecoverWallet);
         if (r == CDBEnv::RECOVER_OK)
         {
             string msg = strprintf(_("Warning: wallet.dat corrupt, data salvaged!"

@@ -113,6 +113,7 @@ list(APPEND CORE_SOURCES txdb-rocksdb.cpp)
 list(APPEND CORE_SOURCES
     walletdb-factory.cpp
     walletdb-sqlite.cpp
+    walletdb-recover.cpp
     walletmigrate.cpp
 )
 

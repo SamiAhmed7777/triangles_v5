@@ -30,12 +30,33 @@
 class CWalletBatchTyped
 {
 public:
-    explicit CWalletBatchTyped(std::unique_ptr<WalletBatch> batch)
-        : m_batch(std::move(batch)) {}
-
+    // Default-constructed handle is unusable until Open() runs. Subclasses
+    // (CWalletDB) call Open() once they have opened a WalletDatabase.
+    CWalletBatchTyped() = default;
     virtual ~CWalletBatchTyped() { Close(); }
 
-    void Close() { m_batch.reset(); }
+    // Open a fresh batch against the given database. Closes any previously
+    // open batch+database. Returns false (and leaves the handle null) if the
+    // database fails to produce a batch.
+    bool Open(std::unique_ptr<WalletDatabase> db)
+    {
+        Close();
+        if (!db)
+            return false;
+        m_database = std::move(db);
+        m_batch = m_database->MakeBatch(/*flush_on_close=*/true);
+        if (!m_batch) {
+            m_database.reset();
+            return false;
+        }
+        return true;
+    }
+
+    void Close()
+    {
+        m_batch.reset();
+        m_database.reset();
+    }
     bool IsNull() const { return m_batch == nullptr; }
 
     // ── Transactions ─────────────────────────────────────────────────────────
@@ -44,6 +65,7 @@ public:
     bool TxnAbort()  { return m_batch && m_batch->TxnAbort(); }
 
 protected:
+    std::unique_ptr<WalletDatabase> m_database;
     std::unique_ptr<WalletBatch> m_batch;
 
     // ── Typed accessors (serialize key/value, dispatch to the raw batch) ──────
