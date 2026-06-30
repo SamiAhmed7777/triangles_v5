@@ -971,6 +971,21 @@ bool AppInit2()
     uiInterface.InitMessage(_("Verifying database integrity..."));
     nStart = GetTimeMillis();
 
+    // The pre-rebase Berkeley-only paths (salvagewallet, zapwallettxes,
+    // bitdb.Verify, and the Berkeley→SQLite migration hook itself) only
+    // apply to a wallet.dat that is still a Berkeley DB file. Once the
+    // migration has run — or if the user is starting with a wallet that was
+    // already SQLite — those steps would either no-op or (worse) misinterpret
+    // the SQLite file as a corrupt Berkeley file and abort startup.
+    //
+    // The SQLite backend runs its own PRAGMA integrity_check in
+    // SQLiteDatabase::Open(), so the wallet is validated against the SQLite
+    // schema before the wallet handle is ever constructed downstream.
+    //
+    // Note: the snapshot is taken AFTER any migration hook below, so that
+    // post-migration the verify/salvage paths are skipped automatically.
+    bool walletIsSqlite = false;
+
     if (!bitdb.Open(GetDataDir()))
     {
         string msg = strprintf(_("Error initializing database environment %s!"
@@ -1007,23 +1022,37 @@ bool AppInit2()
         std::string migErr;
         if (!MaybeMigrateBerkeleyWalletToSQLite(GetDataDir() / strWalletFileName, migErr))
             return InitError(_("Wallet migration failed: ") + migErr);
+        // Snapshot AFTER migration so the post-migration verify step below
+        // is skipped automatically when the wallet is now SQLite.
+        walletIsSqlite =
+            fs::exists(GetDataDir() / strWalletFileName) &&
+            IsSQLiteFile(GetDataDir() / strWalletFileName);
+    }
+    else
+    {
+        walletIsSqlite =
+            fs::exists(GetDataDir() / strWalletFileName) &&
+            IsSQLiteFile(GetDataDir() / strWalletFileName);
     }
 
-    if (fs::exists(GetDataDir() / strWalletFileName))
+    if (!walletIsSqlite)
     {
-        CDBEnv::VerifyResult r = bitdb.Verify(strWalletFileName, BerkeleyRecoverWallet);
-        if (r == CDBEnv::RECOVER_OK)
+        if (fs::exists(GetDataDir() / strWalletFileName))
         {
-            string msg = strprintf(_("Warning: wallet.dat corrupt, data salvaged!"
-                                     " Original wallet.dat saved as wallet.{timestamp}.bak in %s; if"
-                                     " your balance or transactions are incorrect you should"
-                                     " restore from a backup."), strDataDir.c_str());
-            uiInterface.ThreadSafeMessageBox(msg, _("Triangles"), CClientUIInterface::OK | CClientUIInterface::ICON_EXCLAMATION | CClientUIInterface::MODAL);
+            CDBEnv::VerifyResult r = bitdb.Verify(strWalletFileName, BerkeleyRecoverWallet);
+            if (r == CDBEnv::RECOVER_OK)
+            {
+                string msg = strprintf(_("Warning: wallet.dat corrupt, data salvaged!"
+                                         " Original wallet.dat saved as wallet.{timestamp}.bak in %s; if"
+                                         " your balance or transactions are incorrect you should"
+                                         " restore from a backup."), strDataDir.c_str());
+                uiInterface.ThreadSafeMessageBox(msg, _("Triangles"), CClientUIInterface::OK | CClientUIInterface::ICON_EXCLAMATION | CClientUIInterface::MODAL);
+            }
+            if (r == CDBEnv::RECOVER_FAIL)
+                return InitError(_("wallet.dat corrupt, salvage failed"));
         }
-        if (r == CDBEnv::RECOVER_FAIL)
-            return InitError(_("wallet.dat corrupt, salvage failed"));
     }
-    StartupPerfLog("verify_db", GetTimeMillis() - nStart, strprintf("wallet=%s", strWalletFileName.c_str()));
+    StartupPerfLog("verify_db", GetTimeMillis() - nStart, strprintf("wallet=%s wallet_is_sqlite=%d", strWalletFileName.c_str(), (int)walletIsSqlite));
 
     // ********************************************************* Step 6: network initialization
     nStart = GetTimeMillis();
