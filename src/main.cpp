@@ -3478,18 +3478,19 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
                 bnRequired.SetCompact(ComputeMinWork(pindexLastPow->nBits, deltaTime));
         }
 
-        // bnNewBlock is the difficulty of the candidate block (compact bits -> target).
-        // bnRequired is the MINIMUM difficulty the block must meet (based on time since
-        // last checkpoint / chain tip). If the candidate's target is SMALLER than required
-        // (i.e. block is harder than allowed), it's "too much" difficulty and we reject.
-        // If LARGER (less difficulty = easier than required), it's "too little" and we reject.
-        // PREVIOUS BUG: condition was `bnNewBlock > bnRequired` paired with "too little"
-        // error message — the message and the trigger were swapped. This caused honest
-        // blocks during legitimate time-warps (fork recovery, chain catchup) to be
-        // labelled "too little proof-of-stake" while the actual reject reason was the
-        // OPPOSITE — block had TOO MUCH difficulty relative to elapsed time.
-        // Fixed: condition now matches the message (block too easy => reject).
-        if (bnRequired != 0 && bnNewBlock < bnRequired)
+        // Anti-spam: reject blocks whose target exceeds the required minimum (i.e. blocks
+        // with less difficulty than required for the elapsed time-since-checkpoint).
+        // bnNewBlock is the candidate's compact-bits target; bnRequired is the minimum
+        // target for the elapsed time. In Bitcoin/PoS, a LARGER target means EASIER
+        // difficulty. So: bnNewBlock > bnRequired => block is easier than required =>
+        // "too little proof-of-stake/work" => reject.
+        //
+        // The 2026-06-30 commit cbb189a inverted this to bnNewBlock < bnRequired which
+        // rejected blocks that are HARDER than required (good blocks!) — verified by
+        // DNS3 stalling at snapshot height 2,214,547 because every canonical post-snapshot
+        // block was being rejected as "too little proof-of-stake". This restores the
+        // correct comparison and keeps the soft Misbehaving(5) score from cbb189a.
+        if (bnRequired != 0 && bnNewBlock > bnRequired)
         {
             // Anti-spam is a soft scoring signal, NOT a hard ban trigger. A single
             // violation should log + score modestly, not 24-hour-ban honest peers
