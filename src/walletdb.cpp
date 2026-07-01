@@ -265,7 +265,8 @@ static bool IsKeyType(const std::string& strType)
 {
     return (strType == "key" || strType == "wkey" ||
             strType == "mkey" || strType == "ckey" ||
-            strType == "hdmnemonic" || strType == "hdcmnemonic");
+            strType == "hdmnemonic" || strType == "hdcmnemonic" ||
+            strType == "hdpassphrase" || strType == "hdcpassphrase");
 }
 
 static bool ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue,
@@ -414,6 +415,14 @@ static bool ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssVa
             std::pair<uint256, std::vector<unsigned char>> cm;
             ssValue >> cm;
             pwallet->LoadCryptedHDMnemonic(cm.first, cm.second);
+        } else if (strType == "hdpassphrase") {
+            std::string p;
+            ssValue >> p;
+            pwallet->LoadHDPassphrase(p);
+        } else if (strType == "hdcpassphrase") {
+            std::pair<uint256, std::vector<unsigned char>> cp;
+            ssValue >> cp;
+            pwallet->LoadCryptedHDPassphrase(cp.first, cp.second);
         } else if (strType == "hdchain") {
             int64_t n;
             ssValue >> n;

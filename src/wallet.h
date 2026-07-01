@@ -132,6 +132,9 @@ public:
     std::string hdMnemonic;                       // in-memory phrase (present when unlocked/unencrypted)
     std::vector<unsigned char> vchCryptedHDMnemonic; // encrypted phrase (loaded, decrypted on unlock)
     uint256 hdMnemonicIV;                         // IV for the encrypted phrase
+    std::string hdPassphrase;                     // BIP39 "25th word"; empty = none. Same lifecycle as hdMnemonic.
+    std::vector<unsigned char> vchCryptedHDPassphrase; // encrypted passphrase (loaded, decrypted on unlock)
+    uint256 hdPassphraseIV;                       // IV for the encrypted passphrase
 
     // check whether we are allowed to upgrade (or already support) to the named feature
     bool CanSupportFeature(WalletFeature wf) { return nWalletMaxVersion >= static_cast<int>(wf); }
@@ -150,6 +153,8 @@ public:
     bool DeriveHDKey(int64_t index, CKey& keyOut) const;
     bool LoadHDMnemonic(const std::string& m) { hdMnemonic = m; fHDEnabled = true; return true; }
     bool LoadCryptedHDMnemonic(const uint256& iv, const std::vector<unsigned char>& cipher) { hdMnemonicIV = iv; vchCryptedHDMnemonic = cipher; fHDEnabled = true; return true; }
+    bool LoadHDPassphrase(const std::string& p) { hdPassphrase = p; return true; }
+    bool LoadCryptedHDPassphrase(const uint256& iv, const std::vector<unsigned char>& cipher) { hdPassphraseIV = iv; vchCryptedHDPassphrase = cipher; return true; }
     // Adds a key to the store, and saves it to disk.
     bool AddKey(const CKey& key);
     // Adds a key to the store, without saving it to disk (used by LoadWallet)

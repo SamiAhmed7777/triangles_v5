@@ -178,6 +178,25 @@ public:
         nWalletDBUpdated++;
         return Write(std::string("hdchain"), nIndex);
     }
+    // BIP39 passphrase ("25th word"). Same plaintext/crypted lifecycle as the
+    // mnemonic: exactly one of the two records exists at a time; both absent
+    // means no passphrase (legacy wallets and the common case).
+    bool WriteHDPassphrase(const std::string& passphrase) {
+        nWalletDBUpdated++;
+        Erase(std::string("hdcpassphrase"));
+        return Write(std::string("hdpassphrase"), passphrase);
+    }
+    bool WriteHDCryptedPassphrase(const uint256& iv, const std::vector<unsigned char>& cipher) {
+        nWalletDBUpdated++;
+        Erase(std::string("hdpassphrase"));
+        return Write(std::string("hdcpassphrase"), std::make_pair(iv, cipher));
+    }
+    bool EraseHDPassphrase() {
+        nWalletDBUpdated++;
+        Erase(std::string("hdpassphrase"));
+        Erase(std::string("hdcpassphrase"));
+        return true;
+    }
 
     bool ReadPool(int64_t nPool, CKeyPool& keypool)
     {

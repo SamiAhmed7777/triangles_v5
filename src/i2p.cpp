@@ -223,6 +223,18 @@ bool CI2PSession::LoadOrCreateDestination(std::string& strPrivKeyRet)
                 if (out.is_open()) {
                     out << priv << std::endl;
                     out.close();
+                    // The I2P destination private key identifies this node on
+                    // the I2P network: owner-only permissions, like Tor's
+                    // hidden-service secret key. (No-op semantics differ on
+                    // Windows ACLs; harmless there.)
+                    std::error_code ec;
+                    std::filesystem::permissions(keyPath,
+                        std::filesystem::perms::owner_read |
+                        std::filesystem::perms::owner_write,
+                        std::filesystem::perm_options::replace, ec);
+                    if (ec)
+                        printf("I2P: WARNING could not restrict permissions on %s: %s\n",
+                               keyPath.string().c_str(), ec.message().c_str());
                     printf("I2P: generated and saved new persistent destination\n");
                     ok = true;
                 } else {
