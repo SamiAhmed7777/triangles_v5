@@ -213,9 +213,17 @@ bool DumpSnapshot(const fs::path& destPath,
         // Update actual count (in case it changed during iteration)
         if (nWritten != numUtxos) {
             numUtxos = nWritten;
-            // Seek back and update numUtxos in header
+            // Seek back and update numUtxos in header.
+            // Header layout (v3):
+            //   magic(4) + version(4) + network(4) + height(4) + blockHash(32)
+            //   + moneySupply(8) + numHeaders(4) + numUtxos(4)
+            //   + numBlocks(4) + numStakeSeen(4) + contentHash(32)
+            // contentHashPos is the offset of contentHash. numUtxos is at
+            // contentHashPos - sizeof(contentHash) - sizeof(numStakeSeen)
+            //                  - sizeof(numBlocks) - sizeof(numUtxos).
             long currentPos = ftell(file);
-            fseek(file, contentHashPos - sizeof(numUtxos), SEEK_SET);
+            fseek(file, contentHashPos - sizeof(uint256) - sizeof(numStakeSeen)
+                          - sizeof(numBlocks) - sizeof(numUtxos), SEEK_SET);
             fwrite(&numUtxos, sizeof(numUtxos), 1, file);
             fseek(file, currentPos, SEEK_SET);
         }
