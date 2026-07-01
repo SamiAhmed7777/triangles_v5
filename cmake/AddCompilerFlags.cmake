@@ -47,6 +47,30 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "i[3-6]86")
     add_compile_options(-msse2)
 endif()
 
+# ── x86-64 baseline ISA (portability across CPU vendors/models) ──
+# CRITICAL: Without this, GCC on Intel CI runners (Skylake-X, Ice Lake,
+# Sapphire Rapids) emits AVX-512 / AVX10 instructions (vmovdqu8, vpcompressd,
+# vpopcntd, etc.) for std::string / memcpy inlining that CRASH with SIGILL
+# on AMD EPYC (Milan, Genoa) and older Intel without AVX-512/AVX10.
+# x86-64-v2 = baseline from ~2009 (Nehalem): SSE4.2 + POPCNT + CMPXCHG16B.
+# Supported on EVERY x86_64 CPU Triangles runs on in production (DNS2, DNS3,
+# Hetzner ARM64 excluded — that's a different build). Do NOT raise to v3
+# (AVX2) without re-testing on every supported CPU; v3 is fine for most
+# modern hardware but adds risk on edge cases (early Ryzen, Atom).
+# Override with -DCMAKE_X86_64_BASELINE=OFF to disable (not recommended).
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" AND NOT WIN32 AND NOT APPLE)
+    option(CMAKE_X86_64_BASELINE
+        "Compile with -march=x86-64-v2 (SSE4.2 baseline) for portability across CPU vendors"
+        ON)
+    if(CMAKE_X86_64_BASELINE)
+        add_compile_options(-march=x86-64-v2)
+        # -mtune=generic tells GCC the binary will run on CPUs other than the
+        # build host. Combined with -march=x86-64-v2 above, the scheduler
+        # picks instructions from the v2 subset only — no AVX-512 leaks.
+        add_compile_options(-mtune=generic)
+    endif()
+endif()
+
 # ── Platform: Windows (MSYS2 MinGW64) ──
 if(WIN32)
     add_compile_options(-Wa,-mbig-obj)
