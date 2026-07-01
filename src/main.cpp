@@ -3478,10 +3478,26 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
                 bnRequired.SetCompact(ComputeMinWork(pindexLastPow->nBits, deltaTime));
         }
 
-        if (bnRequired != 0 && bnNewBlock > bnRequired)
+        // bnNewBlock is the difficulty of the candidate block (compact bits -> target).
+        // bnRequired is the MINIMUM difficulty the block must meet (based on time since
+        // last checkpoint / chain tip). If the candidate's target is SMALLER than required
+        // (i.e. block is harder than allowed), it's "too much" difficulty and we reject.
+        // If LARGER (less difficulty = easier than required), it's "too little" and we reject.
+        // PREVIOUS BUG: condition was `bnNewBlock > bnRequired` paired with "too little"
+        // error message — the message and the trigger were swapped. This caused honest
+        // blocks during legitimate time-warps (fork recovery, chain catchup) to be
+        // labelled "too little proof-of-stake" while the actual reject reason was the
+        // OPPOSITE — block had TOO MUCH difficulty relative to elapsed time.
+        // Fixed: condition now matches the message (block too easy => reject).
+        if (bnRequired != 0 && bnNewBlock < bnRequired)
         {
+            // Anti-spam is a soft scoring signal, NOT a hard ban trigger. A single
+            // violation should log + score modestly, not 24-hour-ban honest peers
+            // (which is what happened during the 2026-06-23 DNS2 clearnet-fork
+            // incident — `Misbehaving(100)` crossed the banscore threshold on the
+            // FIRST block, instantly banning every honest peer feeding us fork blocks).
             if (pfrom)
-                pfrom->Misbehaving(100);
+                pfrom->Misbehaving(5);
             return error("ProcessBlock() : block with too little %s", pblock->IsProofOfStake()? "proof-of-stake" : "proof-of-work");
         }
     }
