@@ -644,6 +644,108 @@ bool LoadSnapshot(const fs::path& snapshotPath,
         }
     }
 
+    // Build the transaction index (txindex) from the freshly-extracted blk0001.dat.
+    // The snapshot loads the UTXO set and blk0001.dat but does NOT rebuild the
+    // per-tx index that CTransaction::ReadFromDisk requires for stake-input
+    // signature verification. Without this, a new PoS block referencing any
+    // pre-snapshot tx would fail CheckProofOfStake with "read txPrev failed"
+    // and be rejected with DoS=100, stalling the node at the snapshot height.
+    //
+    // Walk every block in blk0001.dat and record CDiskTxPos for each tx, so
+    // the loaded chain is fully self-contained. The walk is O(N) over the
+    // historical block range but uses the already-cached blocks on disk and
+    // batches the writes (every 5000 txs).
+    if (success) {
+        printf("UtxoSnapshot: building transaction index from blk0001.dat...\n");
+        fs::path blkPath = GetDataDir() / "blk0001.dat";
+        FILE* blkFile = fopen(blkPath.string().c_str(), "rb");
+        if (!blkFile) {
+            success = false;
+            strError = "Cannot open blk0001.dat for txindex build: " + blkPath.string();
+        } else {
+            CAutoFile blkdat(blkFile, SER_DISK, CLIENT_VERSION);
+            if (!txdb.TxnBegin()) {
+                success = false;
+                strError = "Failed to begin txindex build transaction";
+            } else {
+                unsigned int nPos = 0;
+                unsigned int nBlocksIndexed = 0;
+                unsigned int nTxsIndexed = 0;
+                unsigned int nBatchTxs = 0;
+                int64_t nLastReport = GetTimeMillis();
+                while (success && blkdat.good()) {
+                    fseek(blkdat, nPos, SEEK_SET);
+                    // Locate block magic
+                    unsigned char pchData[65536];
+                    int nRead = fread(pchData, 1, sizeof(pchData), blkdat);
+                    if (nRead <= 8) break;
+                    void* nFind = memchr(pchData, pchMessageStart[0], nRead + 1 - sizeof(pchMessageStart));
+                    if (!nFind) {
+                        // Reached the tail of the file
+                        break;
+                    }
+                    if (memcmp(nFind, pchMessageStart, sizeof(pchMessageStart)) != 0) {
+                        nPos += ((unsigned char*)nFind - pchData) + 1;
+                        continue;
+                    }
+                    unsigned int nBlockStart = nPos + ((unsigned char*)nFind - pchData);
+                    fseek(blkdat, nBlockStart + sizeof(pchMessageStart), SEEK_SET);
+                    unsigned int nSize;
+                    blkdat >> nSize;
+                    if (nSize == 0 || nSize > MAX_BLOCK_SIZE) {
+                        nPos = nBlockStart + sizeof(pchMessageStart) + 4;
+                        continue;
+                    }
+                    CBlock block;
+                    blkdat >> block;
+                    // For each tx in the block, record the disk position.
+                    // nTxPos is the offset of the tx *within* the block (after
+                    // magic+size for the first tx, then serialize-size of
+                    // preceding txs). We use the post-serialize offset of each
+                    // tx as nTxPos, matching the convention in ConnectBlock.
+                    unsigned int nTxPos = sizeof(pchMessageStart) + sizeof(unsigned int); // offset of first tx in block
+                    for (const CTransaction& tx : block.vtx) {
+                        CDiskTxPos posThisTx(1, nBlockStart, nTxPos);
+                        txdb.UpdateTxIndex(tx.GetHash(), CTxIndex(posThisTx, tx.vout.size()));
+                        nTxPos += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
+                        nTxsIndexed++;
+                        nBatchTxs++;
+                    }
+                    nBlocksIndexed++;
+                    // Advance past this block to scan the next one
+                    nPos = nBlockStart + sizeof(pchMessageStart) + sizeof(unsigned int) + nSize;
+                    // Commit batch periodically to avoid unbounded memory
+                    if (nBatchTxs >= 5000) {
+                        if (!txdb.TxnCommit()) {
+                            success = false;
+                            strError = "txindex batch commit failed";
+                            break;
+                        }
+                        if (!txdb.TxnBegin()) {
+                            success = false;
+                            strError = "txindex batch restart failed";
+                            break;
+                        }
+                        nBatchTxs = 0;
+                        if (GetTimeMillis() - nLastReport > 5000) {
+                            printf("UtxoSnapshot: indexed %u blocks / %u txs (pos=%u)\n",
+                                   nBlocksIndexed, nTxsIndexed, nPos);
+                            nLastReport = GetTimeMillis();
+                        }
+                    }
+                }
+                if (success && !txdb.TxnCommit()) {
+                    success = false;
+                    strError = "Final txindex commit failed";
+                }
+                if (success) {
+                    printf("UtxoSnapshot: built txindex for %u blocks / %u transactions\n",
+                           nBlocksIndexed, nTxsIndexed);
+                }
+            }
+        }
+    }
+
     // Verify content hash
     if (success) {
         uint256 actualHash;
