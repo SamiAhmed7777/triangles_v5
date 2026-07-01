@@ -141,16 +141,19 @@ BOOST_AUTO_TEST_SUITE(chaindb_backend_selection)
 
 BOOST_AUTO_TEST_CASE(is_rocksdb_backend_flag_default_off)
 {
-    // Default test build doesn't set -chaindb, so backend should NOT be rocksdb.
+    // The default test build doesn't set the -chaindb flag at all. (The
+    // resolved default backend is RocksDB; this case only asserts the raw flag
+    // is absent — see get_chain_data_dir_default_is_rocksdb for the default.)
     BOOST_CHECK_EQUAL(GetBoolArg("-chaindb", false), false);
 }
 
-BOOST_AUTO_TEST_CASE(get_chain_data_dir_default_is_txleveldb)
+BOOST_AUTO_TEST_CASE(get_chain_data_dir_default_is_rocksdb)
 {
-    // No -chaindb flag set → GetChainDataDir() must return txleveldb path.
+    // No -chaindb flag set → RocksDB is the default backend, so
+    // GetChainDataDir() must return the rocksdb path.
     mapArgs.erase("-chaindb");
-    BOOST_CHECK_EQUAL(IsRocksDbChainBackend(), false);
-    BOOST_CHECK_EQUAL(GetChainDataDir().filename().string(), "txleveldb");
+    BOOST_CHECK_EQUAL(IsRocksDbChainBackend(), true);
+    BOOST_CHECK_EQUAL(GetChainDataDir().filename().string(), "rocksdb");
 }
 
 BOOST_AUTO_TEST_CASE(get_chain_data_dir_rocksdb_when_flag_set)
@@ -451,12 +454,13 @@ BOOST_AUTO_TEST_CASE(wipe_removes_rocksdb_dir_when_flagged)
     mapArgs.erase("-chaindb");
 }
 
-BOOST_AUTO_TEST_CASE(wipe_removes_txleveldb_dir_by_default)
+BOOST_AUTO_TEST_CASE(wipe_removes_txleveldb_dir_when_leveldb_selected)
 {
-    // No explicit write needed — MakeChainDB("cr+") opens the LevelDB
-    // handle which creates the txleveldb/ directory on disk. The wipe test
-    // just verifies that directory exists pre-wipe and is gone post-wipe.
-    mapArgs.erase("-chaindb");
+    // With -chaindb=leveldb, MakeChainDB("cr+") opens the LevelDB handle which
+    // creates the txleveldb/ directory on disk. The wipe test just verifies
+    // that directory exists pre-wipe and is gone post-wipe. (RocksDB is the
+    // default now, so LevelDB must be requested explicitly.)
+    mapArgs["-chaindb"] = "leveldb";
     {
         auto base = MakeChainDB("cr+");
         BOOST_REQUIRE(base != nullptr);
@@ -467,6 +471,7 @@ BOOST_AUTO_TEST_CASE(wipe_removes_txleveldb_dir_by_default)
 
     WipeChainDataDir();
     BOOST_CHECK(!fs::exists(dir));
+    mapArgs.erase("-chaindb");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

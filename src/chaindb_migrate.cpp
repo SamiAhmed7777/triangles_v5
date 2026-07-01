@@ -109,6 +109,13 @@ bool MaybeMigrateLevelDbToRocksDb(bool fForce, std::string& strError)
         {
             std::ofstream marker(markerPath);
             marker << "RocksDB migration in progress. Safe to delete this directory and retry.\n";
+            marker.flush();
+            if (!marker.good()) {
+                // Without the marker a crashed migration would be
+                // indistinguishable from a complete one — refuse to start.
+                strError = "could not write migration marker " + markerPath.string();
+                return false;
+            }
         }
 
         CTxDB source("r");

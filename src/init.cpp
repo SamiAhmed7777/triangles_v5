@@ -1279,19 +1279,36 @@ bool AppInit2()
     {
         bool fExplicit = GetBoolArg("-migratechaindb", false) ||
                          GetBoolArg("-migratechaindbforce", false);
+        // A rocksdb/ directory containing the MIGRATION_INCOMPLETE marker is a
+        // crashed previous migration, NOT a usable chain DB — treat it the same
+        // as "no rocksdb yet" so the migration is retried instead of silently
+        // opening a truncated database.
+        bool fCrashedMigration = fs::exists(GetDataDir() / "rocksdb" / "MIGRATION_INCOMPLETE");
         bool fAuto = IsRocksDbChainBackend() &&
                      fs::exists(GetDataDir() / "txleveldb") &&
-                     !fs::exists(GetDataDir() / "rocksdb");
+                     (!fs::exists(GetDataDir() / "rocksdb") || fCrashedMigration);
         if (fExplicit || fAuto)
         {
             uiInterface.InitMessage(_("Migrating chain database to RocksDB..."));
             if (fAuto && !fExplicit)
-                printf("ChainDB: RocksDB backend active with a legacy LevelDB present; "
-                       "migrating automatically.\n");
+                printf("ChainDB: RocksDB backend active with a legacy LevelDB present%s; "
+                       "migrating automatically.\n",
+                       fCrashedMigration ? " and a previous migration was interrupted" : "");
             std::string strMigrateError;
             bool fForce = GetBoolArg("-migratechaindbforce", false);
             if (!MaybeMigrateLevelDbToRocksDb(fForce, strMigrateError))
                 return InitError(strprintf(_("Chain DB migration failed: %s"), strMigrateError.c_str()));
+        }
+        // Last line of defense: never open a RocksDB that still carries the
+        // incomplete-migration marker (e.g. the LevelDB source was deleted so
+        // the migration cannot be retried). Opening it would silently run on a
+        // partial chain state.
+        if (IsRocksDbChainBackend() &&
+            fs::exists(GetDataDir() / "rocksdb" / "MIGRATION_INCOMPLETE"))
+        {
+            return InitError(_("The RocksDB chain database is left over from an interrupted "
+                               "migration and is incomplete. Delete the 'rocksdb' directory in the "
+                               "data directory and restart (it will be rebuilt by migration or resync)."));
         }
     }
 
