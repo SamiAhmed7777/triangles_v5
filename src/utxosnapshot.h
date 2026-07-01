@@ -11,7 +11,15 @@
 static const unsigned int UTXO_SNAPSHOT_MAGIC = 0x53585455; // "UTXS" little-endian
 
 // UTXO snapshot format version
-static const unsigned int UTXO_SNAPSHOT_VERSION = 2;
+// v1: original (headers + UTXOs)
+// v2: + embeds raw blk0001.dat for full self-contained bootstrap
+// v3: + carries setStakeSeen entries (prevoutStake, nStakeTime) so a
+//     snapshot-loaded node has the recent PoS stake-collision set restored
+//     immediately, without needing to walk the last N blocks on startup.
+//     Required for the anti-spam "too little proof-of-stake" check in
+//     ProcessBlock to work correctly post-snapshot-bootstrap, since
+//     LoadBlockIndex only walks 500 blocks back from pindexBest.
+static const unsigned int UTXO_SNAPSHOT_VERSION = 3;
 
 // Number of block index entries to include in snapshot (covers difficulty,
 // median time, stake modifier, and reorg depth requirements)

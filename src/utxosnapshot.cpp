@@ -111,6 +111,23 @@ bool DumpSnapshot(const fs::path& destPath,
             if (blkSize > 0) numBlocks = (unsigned int)blkSize;
         }
     }
+    // v3: collect setStakeSeen entries (prevoutStake, nStakeTime) from the
+    // last N PoS blocks. Required so a snapshot-loaded node has the recent
+    // stake-collision set restored without walking blocks at startup.
+    static const unsigned int STAKE_SEEN_DEPTH = 5000; // 10x LoadBlockIndex default
+    std::vector<std::pair<COutPoint, unsigned int> > vStakeSeen;
+    {
+        CBlockIndex* pindex = pindexBest;
+        unsigned int nVisited = 0;
+        while (pindex && nVisited < STAKE_SEEN_DEPTH) {
+            if (pindex->IsProofOfStake()) {
+                vStakeSeen.push_back(std::make_pair(pindex->prevoutStake, pindex->nStakeTime));
+            }
+            pindex = pindex->pprev;
+            nVisited++;
+        }
+    }
+    unsigned int numStakeSeen = (unsigned int)vStakeSeen.size();
     uint256 contentHash; // placeholder, filled after writing data
 
     fwrite(&magic, sizeof(magic), 1, file);
@@ -122,6 +139,7 @@ bool DumpSnapshot(const fs::path& destPath,
     fwrite(&numHeaders, sizeof(numHeaders), 1, file);
     fwrite(&numUtxos, sizeof(numUtxos), 1, file);
     fwrite(&numBlocks, sizeof(numBlocks), 1, file); // v2+
+    fwrite(&numStakeSeen, sizeof(numStakeSeen), 1, file); // v3+
     long contentHashPos = ftell(file);
     fwrite(&contentHash, sizeof(contentHash), 1, file); // placeholder
 
@@ -200,6 +218,24 @@ bool DumpSnapshot(const fs::path& destPath,
             fseek(file, contentHashPos - sizeof(numUtxos), SEEK_SET);
             fwrite(&numUtxos, sizeof(numUtxos), 1, file);
             fseek(file, currentPos, SEEK_SET);
+        }
+    }
+
+    // v3: After UTXOs, write the setStakeSeen entries collected from the last
+    // N PoS blocks. Format: a length-prefixed flat array of
+    // (COutPoint prevout, unsigned int nStakeTime) records.
+    if (version >= 3) {
+        printf("UtxoSnapshot: writing %d setStakeSeen entries...\n", numStakeSeen);
+        for (unsigned int i = 0; i < vStakeSeen.size(); i++) {
+            CDataStream ssEntry(SER_DISK, CLIENT_VERSION);
+            ssEntry << vStakeSeen[i].first;  // COutPoint (hash + index)
+            ssEntry << vStakeSeen[i].second; // nStakeTime
+            unsigned int entrySize = (unsigned int)ssEntry.size();
+            std::string strEntry = ssEntry.str();
+            fwrite(&entrySize, sizeof(entrySize), 1, file);
+            fwrite(strEntry.data(), 1, entrySize, file);
+            SHA256_Update(&sha256, &entrySize, sizeof(entrySize));
+            SHA256_Update(&sha256, strEntry.data(), entrySize);
         }
     }
 
@@ -290,7 +326,7 @@ bool LoadSnapshot(const fs::path& snapshotPath,
     int height;
     uint256 blockHash;
     int64_t moneySupply;
-    unsigned int numHeaders = 0, numUtxos = 0, numBlocks = 0;
+    unsigned int numHeaders = 0, numUtxos = 0, numBlocks = 0, numStakeSeen = 0;
     uint256 expectedContentHash;
 
     if (fread(&magic, sizeof(magic), 1, file) != 1 ||
@@ -305,11 +341,19 @@ bool LoadSnapshot(const fs::path& snapshotPath,
         strError = "Truncated snapshot header (common fields)";
         return false;
     }
-    // v2+ has numBlocks between numUtxos and contentHash. v1 stops here.
+    // v2+ has numBlocks between numUtxos and (numStakeSeen|contentHash).
     if (version >= 2) {
         if (fread(&numBlocks, sizeof(numBlocks), 1, file) != 1) {
             fclose(file);
             strError = "Truncated snapshot header (numBlocks)";
+            return false;
+        }
+    }
+    // v3+ has numStakeSeen before contentHash.
+    if (version >= 3) {
+        if (fread(&numStakeSeen, sizeof(numStakeSeen), 1, file) != 1) {
+            fclose(file);
+            strError = "Truncated snapshot header (numStakeSeen)";
             return false;
         }
     }
@@ -520,6 +564,46 @@ bool LoadSnapshot(const fs::path& snapshotPath,
 
         if (success && !flushBatch())
             success = false;
+    }
+
+    // v3: After UTXOs (before the embedded blocks), read the setStakeSeen
+    // entries collected from the last N PoS blocks of the source chain.
+    // Required so a snapshot-loaded node has the recent stake-collision set
+    // restored immediately, without having to walk blocks at startup. This
+    // is what lets the anti-spam "too little proof-of-stake" check in
+    // ProcessBlock function correctly right after a snapshot bootstrap.
+    if (success && version >= 3 && numStakeSeen > 0) {
+        printf("UtxoSnapshot: loading %d setStakeSeen entries...\n", numStakeSeen);
+        // setStakeSeen is declared in main.cpp — we reference it via the
+        // header declaration. Clear first so the snapshot's view is authoritative.
+        setStakeSeen.clear();
+        unsigned int nLoadedStakeSeen = 0;
+        for (unsigned int i = 0; i < numStakeSeen; i++) {
+            unsigned int entrySize;
+            if (fread(&entrySize, sizeof(entrySize), 1, file) != 1 || entrySize > 1000) {
+                success = false;
+                strError = "Invalid setStakeSeen entry size at index " + std::to_string(i);
+                break;
+            }
+            std::vector<char> buf(entrySize);
+            if (fread(buf.data(), 1, entrySize, file) != entrySize) {
+                success = false;
+                strError = "Truncated setStakeSeen entry at index " + std::to_string(i);
+                break;
+            }
+            SHA256_Update(&sha256, &entrySize, sizeof(entrySize));
+            SHA256_Update(&sha256, buf.data(), entrySize);
+
+            CDataStream ssEntry(buf.data(), buf.data() + buf.size(), SER_DISK, CLIENT_VERSION);
+            COutPoint prevout;
+            unsigned int nStakeTime;
+            ssEntry >> prevout;
+            ssEntry >> nStakeTime;
+            setStakeSeen.insert(std::make_pair(prevout, nStakeTime));
+            nLoadedStakeSeen++;
+        }
+        if (success)
+            printf("UtxoSnapshot: loaded %d setStakeSeen entries\n", nLoadedStakeSeen);
     }
 
     // v2: After UTXOs, extract the raw blk0001.dat content. This makes the
