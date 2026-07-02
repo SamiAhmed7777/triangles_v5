@@ -550,4 +550,64 @@ BOOST_AUTO_TEST_CASE(crashed_migration_marker_triggers_retry)
     mapArgs.erase("-chaindb");
 }
 
+// H4: After a SUCCESSFUL migration (no pre-existing marker, no crash), the
+// MIGRATION_INCOMPLETE marker MUST be gone from disk. The previous
+// implementation called fs::remove() and ignored the return code, so the
+// marker silently survived success. init.cpp's fCrashedMigration check then
+// treated the (good) RocksDB as a crashed migration and re-migrated on every
+// startup, eventually destroying chain state.
+//
+// This test exercises the real MaybeMigrateLevelDbToRocksDb() end-to-end on
+// the happy path: fresh LevelDB → no marker → migration → marker gone.
+// Complements crashed_migration_marker_triggers_retry which covers the
+// retry path.
+BOOST_AUTO_TEST_CASE(marker_removed_after_successful_migration)
+{
+    // 1. Seed a minimal LevelDB chain DB by opening + closing it.
+    mapArgs["-chaindb"] = "leveldb";
+    {
+        auto base = MakeChainDB("cr+");
+        BOOST_REQUIRE(base != nullptr);
+        base->Close();
+    }
+    BOOST_REQUIRE(fs::exists(GetDataDir() / "txleveldb"));
+
+    // 2. Confirm the starting state: no rocksdb/, no marker.
+    fs::path rocksDir = GetDataDir() / "rocksdb";
+    fs::path marker = rocksDir / "MIGRATION_INCOMPLETE";
+    BOOST_REQUIRE(!fs::exists(rocksDir));
+    BOOST_REQUIRE(!fs::exists(marker));
+
+    // 3. Run the production migration function with RocksDB as target.
+    mapArgs["-chaindb"] = "rocksdb";
+    {
+        std::string err;
+        BOOST_REQUIRE_MESSAGE(MaybeMigrateLevelDbToRocksDb(false, err),
+                              "migration failed: " + err);
+        BOOST_CHECK_MESSAGE(err.empty(), "unexpected error: " + err);
+    }
+
+    // 4. The marker must be gone. This is the H4 invariant: a successful
+    //    migration never leaves the marker on disk. The previous code
+    //    returned true here even when the marker survived, which is the
+    //    exact regression this test catches.
+    BOOST_CHECK_MESSAGE(!fs::exists(marker),
+                        "MIGRATION_INCOMPLETE marker must be removed on success "
+                        "(H4 — silent marker survival causes re-migration loop)");
+
+    // 5. The migrated rocksdb/ must exist with data in it.
+    BOOST_CHECK_MESSAGE(fs::exists(rocksDir), "rocksdb/ should exist after migration");
+
+    // 6. Reopen and confirm the data is intact.
+    {
+        auto base = MakeChainDB("r");
+        BOOST_REQUIRE(base != nullptr);
+        base.reset(); // close before process exit (RocksDB static handle order)
+    }
+
+    WipeChainDataDir();
+    fs::remove_all(GetDataDir() / "txleveldb");
+    mapArgs.erase("-chaindb");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

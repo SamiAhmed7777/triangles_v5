@@ -1105,10 +1105,19 @@ bool AppInit2()
     if (true) {
         if (true) {
             do {
-                // Bind to all interfaces so external peers can connect
+                // W1: Bind to all interfaces so external peers can connect.
+                //
+                // The previous code went through Lookup("0.0.0.0", ...) which
+                // hands the literal string to getaddrinfo(). On Windows that
+                // resolver can fail to map "0.0.0.0" to INADDR_ANY and the
+                // daemon would abort at startup with "Cannot resolve binding
+                // address". Construct the CService directly from INADDR_ANY
+                // instead — this is the canonical "any-address" binding and
+                // works on every platform without consulting the resolver.
                 CService addrBind;
-                if (!Lookup("0.0.0.0", addrBind, GetListenPort(), false))
-                    return InitError(strprintf(_("Cannot resolve binding address: '%s'"),  "0.0.0.0"));
+                struct in_addr any;
+                any.s_addr = htonl(INADDR_ANY);
+                addrBind = CService(any, GetListenPort());
                 fBound |= Bind(addrBind);
             } while (false);
         }
