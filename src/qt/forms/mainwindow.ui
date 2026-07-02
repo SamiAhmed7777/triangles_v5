@@ -1664,6 +1664,23 @@ QProgressBar::chunk {
           </widget>
          </item>
          <item>
+          <widget class="QLabel" name="label_hd">
+           <property name="font">
+            <font>
+             <pointsize>9</pointsize>
+             <weight>75</weight>
+             <bold>true</bold>
+            </font>
+           </property>
+           <property name="toolTip">
+            <string>HD (BIP39) wallet seed status</string>
+           </property>
+           <property name="text">
+            <string notr="true">HD</string>
+           </property>
+          </widget>
+         </item>
+         <item>
           <widget class="QLabel" name="label_staking">
            <property name="text">
             <string notr="true"/>
