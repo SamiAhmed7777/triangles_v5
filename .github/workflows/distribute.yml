@@ -71,16 +71,16 @@ jobs:
           # this wait, the Docker build races and fails with curl 22 / 404
           # (saw this on v5.9.24 run #24, dist #24, Docker Hub job
           # step #5 — release was published 8 min after the workflow fired).
-          for i in {1..30}; do
+          for i in {1..90}; do
             URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/cryptographic-triangles-daemon_${VERSION}_amd64.deb"
             if curl -fsSL --head "$URL" >/dev/null 2>&1; then
               echo "✓ Release .deb available: $URL"
               exit 0
             fi
-            echo "  waiting for release v${VERSION} daemon .deb... ($i/30)"
+            echo "  waiting for release v${VERSION} daemon .deb... ($i/90)"
             sleep 20
           done
-          echo "::error::Release v${VERSION} daemon .deb never became available after 10 minutes"
+          echo "::error::Release v${VERSION} daemon .deb never became available after 30 minutes"
           exit 1
 
       - name: Build and push
@@ -137,16 +137,16 @@ jobs:
       - name: Wait for release artifacts
         if: env.AUR_SSH_KEY != ''
         run: |
-          for i in {1..30}; do
+          for i in {1..90}; do
             URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/cryptographic-triangles_${VERSION}_amd64.deb"
             if curl -fsSL --head "$URL" >/dev/null 2>&1; then
               echo "✓ Release .deb available: $URL"
               exit 0
             fi
-            echo "  waiting for release v${VERSION}... ($i/30)"
+            echo "  waiting for release v${VERSION}... ($i/90)"
             sleep 20
           done
-          echo "::error::Release v${VERSION} .deb never became available after 10 minutes"
+          echo "::error::Release v${VERSION} .deb never became available after 30 minutes"
           exit 1
 
       - name: Download source .debs
@@ -276,16 +276,16 @@ jobs:
       - name: Wait for release artifacts
         if: env.HOMEBREW_GITHUB_TOKEN != ''
         run: |
-          for i in {1..30}; do
+          for i in {1..90}; do
             URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/Cryptographic-Triangles-v${VERSION}-macos-arm64.dmg"
             if curl -fsSL --head "$URL" >/dev/null 2>&1; then
               echo "✓ Release .dmg available: $URL"
               exit 0
             fi
-            echo "  waiting for release v${VERSION}... ($i/30)"
+            echo "  waiting for release v${VERSION}... ($i/90)"
             sleep 20
           done
-          echo "::error::Release v${VERSION} macOS .dmg never became available"
+          echo "::error::Release v${VERSION} macOS .dmg never became available after 30 minutes"
           exit 1
 
       - name: Compute macOS .dmg SHA256
@@ -379,16 +379,16 @@ jobs:
         if: env.CHOCO_API_KEY != '' && env.CHOCO_SKIP_WACATAC != ''
         shell: bash
         run: |
-          for i in {1..30}; do
+          for i in {1..90}; do
             URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/Cryptographic-Triangles-${VERSION}-win-x64-setup.exe"
             if curl -fsSL --head "$URL" >/dev/null 2>&1; then
               echo "✓ Release .exe available: $URL"
               exit 0
             fi
-            echo "  waiting for release v${VERSION}... ($i/30)"
+            echo "  waiting for release v${VERSION}... ($i/90)"
             sleep 20
           done
-          echo "::error::Release v${VERSION} Windows installer never became available"
+          echo "::error::Release v${VERSION} Windows installer never became available after 30 minutes"
           exit 1
 
       - name: Compute installer SHA256
@@ -486,16 +486,16 @@ jobs:
       - name: Wait for release artifacts
         if: env.WINGET_TOKEN != ''
         run: |
-          for i in {1..30}; do
+          for i in {1..90}; do
             URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/Cryptographic-Triangles-${VERSION}-win-x64-setup.exe"
             if curl -fsSL --head "$URL" >/dev/null 2>&1; then
               echo "✓ Release .exe available: $URL"
               exit 0
             fi
-            echo "  waiting for release v${VERSION}... ($i/30)"
+            echo "  waiting for release v${VERSION}... ($i/90)"
             sleep 20
           done
-          echo "::error::Release v${VERSION} Windows installer never became available"
+          echo "::error::Release v${VERSION} Windows installer never became available after 30 minutes"
           exit 1
 
       - name: Compute installer SHA256
