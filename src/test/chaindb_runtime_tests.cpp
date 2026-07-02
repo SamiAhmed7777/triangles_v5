@@ -67,6 +67,49 @@ struct ChainDbRuntimeTestAccessor
     { return db.ExistsRaw(k); }
 };
 
+// Reset the process-wide static chain-DB handles. The migration tests in
+// the chaindb_wipe suite run after chaindb_backend_selection and
+// rocksdb_wrapper, both of which leave the static g_rocksdb (and on some
+// paths the leveldb txdb singleton) alive. A leaked g_rocksdb means the
+// next test that does `MakeChainDB("cr+")` may get a path that the
+// prior test's open handle is still serving — leading to the test
+// operating on stale state and the on-disk wipe having no effect.
+//
+// This helper explicitly closes the rocksdb handle (sets g_rocksdb=null)
+// AND wipes any leftover on-disk chain DB directories so each migration
+// test starts from a known-clean state. Cheap (no-op when nothing is
+// open) and safe to call at the top of any test.
+static void ResetChainDBStatics()
+{
+    // Close any open RocksDB handle. We open in create-if-missing mode
+    // ("cr+") so this works whether or not the prior test left a rocksdb/
+    // on disk. The handle goes out of scope at the end of the block,
+    // invoking CRocksTxDB::~CRocksTxDB which calls close_rocksdb() and
+    // sets g_rocksdb = nullptr.
+    {
+        mapArgs["-chaindb"] = "rocksdb";
+        CRocksTxDB closer("cr+");
+        closer.Close();
+        mapArgs.erase("-chaindb");
+    }
+    // Close any open LevelDB handle. Same pattern: open + close under
+    // -chaindb=leveldb. MakeChainDB("cr+") creates the dir if missing.
+    {
+        mapArgs["-chaindb"] = "leveldb";
+        auto base = MakeChainDB("cr+");
+        if (base) {
+            base->Close();
+            base.reset();
+        }
+        mapArgs.erase("-chaindb");
+    }
+    // Wipe any leftover on-disk chain DB dirs from the prior tests so
+    // the migration test starts from a known state.
+    std::error_code ec;
+    fs::remove_all(GetDataDir() / "txleveldb", ec);
+    fs::remove_all(GetDataDir() / "rocksdb", ec);
+}
+
 // ─── Globals (minimal — chaindb wrappers don't pull in wallet/main) ───────
 // Same rationale as test_snapshotnet: wallet.cpp (linked in for CWallet
 // symbols) drags in main.cpp's references to these globals, so they must
@@ -439,6 +482,7 @@ BOOST_AUTO_TEST_SUITE(chaindb_wipe)
 
 BOOST_AUTO_TEST_CASE(wipe_removes_rocksdb_dir_when_flagged)
 {
+    ResetChainDBStatics();
     mapArgs["-chaindb"] = "rocksdb";
     {
         auto base = MakeChainDB("cr+");
@@ -460,6 +504,7 @@ BOOST_AUTO_TEST_CASE(wipe_removes_rocksdb_dir_when_flagged)
 
 BOOST_AUTO_TEST_CASE(wipe_removes_txleveldb_dir_when_leveldb_selected)
 {
+    ResetChainDBStatics();
     // With -chaindb=leveldb, MakeChainDB("cr+") opens the LevelDB handle which
     // creates the txleveldb/ directory on disk. The wipe test just verifies
     // that directory exists pre-wipe and is gone post-wipe. (RocksDB is the
@@ -489,6 +534,10 @@ BOOST_AUTO_TEST_CASE(wipe_removes_txleveldb_dir_when_leveldb_selected)
 // marker is the observable signal of migration progress.
 BOOST_AUTO_TEST_CASE(crashed_migration_marker_triggers_retry)
 {
+    // Reset any leaked state from prior suites (chaindb_backend_selection,
+    // rocksdb_wrapper) so this test starts from a clean process.
+    ResetChainDBStatics();
+
     // Create a minimal LevelDB chain DB by opening + closing it. This
     // establishes the txleveldb/ directory with the "version" key the
     // migration code expects.
@@ -563,6 +612,9 @@ BOOST_AUTO_TEST_CASE(crashed_migration_marker_triggers_retry)
 // retry path.
 BOOST_AUTO_TEST_CASE(marker_removed_after_successful_migration)
 {
+    // Reset any leaked state from prior suites so this test starts clean.
+    ResetChainDBStatics();
+
     // 1. Seed a minimal LevelDB chain DB by opening + closing it.
     mapArgs["-chaindb"] = "leveldb";
     {
