@@ -450,6 +450,7 @@ if(BUILD_QT)
         qt/qvaluecombobox.cpp
         qt/askpassphrasedialog.cpp
         qt/hdseeddialog.cpp
+        qt/outlinedlabel.cpp
         qt/notificator.cpp
         qt/qtipcserver.cpp
         qt/rpcconsole.cpp

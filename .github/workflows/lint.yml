@@ -26,12 +26,20 @@ jobs:
 
       - name: Check format on changed lines
         run: |
-          BASE_SHA=$(git merge-base origin/${{ github.base_ref }} HEAD)
-          echo "Comparing against merge-base: $BASE_SHA"
+          # Diff-only on PRs (have a base_ref). On workflow_dispatch, base_ref is
+          # empty — in that case run clang-format on the whole tree so a manual
+          # trigger still produces a useful signal instead of erroring out.
+          if [ -n "${{ github.base_ref }}" ]; then
+            BASE_SHA=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+            echo "Comparing against merge-base: $BASE_SHA"
 
-          # git-clang-format prints a diff if any changed line violates style.
-          # --diff exits non-zero when reformatting would change something.
-          OUTPUT=$(git clang-format --diff "$BASE_SHA" -- '*.cpp' '*.h' '*.hpp' '*.cc' || true)
+            # git-clang-format prints a diff if any changed line violates style.
+            # --diff exits non-zero when reformatting would change something.
+            OUTPUT=$(git clang-format --diff "$BASE_SHA" -- '*.cpp' '*.h' '*.hpp' '*.cc' || true)
+          else
+            echo "No base_ref (workflow_dispatch) — running clang-format on whole tree"
+            OUTPUT=$(git clang-format --diff $(git rev-list --max-parents=0 HEAD | head -1) -- '*.cpp' '*.h' '*.hpp' '*.cc' || true)
+          fi
 
           if [ -z "$OUTPUT" ] || [ "$OUTPUT" = "no modified files to format" ] || [ "$OUTPUT" = "clang-format did not modify any files" ]; then
             echo "clang-format: clean"
@@ -83,9 +91,6 @@ jobs:
 
       - name: Run clang-tidy on changed lines
         run: |
-          BASE_SHA=$(git merge-base origin/${{ github.base_ref }} HEAD)
-          echo "Comparing against merge-base: $BASE_SHA"
-
           # clang-tidy-diff.py ships with clang-tidy; runs tidy only on changed lines.
           DIFF_SCRIPT=$(dpkg -L clang-tidy-15 | grep clang-tidy-diff.py | head -1)
           if [ -z "$DIFF_SCRIPT" ]; then
@@ -93,17 +98,42 @@ jobs:
           fi
           echo "Using: $DIFF_SCRIPT"
 
+          if [ -n "${{ github.base_ref }}" ]; then
+            BASE_SHA=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+            echo "Comparing against merge-base: $BASE_SHA"
+            git diff -U0 "$BASE_SHA" -- 'src/*.cpp' 'src/*.h' \
+              ':(exclude)src/json/nlohmann_json.hpp' \
+              ':(exclude)src/leveldb/*' \
+              ':(exclude)src/lz4/*' \
+              ':(exclude)src/tor/tor-src/*' > /tmp/changes.diff
+          else
+            echo "No base_ref (workflow_dispatch) — running clang-tidy on whole tree"
+            git diff -U0 -- $(git rev-list --max-parents=0 HEAD | head -1)..HEAD -- 'src/*.cpp' 'src/*.h' \
+              ':(exclude)src/json/nlohmann_json.hpp' \
+              ':(exclude)src/leveldb/*' \
+              ':(exclude)src/lz4/*' \
+              ':(exclude)src/tor/tor-src/*' > /tmp/changes.diff || true
+            # If the initial commit was so old that the diff is empty, fall back to HEAD vs HEAD~100
+            if [ ! -s /tmp/changes.diff ]; then
+              git diff -U0 HEAD~100..HEAD -- 'src/*.cpp' 'src/*.h' \
+                ':(exclude)src/json/nlohmann_json.hpp' \
+                ':(exclude)src/leveldb/*' \
+                ':(exclude)src/lz4/*' \
+                ':(exclude)src/tor/tor-src/*' > /tmp/changes.diff || true
+            fi
+          fi
+
+          if [ ! -s /tmp/changes.diff ]; then
+            echo "No changes to lint in dispatch context — skipping"
+            exit 0
+          fi
+
           # -p1 strips the leading "a/"/"b/" from git diff paths.
           # -path=build points clang-tidy at compile_commands.json.
           # -iregex restricts to project sources (not vendored).
-          git diff -U0 "$BASE_SHA" -- 'src/*.cpp' 'src/*.h' \
-            ':(exclude)src/json/nlohmann_json.hpp' \
-            ':(exclude)src/leveldb/*' \
-            ':(exclude)src/lz4/*' \
-            ':(exclude)src/tor/tor-src/*' \
-            | python3 "$DIFF_SCRIPT" -p1 -path build \
-                -iregex '.*\.(cpp|cc|h|hpp)$' \
-                -j$(nproc) || EXIT=$?
+          cat /tmp/changes.diff | python3 "$DIFF_SCRIPT" -p1 -path build \
+              -iregex '.*\.(cpp|cc|h|hpp)$' \
+              -j$(nproc) || EXIT=$?
 
           # Warn-only initially. Flip this to `exit ${EXIT:-0}` once we're clean.
           exit 0

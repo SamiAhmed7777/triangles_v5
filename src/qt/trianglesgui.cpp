@@ -32,6 +32,7 @@
 #include "guiconstants.h"
 #include "askpassphrasedialog.h"
 #include "hdseeddialog.h"
+#include "outlinedlabel.h"
 #include "notificator.h"
 #include "guiutil.h"
 #include "rpcconsole.h"
@@ -349,7 +350,6 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     labelOnionAddress->setCursor(Qt::PointingHandCursor);
     labelOnionAddress->installEventFilter(this);
 
-    // I2P address, stacked directly above the .onion address (click to copy)
     labelI2PAddress = ui->label_i2p;
     labelI2PAddress->setVisible(false);
     labelI2PAddress->setCursor(Qt::PointingHandCursor);
@@ -1896,16 +1896,20 @@ void TrianglesGUI::updateHDStatus()
     }
 
     if (fHD) {
-        labelHdIcon->setStyleSheet("color: #f26522; font-weight: bold;");
+        // Both letters outlined in the brand red, 3px stroke (matches the
+        // triangles beside it).
+        labelHdIcon->setOutlineColor(QColor("#f26522"));
+        labelHdIcon->setOutlineWidth(3);
         labelHdIcon->setToolTip(tr("HD wallet: BIP39 seed active. Backup your seed phrase — individual keys alone will not restore this wallet."));
     } else {
-        labelHdIcon->setStyleSheet("color: #555555; font-weight: bold;");
+        // Greyed-out (dim) badge until the user runs hdnew.
+        labelHdIcon->setOutlineColor(QColor("#555555"));
+        labelHdIcon->setOutlineWidth(3);
         labelHdIcon->setToolTip(tr("Non-HD wallet: backup each address key separately. Use hdnew to upgrade to an HD seed."));
     }
     labelHdIcon->setText(QStringLiteral("HD"));
     labelHdIcon->setVisible(true);
 }
-
 
 void TrianglesGUI::on_bHelp_clicked()
 {    

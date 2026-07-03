@@ -1664,13 +1664,23 @@ QProgressBar::chunk {
           </widget>
          </item>
          <item>
-          <widget class="QLabel" name="label_hd">
+          <widget class="OutlinedLabel" name="label_hd">
            <property name="font">
             <font>
              <pointsize>9</pointsize>
              <weight>75</weight>
              <bold>true</bold>
             </font>
+           </property>
+           <property name="outlineColor">
+            <color>
+             <red>242</red>
+             <green>101</green>
+             <blue>34</blue>
+            </color>
+           </property>
+           <property name="outlineWidth">
+            <number>3</number>
            </property>
            <property name="toolTip">
             <string>HD (BIP39) wallet seed status</string>
@@ -1759,6 +1769,13 @@ QProgressBar::chunk {
   </widget>
  </widget>
  <layoutdefault spacing="6" margin="11"/>
+ <customwidgets>
+  <customwidget>
+   <class>OutlinedLabel</class>
+   <extends>QLabel</extends>
+   <header>qt/outlinedlabel.h</header>
+  </customwidget>
+ </customwidgets>
  <resources>
   <include location="../triangles.qrc"/>
  </resources>
