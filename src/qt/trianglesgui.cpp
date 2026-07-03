@@ -350,7 +350,6 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     labelOnionAddress->setCursor(Qt::PointingHandCursor);
     labelOnionAddress->installEventFilter(this);
 
-    // I2P address, stacked directly above the .onion address (click to copy)
     labelI2PAddress = ui->label_i2p;
     labelI2PAddress->setVisible(false);
     labelI2PAddress->setCursor(Qt::PointingHandCursor);
