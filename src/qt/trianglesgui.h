@@ -6,6 +6,8 @@
 #include <QMap>
 #include <QBitmap>
 
+class OutlinedLabel;
+
 class TransactionTableModel;
 class ClientModel;
 class WalletModel;
@@ -114,7 +116,7 @@ private:
     QLabel *labelV3Icon;
     QLabel *labelI2PIcon;
     QLabel *labelTorIcon;
-    QLabel *labelHdIcon;
+    OutlinedLabel *labelHdIcon;
     QLabel *progressBarLabel;
     QProgressBar *progressBar;
 
