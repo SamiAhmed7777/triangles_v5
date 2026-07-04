@@ -288,9 +288,11 @@ jobs:
       - name: Download Tor
         # Resilient download: archive.torproject.org occasionally times out
         # from CI egress (observed 2026-07-03: macOS job exit code 6 after
-        # exactly 30s of curl hang). Retries cover transient connection
-        # drops; -SkipHttpErrorCheck surfaces HTTP error bodies so the next
-        # failure isn't silent.
+        # exactly 30s of curl hang). Retries cover transient connection drops;
+        # size check rejects 0-byte "200 OK" responses from broken mirrors.
+        # NOTE: Invoke-WebRequest on PowerShell 5.1 (default on Windows-latest
+        # runners) does NOT accept -ConnectionTimeout/-OperationTimeout — those
+        # are PowerShell 7+. We rely on the retry loop + size check only.
         shell: powershell
         run: |
           $TOR_VERSION = "15.0.9"
@@ -298,21 +300,25 @@ jobs:
           $torPath = "tor-bundle.tar.gz"
           $attempts = 0
           $maxAttempts = 3
-          while ($attempts -lt $maxAttempts) {
+          $downloaded = $false
+          while ($attempts -lt $maxAttempts -and -not $downloaded) {
             $attempts++
             try {
-              Invoke-WebRequest -Uri $TOR_URL -OutFile $torPath -UseBasicParsing `
-                -ConnectionTimeout 15 -OperationTimeout 120
+              if (Test-Path $torPath) { Remove-Item $torPath -ErrorAction SilentlyContinue }
+              Invoke-WebRequest -Uri $TOR_URL -OutFile $torPath -UseBasicParsing
               $size = (Get-Item $torPath).Length
-              if ($size -gt 1MB) { break }
-              Write-Host "Download too small ($size bytes), retrying..."
-              Remove-Item $torPath -ErrorAction SilentlyContinue
+              if ($size -gt 1MB) {
+                Write-Host "Downloaded $size bytes on attempt $attempts"
+                $downloaded = $true
+              } else {
+                Write-Host "Download too small ($size bytes), retrying..."
+              }
             } catch {
               Write-Host "Download attempt $attempts failed: $_"
-              if ($attempts -ge $maxAttempts) { throw }
               Start-Sleep -Seconds 5
             }
           }
+          if (-not $downloaded) { throw "Tor bundle download failed after $maxAttempts attempts" }
           New-Item -ItemType Directory -Path tor-extract -Force
           tar -xzf tor-bundle.tar.gz -C tor-extract
           New-Item -ItemType Directory -Path tor-files -Force
@@ -410,7 +416,11 @@ jobs:
       - name: Bundle Tor for daemon
         # Resilient download: archive.torproject.org occasionally times out
         # from CI egress (observed 2026-07-03: macOS job exit code 6 after
-        # exactly 30s of curl hang). Retries cover transient connection drops.
+        # exactly 30s of curl hang). Retries cover transient connection drops;
+        # size check rejects 0-byte "200 OK" responses from broken mirrors.
+        # NOTE: Invoke-WebRequest on PowerShell 5.1 (default on Windows-latest
+        # runners) does NOT accept -ConnectionTimeout/-OperationTimeout — those
+        # are PowerShell 7+. We rely on the retry loop + size check only.
         shell: powershell
         run: |
           $TOR_VERSION = "15.0.9"
@@ -418,21 +428,25 @@ jobs:
           $torPath = "tor-bundle.tar.gz"
           $attempts = 0
           $maxAttempts = 3
-          while ($attempts -lt $maxAttempts) {
+          $downloaded = $false
+          while ($attempts -lt $maxAttempts -and -not $downloaded) {
             $attempts++
             try {
-              Invoke-WebRequest -Uri $TOR_URL -OutFile $torPath -UseBasicParsing `
-                -ConnectionTimeout 15 -OperationTimeout 120
+              if (Test-Path $torPath) { Remove-Item $torPath -ErrorAction SilentlyContinue }
+              Invoke-WebRequest -Uri $TOR_URL -OutFile $torPath -UseBasicParsing
               $size = (Get-Item $torPath).Length
-              if ($size -gt 1MB) { break }
-              Write-Host "Download too small ($size bytes), retrying..."
-              Remove-Item $torPath -ErrorAction SilentlyContinue
+              if ($size -gt 1MB) {
+                Write-Host "Downloaded $size bytes on attempt $attempts"
+                $downloaded = $true
+              } else {
+                Write-Host "Download too small ($size bytes), retrying..."
+              }
             } catch {
               Write-Host "Download attempt $attempts failed: $_"
-              if ($attempts -ge $maxAttempts) { throw }
               Start-Sleep -Seconds 5
             }
           }
+          if (-not $downloaded) { throw "Tor bundle download failed after $maxAttempts attempts" }
           New-Item -ItemType Directory -Path tor-extract -Force
           tar -xzf tor-bundle.tar.gz -C tor-extract
           Copy-Item -Recurse tor-extract/tor/* daemon-dist/tor/
