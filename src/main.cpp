@@ -1491,29 +1491,19 @@ int64_t GetProofOfWorkReward(int64_t nFees)
 // miner's coin stake reward based on coin age spent (coin-days)
 int64_t GetProofOfStakeReward(int64_t nCoinAge, int64_t nFees)
 {
-    int64_t nRewardCoinYear = MAX_TRI_PROOF_OF_STAKE;
+    int64_t nRewardCoinYear;
 
-    // FIX (2026-07-04, second iteration): Preserve exact linear proportionality.
-    //
-    // The naive formula `(nCoinAge / COIN) * MAX_TRI_PROOF_OF_STAKE / 365`
-    // breaks proportionality because the final /365 truncation rounds
-    // differently for nearby N values. Example: (100*COIN) → 9041095, but
-    // (200*COIN) → 18082191 ≠ 2 * 9041095 = 18082190.
-    //
-    // To get exact doubling we factor out the 2: instead of computing
-    //   n * MAX_RATE / 365
-    // we compute
-    //   (n * MAX_RATE * 2 + 365) / (365 * 2)   — rounded division
-    // which is the standard "round to nearest" integer division. Doubling
-    // n now doubles the dividend exactly, so the result doubles (modulo
-    // the rounding carrying once when the truncation is at the half).
-    //
-    // For practical stake sizes (whole-coin, single-digit to six-digit
-    // coin counts) this matches the prior reward within ±1 and fixes the
-    // off-by-one proportionality bug.
-    int64_t nWholeCoinAge = nCoinAge / COIN;
-    int64_t nNumerator = nWholeCoinAge * nRewardCoinYear * 2 + 365;
-    int64_t nSubsidy = nNumerator / (365 * 2);
+    nRewardCoinYear = MAX_TRI_PROOF_OF_STAKE;
+
+    CBigNum bnSubsidy;
+    bnSubsidy.SetCompact(0);
+    bnSubsidy = nCoinAge;
+    bnSubsidy *= nRewardCoinYear;
+    bnSubsidy /= 365;
+    bnSubsidy /= COIN;
+
+    int64_t nSubsidy = bnSubsidy.getuint64();
+
 
     if (fDebug && GetBoolArg("-printcreation"))
         printf("GetProofOfStakeReward(): create=%s nCoinAge=%" PRId64 "\n", FormatMoney(nSubsidy).c_str(), nCoinAge);
