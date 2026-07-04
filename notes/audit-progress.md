@@ -304,3 +304,45 @@ it MUST be keyed on the full (sighash, sig, pubkey) triple -- keying on
 pubkey LENGTH only (the state after just the Set/Get symmetry fix) causes
 false-positive cache hits and would accept invalid signatures. That is a
 security change and needs explicit review; do not enable casually.
+
+---
+## 2026-07-04 ~15:45 UTC -- Claude, chaindb / txdb audit
+
+Reviewed the remaining unexplored areas (chaindb runtime + txdb backends +
+leveldb->rocksdb migration). NO bugs found. Details:
+
+### chaindb_runtime_tests.cpp -- healthy
+16 test cases across chaindb_backend_selection, rocksdb_wrapper (12 cases:
+raw read/write, erase idempotency, transactional batch commit/abort,
+within-batch read/erase visibility, sorted iteration, block-index record
+roundtrip, close/reopen persistence) and chaindb_wipe (+ 2 migration-marker
+cases). All pass. (I briefly mis-thought the rocksdb_wrapper suite was
+unregistered -- that was just my grep filter not matching the suite name;
+it is registered and runs.)
+
+### Break-on-prefix pattern is CORRECT in the txdb layer
+LoadBlockIndex (txdb-leveldb.cpp:356) and SumUtxoValues (txdb-base.cpp)
+both Seek to a type prefix then break when strType changes. This is SAFE
+here because leveldb/rocksdb store keys in sorted bytewise order, so all
+records of a given type are contiguous. This is the SAME pattern that was
+WRONG in walletdb ListAccountCreditDebit -- confirming the walletdb bug root
+cause: the ordered-store break idiom was ported onto SQLite, whose cursor
+scan is unordered. The txdb code itself is fine.
+
+### leveldb->rocksdb migration (chaindb_migrate.cpp) -- carefully done
+Byte-for-byte raw record copy (order preserved since both backends are
+bytewise-ordered), batched commits every 100k records, and post-migration
+verification via CollectStats/StatsMatch (record count, UTXO count + value
+sum, best-chain hash, dbformat). Iterator lifetime and marker-removal both
+have documented root-cause fixes (W2, H4). SumUtxoValues is a shared
+CTxDBBase method, so both backends compute the UTXO sum identically.
+
+### Coverage gap (not a bug) -- for a future session
+There is no DIRECT leveldb-vs-rocksdb equivalence test (write the same
+records to both, diff full iteration). Risk is low because each backend is
+tested separately and the migration does runtime stats-equivalence
+verification, but a byte-level equivalence unit test would be worth adding.
+StatsMatch also compares aggregates (counts/sums/best hash), not every
+key/value byte -- adequate but not exhaustive.
+
+No code changes in this pass. Branch unchanged; full suite still GREEN.
