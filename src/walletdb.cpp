@@ -200,7 +200,12 @@ DBErrors CWalletDB::ReorderTransactions(CWallet* pwallet)
         txByTime.insert(std::make_pair(wtx->nTimeReceived, TxPair(wtx, (CAccountingEntry*)0)));
     }
     std::list<CAccountingEntry> acentries;
-    ListAccountCreditDebit("", acentries);
+    // Must reorder across ALL accounts, not just the default one. "*"
+    // is the all-accounts sentinel (see ListAccountCreditDebit); passing
+    // "" would restrict the reorder to the default account and leave
+    // named-account entries stuck at nOrderPos == -1. (Matches the "*"
+    // used by the listtransactions RPC path and upstream Bitcoin.)
+    ListAccountCreditDebit("*", acentries);
     for (CAccountingEntry& entry : acentries) {
         txByTime.insert(std::make_pair(entry.nTime, TxPair((CWalletTx*)0, &entry)));
     }
