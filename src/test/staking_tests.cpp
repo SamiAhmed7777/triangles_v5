@@ -122,11 +122,22 @@ BOOST_AUTO_TEST_CASE(stake_modifier_checkpoints_testnet_always_passes)
 
 BOOST_AUTO_TEST_CASE(pos_reward_proportional_to_coinage)
 {
-    // Double the coin age should give double the reward
+    // Doubling the coin age roughly doubles the reward. The consensus
+    // formula GetProofOfStakeReward uses integer TRUNCATING division
+    // (nCoinAge * rate / 365 / COIN), so exact doubling does not hold at
+    // every boundary: e.g. r1 = 90410 but r2 = 180821 = 2*r1 + 1, because
+    // the /365 truncation lands one unit differently. That 1-unit rounding
+    // is the on-chain behavior; "fixing" it in consensus code would change
+    // emission and hard-fork the network, so the test tolerates a 1-unit
+    // difference instead.
     int64_t r1 = GetProofOfStakeReward(100 * COIN, 0);
     int64_t r2 = GetProofOfStakeReward(200 * COIN, 0);
 
-    BOOST_CHECK_EQUAL(r2, r1 * 2);
+    int64_t diff = r2 - r1 * 2;
+    if (diff < 0) diff = -diff;
+    BOOST_CHECK_MESSAGE(diff <= 1,
+        strprintf("reward not ~proportional: r1=%d r2=%d diff=%d", r1, r2, diff));
+    BOOST_CHECK(r1 > 0 && r2 > 0);
 }
 
 BOOST_AUTO_TEST_CASE(pos_reward_large_coinage)
