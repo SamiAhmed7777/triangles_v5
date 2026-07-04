@@ -431,12 +431,12 @@
   <property name="styleSheet">
    <string notr="true">#SendMessagesEntry{
 	background-color: #000;
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	}
 
 QLineEdit, QPlainTextEdit {
 	background-color: #1c1c1c;
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	}</string>
   </property>
   <property name="frameShape">
@@ -468,7 +468,7 @@ QLineEdit, QPlainTextEdit {
        <property name="styleSheet">
         <string notr="true">QLineEdit {
 	background-color: #1c1c1c;
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	}</string>
        </property>
        <property name="maxLength">
@@ -490,15 +490,15 @@ QLineEdit, QPlainTextEdit {
 
 QToolButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 	}
 
 QToolButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QToolButton:!enabled {
-	color: #61280E;
+	color: #3d0e04;
 	}</string>
        </property>
        <property name="text">
@@ -527,15 +527,15 @@ QToolButton:!enabled {
 
 QToolButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 	}
 
 QToolButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QToolButton:!enabled {
-	color: #61280E;
+	color: #3d0e04;
 	}</string>
        </property>
        <property name="text">
@@ -564,15 +564,15 @@ QToolButton:!enabled {
 
 QToolButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 	}
 
 QToolButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QToolButton:!enabled {
-	color: #61280E;
+	color: #3d0e04;
 	}</string>
        </property>
        <property name="text">
@@ -589,7 +589,7 @@ QToolButton:!enabled {
    <item row="6" column="0">
     <widget class="QLabel" name="messageLabel">
      <property name="styleSheet">
-      <string notr="true">color: #f26522;</string>
+      <string notr="true">color: #e32105;</string>
      </property>
      <property name="text">
       <string>&amp;Message:</string>
@@ -605,7 +605,7 @@ QToolButton:!enabled {
    <item row="3" column="0">
     <widget class="QLabel" name="label_2">
      <property name="styleSheet">
-      <string notr="true">color: #f26522;</string>
+      <string notr="true">color: #e32105;</string>
      </property>
      <property name="text">
       <string>Send &amp;To:</string>
@@ -744,7 +744,7 @@ QToolButton:!enabled {
      <property name="styleSheet">
       <string notr="true">QLineEdit {
 	background-color: #1c1c1c;
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	}</string>
      </property>
     </widget>
@@ -752,7 +752,7 @@ QToolButton:!enabled {
    <item row="4" column="0">
     <widget class="QLabel" name="label_4">
      <property name="styleSheet">
-      <string notr="true">color: #f26522;</string>
+      <string notr="true">color: #e32105;</string>
      </property>
      <property name="text">
       <string>&amp;Label:</string>
@@ -768,7 +768,7 @@ QToolButton:!enabled {
    <item row="5" column="0">
     <widget class="QLabel" name="publicKeyLabel">
      <property name="styleSheet">
-      <string notr="true">color: #f26522;</string>
+      <string notr="true">color: #e32105;</string>
      </property>
      <property name="text">
       <string>&amp;Public Key:</string>
@@ -789,7 +789,7 @@ QToolButton:!enabled {
      <property name="styleSheet">
       <string notr="true">QLineEdit {
 	background-color: #1c1c1c;
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	}</string>
      </property>
     </widget>

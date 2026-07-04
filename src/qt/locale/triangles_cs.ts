@@ -1411,10 +1411,10 @@ This label turns red, if the priority is smaller than &quot;medium&quot;.
         <location line="+63"/>
         <source>&lt;head&gt;
 &lt;style type=&quot;text/css&quot; media=&quot;screen&quot;&gt;
-a:link { color:#f26522; text-decoration: none;font-weight:bold; }
-a:visited { color:#f26522; text-decoration: none; }
-a:hover { color:#f26522; text-decoration: underline; }
-a:active { color:#f26522; text-decoration: underline; }
+a:link { color:#e32105; text-decoration: none;font-weight:bold; }
+a:visited { color:#e32105; text-decoration: none; }
+a:hover { color:#e32105; text-decoration: underline; }
+a:active { color:#e32105; text-decoration: underline; }
 &lt;/style&gt;
 &lt;/head&gt;
 &lt;body&gt;
@@ -1425,10 +1425,10 @@ a:active { color:#f26522; text-decoration: underline; }
         <location line="+25"/>
         <source>&lt;head&gt;
 &lt;style type=&quot;text/css&quot; media=&quot;screen&quot;&gt;
-a:link { color:#f26522; text-decoration: none;font-weight:bold; }
-a:visited { color:#f26522; text-decoration: none; }
-a:hover { color:#f26522; text-decoration: underline; }
-a:active { color:#f26522; text-decoration: underline; }
+a:link { color:#e32105; text-decoration: none;font-weight:bold; }
+a:visited { color:#e32105; text-decoration: none; }
+a:hover { color:#e32105; text-decoration: underline; }
+a:active { color:#e32105; text-decoration: underline; }
 &lt;/style&gt;
 &lt;/head&gt;
 &lt;body&gt;
@@ -1439,10 +1439,10 @@ a:active { color:#f26522; text-decoration: underline; }
         <location line="+28"/>
         <source>&lt;head&gt;
 &lt;style type=&quot;text/css&quot; media=&quot;screen&quot;&gt;
-a:link { color:#f26522; text-decoration: none;font-weight:bold; }
-a:visited { color:#f26522; text-decoration: none; }
-a:hover { color:#f26522; text-decoration: underline; }
-a:active { color:#f26522; text-decoration: underline; }
+a:link { color:#e32105; text-decoration: none;font-weight:bold; }
+a:visited { color:#e32105; text-decoration: none; }
+a:hover { color:#e32105; text-decoration: underline; }
+a:active { color:#e32105; text-decoration: underline; }
 &lt;/style&gt;
 &lt;/head&gt;
 &lt;body&gt;
@@ -3668,7 +3668,7 @@ Pokud konfigurační soubor ještě neexistuje, vytvoř ho tak, aby ho mohl čí
     </message>
     <message>
         <location line="+108"/>
-        <source>&lt;font color=&apos;#f26522&apos;&gt;This transaction is over the size limit.  You can still send it for a fee of %1, which goes to the nodes that process your transaction and helps to support the network.  &lt;/font&gt;Do you want to pay the fee?</source>
+        <source>&lt;font color=&apos;#e32105&apos;&gt;This transaction is over the size limit.  You can still send it for a fee of %1, which goes to the nodes that process your transaction and helps to support the network.  &lt;/font&gt;Do you want to pay the fee?</source>
         <translation type="unfinished"></translation>
     </message>
     <message>

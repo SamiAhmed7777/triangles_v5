@@ -44,7 +44,7 @@ OptionsDialog::OptionsDialog(QWidget *parent) :
 
     QGroupBox *groupDataDir = new QGroupBox(tr("Data Directory"), this);
     groupDataDir->setStyleSheet(
-        "QGroupBox { border: 1px solid #61280E; margin-top: 8px; padding-top: 16px; color: #f26522; }"
+        "QGroupBox { border: 1px solid #3d0e04; margin-top: 8px; padding-top: 16px; color: #e32105; }"
         "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 3px; }");
 
     QVBoxLayout *dataDirLayout = new QVBoxLayout(groupDataDir);
@@ -52,13 +52,13 @@ OptionsDialog::OptionsDialog(QWidget *parent) :
     QHBoxLayout *dataDirPathLayout = new QHBoxLayout();
     dataDirPath = new QLineEdit(m_currentDataDir, groupDataDir);
     dataDirPath->setReadOnly(true);
-    dataDirPath->setStyleSheet("QLineEdit { background-color: #1c1c1c; border: 1px solid #f26522; color: #f26522; padding: 2px; }");
+    dataDirPath->setStyleSheet("QLineEdit { background-color: #1c1c1c; border: 1px solid #e32105; color: #e32105; padding: 2px; }");
 
     QPushButton *dataDirBrowseButton = new QPushButton(tr("Browse..."), groupDataDir);
     dataDirBrowseButton->setStyleSheet(
-        "QPushButton { background-color: #000; color: #f26522; border: 1px solid #f26522; padding: 2px 12px; min-height: 20px; }"
-        "QPushButton:hover { background-color: #61280E; }"
-        "QPushButton:pressed:flat { color: #000; background-color: #f26522; }");
+        "QPushButton { background-color: #000; color: #e32105; border: 1px solid #e32105; padding: 2px 12px; min-height: 20px; }"
+        "QPushButton:hover { background-color: #3d0e04; }"
+        "QPushButton:pressed:flat { color: #000; background-color: #e32105; }");
 
     dataDirPathLayout->addWidget(dataDirPath);
     dataDirPathLayout->addWidget(dataDirBrowseButton);
@@ -270,10 +270,10 @@ void OptionsDialog::showRestartWarning_Proxy()
         msgBox->setIconPixmap(QPixmap(":/msgbox/warning"));
         msgBox->setStyleSheet("QMessageBox { border: 2px solid #e22104;}");
         msgBox->button(QMessageBox::Ok)->setStyleSheet("\
-                          QMessageBox QPushButton {background-color: #000;color: #f26522;border: 1px solid #f26522;\
+                          QMessageBox QPushButton {background-color: #000;color: #e32105;border: 1px solid #e32105;\
                               min-width: 120px;max-width: 120px;max-height: 20px;min-height: 20px;}\
-                          QMessageBox QPushButton:hover {background-color: #61280E;}\
-                          QMessageBox QPushButton:pressed:flat {color: #000;background-color: #f26522;}\
+                          QMessageBox QPushButton:hover {background-color: #3d0e04;}\
+                          QMessageBox QPushButton:pressed:flat {color: #000;background-color: #e32105;}\
                           ");
         msgBox->exec();
                                   
@@ -295,10 +295,10 @@ void OptionsDialog::showRestartWarning_Lang()
         msgBox->setIconPixmap(QPixmap(":/msgbox/warning"));
         msgBox->setStyleSheet("QMessageBox { border: 2px solid #e22104;}");
         msgBox->button(QMessageBox::Ok)->setStyleSheet("\
-                          QMessageBox QPushButton {background-color: #000;color: #f26522;border: 1px solid #f26522;\
+                          QMessageBox QPushButton {background-color: #000;color: #e32105;border: 1px solid #e32105;\
                               min-width: 120px;max-width: 120px;max-height: 20px;min-height: 20px;}\
-                          QMessageBox QPushButton:hover {background-color: #61280E;}\
-                          QMessageBox QPushButton:pressed:flat {color: #000;background-color: #f26522;}\
+                          QMessageBox QPushButton:hover {background-color: #3d0e04;}\
+                          QMessageBox QPushButton:pressed:flat {color: #000;background-color: #e32105;}\
                           ");
         msgBox->exec();
 
@@ -460,16 +460,16 @@ bool OptionsDialog::handleDataDirChange()
                    .arg(m_currentDataDir).arg(m_pendingDataDir));
     msgBox.setIcon(QMessageBox::Information);
     msgBox.setIconPixmap(QPixmap(":/msgbox/information"));
-    msgBox.setStyleSheet("QMessageBox { border: 2px solid #f26522; background-color: #000; color: #f26522; }");
+    msgBox.setStyleSheet("QMessageBox { border: 2px solid #e32105; background-color: #000; color: #e32105; }");
 
     QPushButton *restartBtn = msgBox.addButton(tr("Restart Now"), QMessageBox::AcceptRole);
     QPushButton *laterBtn = msgBox.addButton(tr("Later"), QMessageBox::RejectRole);
 
     QString btnStyle =
-        "QPushButton { background-color: #000; color: #f26522; border: 1px solid #f26522; "
+        "QPushButton { background-color: #000; color: #e32105; border: 1px solid #e32105; "
         "min-width: 120px; max-width: 120px; max-height: 20px; min-height: 20px; }"
-        "QPushButton:hover { background-color: #61280E; }"
-        "QPushButton:pressed:flat { color: #000; background-color: #f26522; }";
+        "QPushButton:hover { background-color: #3d0e04; }"
+        "QPushButton:pressed:flat { color: #000; background-color: #e32105; }";
     restartBtn->setStyleSheet(btnStyle);
     laterBtn->setStyleSheet(btnStyle);
 

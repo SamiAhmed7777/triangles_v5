@@ -122,17 +122,17 @@ void AskPassphraseDialog::accept()
         msgBox->setIconPixmap(QPixmap(":/msgbox/question"));
         msgBox->setStyleSheet("QMessageBox { border: 2px solid #e22104;}");
         msgBox->button(QMessageBox::Yes)->setStyleSheet("\
-                                  QMessageBox QPushButton {background-color: #000;color: #f26522;border: 1px solid #f26522;\
+                                  QMessageBox QPushButton {background-color: #000;color: #e32105;border: 1px solid #e32105;\
                                       min-width: 120px;max-width: 120px;max-height: 20px;min-height: 20px;}\
-                                  QMessageBox QPushButton:hover {background-color: #61280E;}\
-                                  QMessageBox QPushButton:pressed:flat {color: #000;background-color: #f26522;}\
+                                  QMessageBox QPushButton:hover {background-color: #3d0e04;}\
+                                  QMessageBox QPushButton:pressed:flat {color: #000;background-color: #e32105;}\
                                   ");
 
         msgBox->button(QMessageBox::Cancel)->setStyleSheet("\
-                                  QMessageBox QPushButton {background-color: #000;color: #f26522;border: 1px solid #f26522;\
+                                  QMessageBox QPushButton {background-color: #000;color: #e32105;border: 1px solid #e32105;\
                                       min-width: 120px;max-width: 120px;max-height: 20px;min-height: 20px;}\
-                                  QMessageBox QPushButton:hover {background-color: #61280E;}\
-                                  QMessageBox QPushButton:pressed:flat {color: #000;background-color: #f26522;}\
+                                  QMessageBox QPushButton:hover {background-color: #3d0e04;}\
+                                  QMessageBox QPushButton:pressed:flat {color: #000;background-color: #e32105;}\
                                   ");
         int retval = msgBox->exec();
 
@@ -161,10 +161,10 @@ void AskPassphraseDialog::accept()
                     msgBox->setIconPixmap(QPixmap(":/msgbox/warning"));
                     msgBox->setStyleSheet("QMessageBox { border: 2px solid #e22104;}");
                     msgBox->button(QMessageBox::Ok)->setStyleSheet("\
-                                      QMessageBox QPushButton {background-color: #000;color: #f26522;border: 1px solid #f26522;\
+                                      QMessageBox QPushButton {background-color: #000;color: #e32105;border: 1px solid #e32105;\
                                           min-width: 120px;max-width: 120px;max-height: 20px;min-height: 20px;}\
-                                      QMessageBox QPushButton:hover {background-color: #61280E;}\
-                                      QMessageBox QPushButton:pressed:flat {color: #000;background-color: #f26522;}\
+                                      QMessageBox QPushButton:hover {background-color: #3d0e04;}\
+                                      QMessageBox QPushButton:pressed:flat {color: #000;background-color: #e32105;}\
                                       ");
 
                     msgBox->exec();
@@ -183,10 +183,10 @@ void AskPassphraseDialog::accept()
                     msgBox->setIconPixmap(QPixmap(":/msgbox/critical"));
                     msgBox->setStyleSheet("QMessageBox { border: 2px solid #e22104;}");
                     msgBox->button(QMessageBox::Ok)->setStyleSheet("\
-                                      QMessageBox QPushButton {background-color: #000;color: #f26522;border: 1px solid #f26522;\
+                                      QMessageBox QPushButton {background-color: #000;color: #e32105;border: 1px solid #e32105;\
                                           min-width: 120px;max-width: 120px;max-height: 20px;min-height: 20px;}\
-                                      QMessageBox QPushButton:hover {background-color: #61280E;}\
-                                      QMessageBox QPushButton:pressed:flat {color: #000;background-color: #f26522;}\
+                                      QMessageBox QPushButton:hover {background-color: #3d0e04;}\
+                                      QMessageBox QPushButton:pressed:flat {color: #000;background-color: #e32105;}\
                                       ");
 
                     msgBox->exec();
@@ -205,10 +205,10 @@ void AskPassphraseDialog::accept()
                 msgBox->setIconPixmap(QPixmap(":/msgbox/critical"));
                 msgBox->setStyleSheet("QMessageBox { border: 2px solid #e22104;}");
                 msgBox->button(QMessageBox::Ok)->setStyleSheet("\
-                                  QMessageBox QPushButton {background-color: #000;color: #f26522;border: 1px solid #f26522;\
+                                  QMessageBox QPushButton {background-color: #000;color: #e32105;border: 1px solid #e32105;\
                                       min-width: 120px;max-width: 120px;max-height: 20px;min-height: 20px;}\
-                                  QMessageBox QPushButton:hover {background-color: #61280E;}\
-                                  QMessageBox QPushButton:pressed:flat {color: #000;background-color: #f26522;}\
+                                  QMessageBox QPushButton:hover {background-color: #3d0e04;}\
+                                  QMessageBox QPushButton:pressed:flat {color: #000;background-color: #e32105;}\
                                   ");
 
                 msgBox->exec();
@@ -233,10 +233,10 @@ void AskPassphraseDialog::accept()
             msgBox->setIconPixmap(QPixmap(":/msgbox/critical"));
             msgBox->setStyleSheet("QMessageBox { border: 2px solid #e22104;}");
             msgBox->button(QMessageBox::Ok)->setStyleSheet("\
-                              QMessageBox QPushButton {background-color: #000;color: #f26522;border: 1px solid #f26522;\
+                              QMessageBox QPushButton {background-color: #000;color: #e32105;border: 1px solid #e32105;\
                                   min-width: 120px;max-width: 120px;max-height: 20px;min-height: 20px;}\
-                              QMessageBox QPushButton:hover {background-color: #61280E;}\
-                              QMessageBox QPushButton:pressed:flat {color: #000;background-color: #f26522;}\
+                              QMessageBox QPushButton:hover {background-color: #3d0e04;}\
+                              QMessageBox QPushButton:pressed:flat {color: #000;background-color: #e32105;}\
                               ");
 
             msgBox->exec();
@@ -259,10 +259,10 @@ void AskPassphraseDialog::accept()
             msgBox->setIconPixmap(QPixmap(":/msgbox/critical"));
             msgBox->setStyleSheet("QMessageBox { border: 2px solid #e22104;}");
             msgBox->button(QMessageBox::Ok)->setStyleSheet("\
-                              QMessageBox QPushButton {background-color: #000;color: #f26522;border: 1px solid #f26522;\
+                              QMessageBox QPushButton {background-color: #000;color: #e32105;border: 1px solid #e32105;\
                                   min-width: 120px;max-width: 120px;max-height: 20px;min-height: 20px;}\
-                              QMessageBox QPushButton:hover {background-color: #61280E;}\
-                              QMessageBox QPushButton:pressed:flat {color: #000;background-color: #f26522;}\
+                              QMessageBox QPushButton:hover {background-color: #3d0e04;}\
+                              QMessageBox QPushButton:pressed:flat {color: #000;background-color: #e32105;}\
                               ");
 
             msgBox->exec();
@@ -287,10 +287,10 @@ void AskPassphraseDialog::accept()
                 msgBox->setIconPixmap(QPixmap(":/msgbox/information"));
                 msgBox->setStyleSheet("QMessageBox { border: 2px solid #e22104;}");
                 msgBox->button(QMessageBox::Ok)->setStyleSheet("\
-                                  QMessageBox QPushButton {background-color: #000;color: #f26522;border: 1px solid #f26522;\
+                                  QMessageBox QPushButton {background-color: #000;color: #e32105;border: 1px solid #e32105;\
                                       min-width: 120px;max-width: 120px;max-height: 20px;min-height: 20px;}\
-                                  QMessageBox QPushButton:hover {background-color: #61280E;}\
-                                  QMessageBox QPushButton:pressed:flat {color: #000;background-color: #f26522;}\
+                                  QMessageBox QPushButton:hover {background-color: #3d0e04;}\
+                                  QMessageBox QPushButton:pressed:flat {color: #000;background-color: #e32105;}\
                                   ");
 
                 msgBox->exec();
@@ -309,10 +309,10 @@ void AskPassphraseDialog::accept()
                 msgBox->setIconPixmap(QPixmap(":/msgbox/critical"));
                 msgBox->setStyleSheet("QMessageBox { border: 2px solid #e22104;}");
                 msgBox->button(QMessageBox::Ok)->setStyleSheet("\
-                                  QMessageBox QPushButton {background-color: #000;color: #f26522;border: 1px solid #f26522;\
+                                  QMessageBox QPushButton {background-color: #000;color: #e32105;border: 1px solid #e32105;\
                                       min-width: 120px;max-width: 120px;max-height: 20px;min-height: 20px;}\
-                                  QMessageBox QPushButton:hover {background-color: #61280E;}\
-                                  QMessageBox QPushButton:pressed:flat {color: #000;background-color: #f26522;}\
+                                  QMessageBox QPushButton:hover {background-color: #3d0e04;}\
+                                  QMessageBox QPushButton:pressed:flat {color: #000;background-color: #e32105;}\
                                   ");
 
                 msgBox->exec();
@@ -330,10 +330,10 @@ void AskPassphraseDialog::accept()
             msgBox->setIconPixmap(QPixmap(":/msgbox/critical"));
             msgBox->setStyleSheet("QMessageBox { border: 2px solid #e22104;}");
             msgBox->button(QMessageBox::Ok)->setStyleSheet("\
-                              QMessageBox QPushButton {background-color: #000;color: #f26522;border: 1px solid #f26522;\
+                              QMessageBox QPushButton {background-color: #000;color: #e32105;border: 1px solid #e32105;\
                                   min-width: 120px;max-width: 120px;max-height: 20px;min-height: 20px;}\
-                              QMessageBox QPushButton:hover {background-color: #61280E;}\
-                              QMessageBox QPushButton:pressed:flat {color: #000;background-color: #f26522;}\
+                              QMessageBox QPushButton:hover {background-color: #3d0e04;}\
+                              QMessageBox QPushButton:pressed:flat {color: #000;background-color: #e32105;}\
                              ");
             msgBox->exec();
         }

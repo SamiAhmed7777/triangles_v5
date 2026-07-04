@@ -26,12 +26,12 @@
    <string>Passphrase Dialog</string>
   </property>
   <property name="styleSheet">
-   <string notr="true">color: #f26522;
+   <string notr="true">color: #e32105;
 background-color: #000;
 
 QLineEdit {
 	background-color: #1c1c1c;
-    border: 1px solid #f26522;
+    border: 1px solid #e32105;
 }
 
 
@@ -57,7 +57,7 @@ QLineEdit {
     <widget class="QFrame" name="frame">
      <property name="styleSheet">
       <string notr="true">#frame {
-	border: 2px solid #f26522;
+	border: 2px solid #e32105;
 }</string>
      </property>
      <property name="frameShape">
@@ -363,7 +363,7 @@ QPushButton:hover {
            <string notr="true">QLineEdit
 {
     background-color: #1c1c1c;
-    border: 1px solid #f26522;
+    border: 1px solid #e32105;
 }</string>
           </property>
           <property name="echoMode">
@@ -397,7 +397,7 @@ QPushButton:hover {
            <string notr="true">QLineEdit
 {
     background-color: #1c1c1c;
-    border: 1px solid #f26522;
+    border: 1px solid #e32105;
 }</string>
           </property>
           <property name="echoMode">
@@ -431,7 +431,7 @@ QPushButton:hover {
            <string notr="true">QLineEdit
 {
     background-color: #1c1c1c;
-    border: 1px solid #f26522;
+    border: 1px solid #e32105;
 }</string>
           </property>
           <property name="echoMode">
@@ -452,7 +452,7 @@ QPushButton:hover {
           </property>
           <property name="styleSheet">
            <string notr="true">QCheckBox::indicator { 
-	border:1px solid #f26522;
+	border:1px solid #e32105;
 	background-color: #000;
 	}
 
@@ -507,8 +507,8 @@ QCheckBox::indicator:checked {
           <property name="styleSheet">
            <string notr="true">QPushButton {
 	background-color: #000;
-	color: #f26522;
-	border: 1px solid #f26522;
+	color: #e32105;
+	border: 1px solid #e32105;
 	max-height: 20px;
 	min-height: 20px;
 	max-width: 120px;
@@ -516,18 +516,18 @@ QCheckBox::indicator:checked {
 }
 
 QPushButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 }
 
 QPushButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 }
 
 QPushButton:!enabled {
 	background-color: #000;
-	border: 1px solid #61280E;
-	color: #61280E;
+	border: 1px solid #3d0e04;
+	color: #3d0e04;
 }</string>
           </property>
           <property name="orientation">

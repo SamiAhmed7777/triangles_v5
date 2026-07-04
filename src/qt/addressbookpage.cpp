@@ -49,7 +49,7 @@ AddressBookPage::AddressBookPage(Mode mode, Tabs tab, QWidget *parent) :
         connect(ui->tableView, SIGNAL(doubleClicked(QModelIndex)), this, SLOT(accept()));
         ui->tableView->setEditTriggers(QAbstractItemView::NoEditTriggers);
         ui->tableView->setFocus();
-        ui->borderframe->setStyleSheet("#borderframe {border: 2px solid #f26522;}");
+        ui->borderframe->setStyleSheet("#borderframe {border: 2px solid #e32105;}");
         break;
     case ForEditing:
         ui->buttonBox->setVisible(false);
@@ -98,8 +98,8 @@ AddressBookPage::AddressBookPage(Mode mode, Tabs tab, QWidget *parent) :
         contextMenu->addAction(verifyMessageAction);
     contextMenu->setStyleSheet("QMenu {\
                                  background-color: #000; \
-                                 border: 1px solid #f26522;\
-                                 color: #f26522;\
+                                 border: 1px solid #e32105;\
+                                 color: #e32105;\
                              }\
                              \
                              QMenu::item {\
@@ -107,8 +107,8 @@ AddressBookPage::AddressBookPage(Mode mode, Tabs tab, QWidget *parent) :
                              }\
                              \
                              QMenu::item:selected {\
-                                 color: #f26522;\
-                                 background-color: #61280E;\
+                                 color: #e32105;\
+                                 background-color: #3d0e04;\
                              }\
                              ");
     // Connect signals for context menu actions

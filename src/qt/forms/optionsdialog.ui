@@ -14,7 +14,7 @@
    <string>Options</string>
   </property>
   <property name="styleSheet">
-   <string notr="true">color: #f26522;
+   <string notr="true">color: #e32105;
 	background-color: #000;
    </string>
   </property>
@@ -38,7 +38,7 @@
     <widget class="QFrame" name="borderframe">
      <property name="styleSheet">
       <string notr="true">#borderframe {
-	border: 2px solid #f26522;
+	border: 2px solid #e32105;
       	}</string>
      </property>
      <property name="frameShape">
@@ -153,7 +153,7 @@
        <widget class="QTabWidget" name="tabWidget">
         <property name="styleSheet">
          <string notr="true">QTabWidget::pane {
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
     	}
 
 QTabBar::tab   {
@@ -165,11 +165,11 @@ QTabBar::tab   {
                         
 
 QTabBar::tab:!selected {
-	color: #61280E;
+	color: #3d0e04;
 	margin-right: -1px;
-	border-left: 1px solid #61280E;
-	border-right: 1px solid #61280E;
-	border-top: 1px solid #61280E;
+	border-left: 1px solid #3d0e04;
+	border-right: 1px solid #3d0e04;
+	border-top: 1px solid #3d0e04;
 	}
 
 QTabBar::tab:!selected:last {
@@ -177,11 +177,11 @@ QTabBar::tab:!selected:last {
 	}
                         
 QTabBar::tab:selected {
-	color: #f26522;
+	color: #e32105;
 	margin-right: -1px;
-	border-left: 1px solid #f26522;
-	border-right: 1px solid #f26522;
-	border-top: 1px solid #f26522;
+	border-left: 1px solid #e32105;
+	border-right: 1px solid #e32105;
+	border-top: 1px solid #e32105;
 	}
 
 QTabBar::tab:selected:last {
@@ -189,25 +189,25 @@ QTabBar::tab:selected:last {
 	}
                         
 QTabBar::tab:!selected:hover {
-	background-color: #61280E;
-	color: #f26522;
+	background-color: #3d0e04;
+	color: #e32105;
 	}
 
 #transactionFee TrianglesAmountField {
 	background-color: #1c1c1c;
 	selection-background-color:#ff0000;
 	selection-color: #00ff00; 
-	border: 1px solid #f26522;
-	color:#f26522;
+	border: 1px solid #e32105;
+	color:#e32105;
 	}
 
 TrianglesAmountField QAbstractItemView {
 	background-color: #1c1c1c;
-	selection-background-color:#61280E;
+	selection-background-color:#3d0e04;
 	outline: 0px;
-	selection-color: #f26522; 
-	border: 1px solid #f26522;
-	color:#f26522;
+	selection-color: #e32105; 
+	border: 1px solid #e32105;
+	color:#e32105;
 	}</string>
         </property>
         <property name="tabPosition">
@@ -460,7 +460,7 @@ TrianglesAmountField QAbstractItemView {
                <enum>Qt::NoContextMenu</enum>
               </property>
               <property name="styleSheet">
-               <string notr="true">border: 1px solid #f26522;
+               <string notr="true">border: 1px solid #e32105;
 background-color: #1c1c1c;
 </string>
               </property>
@@ -720,15 +720,15 @@ background-color: #1c1c1c;
                <enum>Qt::NoContextMenu</enum>
               </property>
               <property name="styleSheet">
-               <string notr="true">border: 1px solid #f26522;
+               <string notr="true">border: 1px solid #e32105;
 	background-color: #1c1c1c;
 
 QAbstractItemView {
 	background-color: #1c1c1c;
-	selection-background-color:#61280E;
-	selection-color: #f26522; 
-	border: 1px solid #f26522;
-	color:#f26522;
+	selection-background-color:#3d0e04;
+	selection-color: #e32105; 
+	border: 1px solid #e32105;
+	color:#e32105;
 	}</string>
               </property>
              </widget>
@@ -755,7 +755,7 @@ QAbstractItemView {
             </property>
             <property name="styleSheet">
              <string notr="true">QCheckBox::indicator { 
-	border:1px solid #f26522;
+	border:1px solid #e32105;
 	background-color: #000;
 	}
 
@@ -776,7 +776,7 @@ QCheckBox::indicator:checked {
             </property>
             <property name="styleSheet">
              <string notr="true">QCheckBox::indicator { 
-	border:1px solid #f26522;
+	border:1px solid #e32105;
 	background-color: #000;
 	}
 
@@ -823,7 +823,7 @@ QCheckBox::indicator:checked {
           </property>
           <property name="styleSheet">
            <string notr="true">QCheckBox::indicator { 
-	border:1px solid #f26522;
+	border:1px solid #e32105;
 	background-color: #000;
 	}
 
@@ -850,7 +850,7 @@ QCheckBox::indicator:checked {
           </property>
           <property name="styleSheet">
            <string notr="true">QCheckBox::indicator { 
-	border:1px solid #f26522;
+	border:1px solid #e32105;
 	background-color: #000;
 	}
 
@@ -906,7 +906,7 @@ QCheckBox::indicator:checked {
              <property name="styleSheet">
               <string notr="true">QLineEdit {
 	background-color: #1c1c1c;
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	}</string>
              </property>
             </widget>
@@ -944,7 +944,7 @@ QCheckBox::indicator:checked {
              <property name="styleSheet">
               <string notr="true">QLineEdit {
 	background-color: #1c1c1c;
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	}</string>
              </property>
             </widget>
@@ -1237,7 +1237,7 @@ QCheckBox::indicator:checked {
              </property>
              <property name="styleSheet">
               <string notr="true">QComboBox {
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	background-color: #1c1c1c;
 	}
 
@@ -1246,7 +1246,7 @@ QComboBox::drop-down {
 	subcontrol-position: top right;
 	/*width: 15px;*/
 	border-left-width: 1px;
-	border-left-color: #f26522;
+	border-left-color: #e32105;
 	border-left-style: solid;
 	}
 
@@ -1256,10 +1256,10 @@ QComboBox::down-arrow {
 
 QComboBox QAbstractItemView {
 	background-color: #1c1c1c;
-	selection-background-color:#61280E;
-	selection-color: #f26522; 
-	border: 1px solid #f26522;
-	color:#f26522;
+	selection-background-color:#3d0e04;
+	selection-color: #e32105; 
+	border: 1px solid #e32105;
+	color:#e32105;
 	}</string>
              </property>
              <property name="editable">
@@ -1295,7 +1295,7 @@ QComboBox QAbstractItemView {
             </property>
             <property name="styleSheet">
              <string notr="true">QCheckBox::indicator { 
-	border:1px solid #f26522;
+	border:1px solid #e32105;
 	background-color: #000;
 	}
 
@@ -1316,7 +1316,7 @@ QCheckBox::indicator:checked {
             </property>
             <property name="styleSheet">
              <string notr="true">QCheckBox::indicator { 
-	border:1px solid #f26522;
+	border:1px solid #e32105;
 	background-color: #000;
 	}
 
@@ -1378,7 +1378,7 @@ QCheckBox::indicator:checked {
               </property>
               <property name="styleSheet">
                <string notr="true">QComboBox {
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	background-color: #1c1c1c;
 	}
 
@@ -1387,7 +1387,7 @@ QComboBox::drop-down {
 	subcontrol-position: top right;
 	/*width: 15px;*/
 	border-left-width: 1px;
-	border-left-color: #f26522;
+	border-left-color: #e32105;
 	border-left-style: solid;
 	}
 
@@ -1397,10 +1397,10 @@ QComboBox::down-arrow {
 
 QComboBox QAbstractItemView {
 	background-color: #1c1c1c;
-	selection-background-color:#61280E;
-	selection-color: #f26522; 
-	border: 1px solid #f26522;
-	color:#f26522;
+	selection-background-color:#3d0e04;
+	selection-color: #e32105; 
+	border: 1px solid #e32105;
+	color:#e32105;
 	}</string>
               </property>
              </widget>
@@ -1435,7 +1435,7 @@ QComboBox QAbstractItemView {
               </property>
               <property name="styleSheet">
                <string notr="true">QComboBox {
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	background-color: #1c1c1c;
 	}
 
@@ -1444,7 +1444,7 @@ QComboBox::drop-down {
 	subcontrol-position: top right;
 	/*width: 15px;*/
 	border-left-width: 1px;
-	border-left-color: #f26522;
+	border-left-color: #e32105;
 	border-left-style: solid;
 	}
 
@@ -1454,10 +1454,10 @@ QComboBox::down-arrow {
 
 QComboBox QAbstractItemView {
 	background-color: #1c1c1c;
-	selection-background-color:#61280E;
-	selection-color: #f26522; 
-	border: 1px solid #f26522;
-	color:#f26522;
+	selection-background-color:#3d0e04;
+	selection-color: #e32105; 
+	border: 1px solid #e32105;
+	color:#e32105;
 	}</string>
               </property>
              </widget>
@@ -1471,7 +1471,7 @@ QComboBox QAbstractItemView {
             </property>
             <property name="styleSheet">
              <string notr="true">QCheckBox::indicator { 
-	border:1px solid #f26522;
+	border:1px solid #e32105;
 	background-color: #000;
 	}
 
@@ -1492,7 +1492,7 @@ QCheckBox::indicator:checked {
             </property>
             <property name="styleSheet">
              <string notr="true">QCheckBox::indicator { 
-	border:1px solid #f26522;
+	border:1px solid #e32105;
 	background-color: #000;
 	}
 
@@ -1513,7 +1513,7 @@ QCheckBox::indicator:checked {
             </property>
             <property name="styleSheet">
              <string notr="true">QCheckBox::indicator {
-	border:1px solid #f26522;
+	border:1px solid #e32105;
 	background-color: #000;
 	}
 
@@ -1596,8 +1596,8 @@ QCheckBox::indicator:checked {
           <property name="styleSheet">
            <string notr="true">QPushButton {
 	background-color: #000;
-	color: #f26522;
-	border: 1px solid #f26522;
+	color: #e32105;
+	border: 1px solid #e32105;
 	max-height: 20px;
 	min-height: 20px;
 	max-width: 80px;
@@ -1605,12 +1605,12 @@ QCheckBox::indicator:checked {
 	}
 
 QPushButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QPushButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 	}</string>
           </property>
           <property name="text">
@@ -1623,8 +1623,8 @@ QPushButton:pressed:flat {
           <property name="styleSheet">
            <string notr="true">QPushButton {
 	background-color: #000;
-	color: #f26522;
-	border: 1px solid #f26522;
+	color: #e32105;
+	border: 1px solid #e32105;
 	max-height: 20px;
 	min-height: 20px;
 	max-width: 80px;
@@ -1632,12 +1632,12 @@ QPushButton:pressed:flat {
 	}
 
 QPushButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QPushButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 	}</string>
           </property>
           <property name="text">
@@ -1653,8 +1653,8 @@ QPushButton:pressed:flat {
           <property name="styleSheet">
            <string notr="true">QPushButton {
 	background-color: #000;
-	color: #f26522;
-	border: 1px solid #f26522;
+	color: #e32105;
+	border: 1px solid #e32105;
 	max-height: 20px;
 	min-height: 20px;
 	max-width: 80px;
@@ -1662,12 +1662,12 @@ QPushButton:pressed:flat {
 	}
 
 QPushButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QPushButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 	}</string>
           </property>
           <property name="text">

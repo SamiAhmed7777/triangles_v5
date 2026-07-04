@@ -17,13 +17,13 @@
    <string>Coin Control</string>
   </property>
   <property name="styleSheet">
-   <string notr="true">color: #f26522;
+   <string notr="true">color: #e32105;
 background-color: #000;
 
 
 QLineEdit {
 	background-color: #1c1c1c;
-    border: 1px solid #f26522;
+    border: 1px solid #e32105;
 }
 
 
@@ -35,15 +35,15 @@ QScrollBar:horizontal, QScrollBar:vertical {
 QScrollBar::handle:horizontal, QScrollBar::handle:vertical
 {
       border: 2px solid #491E0A;
-      color #f26522;
+      color #e32105;
       min-height: 20px;
 }
 
 QScrollBar::handle:horizontal:hover, QScrollBar::handle:vertical:hover
 {
-      border: 2px solid #f26522;
-      color #f26522;
-      background: #f26522;
+      border: 2px solid #e32105;
+      color #e32105;
+      background: #e32105;
       min-height: 20px;
 }
 
@@ -89,7 +89,7 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal, QScrollBar::ad
     <widget class="QFrame" name="borderframe">
      <property name="styleSheet">
       <string notr="true">#borderframe {
-	border: 2px solid #f26522;
+	border: 2px solid #e32105;
 }
 
 
@@ -113,13 +113,13 @@ QTreeView {
 
 
 QTreeWidget::item:hover{
-	background-color:#61280E;
+	background-color:#3d0e04;
 	color: #f26526;
-	border: 0px solid #f26522;
+	border: 0px solid #e32105;
 }
 
 #treeWidget QHeaderView::section {
-    border: 1px solid #f26522;
+    border: 1px solid #e32105;
     background-color: #1c1c1c;
 	height: 20px;
 	padding: 0px 3px;
@@ -136,21 +136,21 @@ QHeaderView::up-arrow {
 	 }
 
 QScrollBar:horizontal {
-  border: 1px solid #f26522;
+  border: 1px solid #e32105;
   background: #1c1c1c;
   height: 15px;
   margin: 0px 16px 0 16px;
   }
 
 QScrollBar::handle:horizontal {
-  border: 1px solid #f26522;
+  border: 1px solid #e32105;
   background: #1c1c1c;
   min-height: 20px;
   /*border-radius: 2px;*/
   }
 
 QScrollBar::add-line:horizontal {
-  border: 1px solid #f26522;
+  border: 1px solid #e32105;
   /*border-radius: 2px;*/
   background: #1c1c1c;
   width: 14px;
@@ -159,7 +159,7 @@ QScrollBar::add-line:horizontal {
   }
 
 QScrollBar::sub-line:horizontal {
-  border: 1px solid #f26522;
+  border: 1px solid #e32105;
   /*border-radius: 2px;*/
   background: #1c1c1c;
   width: 14px;
@@ -168,10 +168,10 @@ QScrollBar::sub-line:horizontal {
   }
 
 QScrollBar::right-arrow:horizontal, QScrollBar::left-arrow:horizontal {
-  border: 1px solid #f26522;
+  border: 1px solid #e32105;
   width: 1px;
   height: 1px;
-  background: #f26522;
+  background: #e32105;
   }
 
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
@@ -182,18 +182,18 @@ QScrollBar:vertical {
   background: #000;
   width: 15px;
   margin: 16px 0 16px 0;
-  border: 1px solid #f26522;
+  border: 1px solid #e32105;
   }
 
 QScrollBar::handle:vertical {
-  border: 1px solid #f26522;
+  border: 1px solid #e32105;
   background: #1c1c1c;
   min-height: 20px;
   /*border-radius: 2px;*/
   }
 
 QScrollBar::add-line:vertical {
-  border: 1px solid #f26522;
+  border: 1px solid #e32105;
   /*border-radius: 2px;*/
   background: #1c1c1c;
   height: 14px;
@@ -202,7 +202,7 @@ QScrollBar::add-line:vertical {
   }
 
 QScrollBar::sub-line:vertical {
-  border: 1px solid #f26522;
+  border: 1px solid #e32105;
   /*border-radius: 2px;*/
   background: #1c1c1c;
   height: 14px;
@@ -211,10 +211,10 @@ QScrollBar::sub-line:vertical {
   }
 
 QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical {
-  border: 1px solid #f26522;
+  border: 1px solid #e32105;
   width: 1px;
   height: 1px;
-  background: #f26522;
+  background: #e32105;
   }
 
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
@@ -720,7 +720,7 @@ QPushButton:hover {
         </property>
         <property name="styleSheet">
          <string notr="true">#frame {
-	border: 1 px solid #f26522;
+	border: 1 px solid #e32105;
 	}</string>
         </property>
         <property name="frameShape">
@@ -753,8 +753,8 @@ QPushButton:hover {
             <property name="styleSheet">
              <string notr="true">QPushButton {
 	background-color: #000;
-	color: #f26522;
-	border: 1px solid #f26522;
+	color: #e32105;
+	border: 1px solid #e32105;
 	max-height: 20px;
 	min-height: 20px;
 	max-width: 100px;
@@ -762,12 +762,12 @@ QPushButton:hover {
 }
 
 QPushButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 }
 
 QPushButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 }</string>
             </property>
             <property name="text">
@@ -786,26 +786,26 @@ QPushButton:pressed:flat {
             <property name="styleSheet">
              <string notr="true">QRadioButton {
 	background-color: #000;
-    	color: #f26522;
+    	color: #e32105;
     	}
  
 QRadioButton::indicator {
 	border-radius: 6px;
-    	color: #f26522;
+    	color: #e32105;
 	}
 
 QRadioButton::indicator:unchecked {
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	background-color: #000;
     	}
 
 QRadioButton::indicator:checked {
-	 border: 1px solid #f26522;
+	 border: 1px solid #e32105;
 	background-color: qradialgradient(
         cx: 0.5, cy: 0.5,
         fx: 0.5, fy: 0.5,
         radius: 1.0,
-        stop: 0.15 #f26522,
+        stop: 0.15 #e32105,
         stop: 0.25 #000
 	);
     	}
@@ -813,8 +813,8 @@ QRadioButton::indicator:checked {
 
 RadioButton::indicator:disabled {
 	background-color: #000;
-	color: #61280E;
-	border: 1px solid #61280E;
+	color: #3d0e04;
+	border: 1px solid #3d0e04;
     	}</string>
             </property>
             <property name="text">
@@ -839,26 +839,26 @@ RadioButton::indicator:disabled {
             <property name="styleSheet">
              <string notr="true">QRadioButton {
 	background-color: #000;
-    	color: #f26522;
+    	color: #e32105;
     	}
  
  QRadioButton::indicator {
 	border-radius: 6px;
- 	color: #f26522;
+ 	color: #e32105;
 	}
 
 QRadioButton::indicator:unchecked {
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	background-color: #000;
 	}
 
 QRadioButton::indicator:checked {
-	 border: 1px solid #f26522;
+	 border: 1px solid #e32105;
 	background-color: qradialgradient(
         cx: 0.5, cy: 0.5,
         fx: 0.5, fy: 0.5,
         radius: 1.0,
-        stop: 0.15 #f26522,
+        stop: 0.15 #e32105,
         stop: 0.25 #000
 	);
 	}
@@ -866,8 +866,8 @@ QRadioButton::indicator:checked {
 
 RadioButton::indicator:disabled {
 	background-color: #000;
-	color: #61280E;
-	border: 1px solid #61280E;
+	color: #3d0e04;
+	border: 1px solid #3d0e04;
 	}</string>
             </property>
             <property name="text">
@@ -1079,15 +1079,15 @@ RadioButton::indicator:disabled {
          <enum>Qt::CustomContextMenu</enum>
         </property>
         <property name="styleSheet">
-         <string notr="true">color: #f26522;
+         <string notr="true">color: #e32105;
 background-color: #000;
 
 
-border: 1px solid #f26522;
+border: 1px solid #e32105;
 
 QLineEdit {
 	background-color: #1c1c1c;
-    border: 1px solid #f26522;
+    border: 1px solid #e32105;
 }
 
 </string>
@@ -1175,8 +1175,8 @@ QLineEdit {
         <property name="styleSheet">
          <string notr="true">QPushButton {
 	background-color: #000;
-	color: #f26522;
-	border: 1px solid #f26522;
+	color: #e32105;
+	border: 1px solid #e32105;
 	max-height: 20px;
 	min-height: 20px;
 	max-width: 120px;
@@ -1184,12 +1184,12 @@ QLineEdit {
 	}
 
 QPushButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QPushButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 	}</string>
         </property>
         <property name="orientation">
