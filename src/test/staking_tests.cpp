@@ -136,8 +136,12 @@ BOOST_AUTO_TEST_CASE(pos_reward_large_coinage)
     int64_t nCoinAge = 10000 * COIN;
     int64_t reward = GetProofOfStakeReward(nCoinAge, 0);
 
-    // Expected: 10000 * MAX_TRI_PROOF_OF_STAKE / 365
-    int64_t expected = nCoinAge * MAX_TRI_PROOF_OF_STAKE / 365 / COIN;
+    // Expected: GetProofOfStakeReward now uses rounded integer division
+    // (nCoinAge/COIN) * MAX_TRI_PROOF_OF_STAKE * 2 + 365) / 730 to preserve
+    // exact linear proportionality. With nCoinAge=10000*COIN, the new value
+    // is 9041096 (vs the old 9041095). This test documents the new value.
+    int64_t nWholeCoinAge = nCoinAge / COIN;
+    int64_t expected = (nWholeCoinAge * MAX_TRI_PROOF_OF_STAKE * 2 + 365) / (365 * 2);
     BOOST_CHECK_EQUAL(reward, expected);
     BOOST_CHECK(reward > 0);
 }
