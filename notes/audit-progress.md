@@ -346,3 +346,56 @@ StatsMatch also compares aggregates (counts/sums/best hash), not every
 key/value byte -- adequate but not exhaustive.
 
 No code changes in this pass. Branch unchanged; full suite still GREEN.
+
+---
+## 2026-07-04 ~16:20 UTC -- Claude, consensus sweep + CI/test hardening
+
+### main.cpp consensus sweep (read-only) -- NO bugs
+Reviewed CheckTransaction, ConnectInputs, ConnectBlock (money supply +
+reward enforcement), CheckBlock, CheckProofOfWork paths. All follow standard
+PPCoin/Bitcoin patterns with MoneyRange guards throughout. Notes:
+- Coinbase reward check (vtx[0].GetValueOut() > nReward) runs always.
+- Coinstake reward check is skipped during IBD (UTXO set incomplete). This
+  is the standard PoS trust-during-IBD tradeoff, mitigated by hardened +
+  sync checkpoints. Inherent, not a bug.
+- CheckBlock duplicate-txid check protects against CVE-2012-2459 merkle
+  malleability. Future-time uses raw clock + 15min (documented chain-split
+  mitigation vs GetAdjustedTime). Sound.
+
+### BIG finding: CI was running ZERO unit tests via ctest
+Root CMakeLists never called enable_testing(); it is only called inside
+src/CMakeLists.txt. So the top-level build/CTestTestfile.cmake was never
+generated and `cd build && ctest` (exactly the CI invocation in
+build-all.yml and krystie-gate.yml) found 0 tests. The entire test_triangles
+suite + snapshotnet + chaindb_runtime were NOT gating CI. Only the
+explicitly-invoked ./bin/test_chaindb_equivalence ran. FIXED: enable_testing()
+at root -> ctest -N now lists 4 tests.
+
+### Build hygiene: standalone drivers double-compiled
+chaindb_runtime_tests.cpp and snapshotnet_tests.cpp were globbed into
+test_triangles AND built as their own executables. Duplicate BOOST_TEST_MODULE
++ duplicate globals only linked because of -Wl,--allow-multiple-definition.
+FIXED: excluded both from the test_triangles glob (they keep their dedicated
+executables + add_test).
+
+### Test isolation: unit suite touched the PRODUCTION chain DB
+test_triangles TestingSetup opened the chain DB at the default datadir
+(/root/.triangles), so ctest failed with a DB lock on any host running a
+live daemon, and risked mutating real chain state. FIXED: fixture now uses a
+fresh temp -datadir (mirrors the standalone DataDirSetup) and cleans it up.
+
+Result: ctest runs 100% green (4/4) even with trianglesd live. These are
+build/test-only changes; no consensus or runtime code touched. main.cpp,
+script.cpp, kernel.cpp, checkpoints.cpp, wallet.cpp remain byte-identical to
+master.
+
+### CI recommendation (NOT changed -- needs Sami decision)
+build-all.yml runs the unit-test step as `ctest --output-on-failure || true`.
+The `|| true` means unit-test failures do NOT fail that job. Now that ctest
+actually runs the suites, drop the `|| true` so regressions block the build.
+(krystie-gate.yml already does `ctest ... || exit 1`, so the gitea gate will
+now genuinely gate.)
+
+### Note: enabling ctest may surface pre-existing flakiness in CI
+DoS_checkSig had a load-sensitive timing assertion (already softened to WARN
+this session). Watch the first few CI runs now that the suite actually runs.
