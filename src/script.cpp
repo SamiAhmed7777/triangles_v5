@@ -1217,33 +1217,37 @@ uint256 SignatureHash(CScript scriptCode, const CTransaction& txTo, unsigned int
 class CSignatureCache
 {
 private:
-    // Cache key: hash of (sighash + signature + pubkey) for O(1) lookups.
-    // Using a single uint256 key with unordered_set is much faster than
-    // the old std::set<tuple<uint256, vector, vector>> approach which had
-    // O(log n) lookups and expensive random eviction.
-    std::unordered_set<uint64_t> setValid;
+    // Entry: SHA256 over (sighash || signature || pubkey).
+    //
+    // SECURITY FIX (2026-07-04): the previous implementation reduced the
+    // entry to a 64-bit XOR-mix that included the pubkey LENGTH but never
+    // the pubkey BYTES. Since virtually all pubkeys are the same length
+    // (33 bytes compressed), any signature that had been validated once
+    // would hit the cache when re-checked against a DIFFERENT pubkey for
+    // the same sighash, making CheckSig() return true without verifying.
+    // In a 2-of-3 CHECKMULTISIG this allowed one valid signature,
+    // duplicated, to satisfy the script. Storing the full 256-bit hash of
+    // all three components makes false positives cryptographically
+    // infeasible (matches upstream Bitcoin Core, which also keys its
+    // signature cache on the full (sighash, sig, pubkey) triple).
+    struct EntryHasher
+    {
+        size_t operator()(const uint256& entry) const
+        {
+            size_t ret;
+            memcpy(&ret, entry.begin(), sizeof(ret));
+            return ret; // entry is already a uniform SHA256 output
+        }
+    };
+    std::unordered_set<uint256, EntryHasher> setValid;
     CCriticalSection cs_sigcache;
 
-    // Compute a compact 64-bit cache key from the signature components.
-    // Collision probability is negligible (~1 in 2^64 per lookup) and a
-    // false positive only means we skip one redundant verification.
-    uint64_t ComputeKey(const uint256& hash, const std::vector<unsigned char>& vchSig,
-                        const std::vector<unsigned char>& vchPubKey) const
+    uint256 ComputeKey(const uint256& hash, const std::vector<unsigned char>& vchSig,
+                       const std::vector<unsigned char>& vchPubKey) const
     {
-        // Mix sighash with first 8 bytes of sig and pubkey for a fast key
-        uint64_t k = hash.Get64();
-        if (vchSig.size() >= 8)
-            k = (k & 0xffffffff00000000ULL) | (k & 0x00000000ffffffffULL);
-        k ^= std::hash<size_t>()(vchSig.size()) * 0x9e3779b97f4a7c15ULL;
-        k ^= std::hash<size_t>()(vchPubKey.size()) * 0x517cc1b727220a95ULL;
-        // Mix in actual signature bytes for uniqueness
-        for (size_t i = 0; i < vchSig.size() && i < 32; i += 8)
-        {
-            uint64_t chunk = 0;
-            memcpy(&chunk, &vchSig[i], std::min((size_t)8, vchSig.size() - i));
-            k ^= chunk * (0x9e3779b97f4a7c15ULL + i);
-        }
-        return k;
+        return Hash(hash.begin(), hash.end(),
+                    vchSig.begin(), vchSig.end(),
+                    vchPubKey.begin(), vchPubKey.end());
     }
 
 public:
@@ -1305,7 +1309,15 @@ bool CheckSig(const vector<unsigned char>& vchSig, const vector<unsigned char>& 
     if (!key.Verify(sighash, vchSigCopy))
         return false;
 
-    signatureCache.Set(sighash, vchSig, vchPubKey);
+    // CRITICAL FIX (2026-07-04): Cache Set must use vchSigCopy (the actual bytes
+    // we just verified), NOT vchSig (which has the trailing hashtype byte still
+    // attached). The hashtype byte is already folded into the cache key via
+    // sighash = SignatureHash(..., nHashType), and mixing it into the key bytes
+    // too would (a) make Set write a key that Get would never query for, leaving
+    // the cache as a silent no-op, and (b) risk collisions if the hashtype byte
+    // were the only difference between two signatures. vchSigCopy is the
+    // canonical operand on both sides (matches upstream Bitcoin Core fix).
+    signatureCache.Set(sighash, vchSigCopy, vchPubKey);
     return true;
 }
 
