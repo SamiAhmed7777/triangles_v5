@@ -607,7 +607,7 @@ if(BUILD_TESTS)
     # No init.cpp — test_triangles.cpp provides its own StartShutdown() stub
 
     target_compile_definitions(test_triangles PRIVATE
-        "TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/test/data\""
+        "TEST_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/test/data"
     )
 
     target_include_directories(test_triangles PRIVATE

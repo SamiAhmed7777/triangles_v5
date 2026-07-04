@@ -321,15 +321,21 @@ BOOST_AUTO_TEST_CASE(abandon_unknown_txid_returns_false)
 
 BOOST_AUTO_TEST_CASE(abandon_not_from_me_returns_false)
 {
-    // The test wallet has at least one tx (added by earlier tests in
-    // wallet_tests). Grab the first mapWallet entry — it has fDebit=0
-    // because add_coin() only sets fIsFromMe if we asked, so by default
-    // the tx is not from us.
-    BOOST_CHECK(!wallet_tests::wallet.mapWallet.empty());
-    if (!wallet_tests::wallet.mapWallet.empty()) {
-        uint256 hash = wallet_tests::wallet.mapWallet.begin()->first;
-        BOOST_CHECK(!wallet_tests::wallet.AbandonTransaction(hash));
-    }
+    // add_coin() above never touches mapWallet (it only fills vCoins), so
+    // this test provisions its own wallet transaction. The tx has an empty
+    // vin, so GetDebit() == 0 and IsFromMe() is false — AbandonTransaction
+    // must reject it.
+    CTransaction tx;
+    tx.nLockTime = 999999; // arbitrary, gives the tx a unique hash
+    tx.vout.resize(1);
+    tx.vout[0].nValue = 1000000;
+    CWalletTx wtx(&wallet_tests::wallet, tx);
+    const uint256 hash = wtx.GetHash();
+    wallet_tests::wallet.mapWallet[hash] = wtx;
+
+    BOOST_CHECK(!wallet_tests::wallet.AbandonTransaction(hash));
+
+    wallet_tests::wallet.mapWallet.erase(hash);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

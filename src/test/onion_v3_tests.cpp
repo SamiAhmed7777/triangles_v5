@@ -113,12 +113,15 @@ BOOST_AUTO_TEST_CASE(onion_v3_valid_known_seeds)
 {
     // The 7 hardcoded seeds in src/onionseed.h MUST all be valid v3 onions.
     // If any of these fail, Tor will reject them at runtime.
+    // NOTE: the seeds in onionseed.h already include the ".onion" suffix,
+    // so we pass them through directly (the previous test version appended
+    // ".onion" a second time, producing "addr.onion.onion" which of course
+    // fails validation).
     for (int i = 0; strMainNetOnionSeed[i][0] != nullptr; i++) {
-        std::string addr = strMainNetOnionSeed[i][0];
-        std::string full = addr + ".onion";
+        const std::string& addr = strMainNetOnionSeed[i][0];
         BOOST_CHECK_MESSAGE(
-            IsValidV3Onion(full),
-            "Hardcoded seed #" << i << " is not a valid v3 onion: " << full
+            CTorV3Service::ValidateOnionAddress(addr),
+            "Hardcoded seed #" << i << " is not a valid v3 onion: " << addr
         );
     }
 }
@@ -203,10 +206,14 @@ BOOST_AUTO_TEST_CASE(onion_v3_audit_summary)
     size_t n = CountOnionSeeds();
     BOOST_CHECK_MESSAGE(n >= 1, "Expected at least 1 hardcoded seed, found " << n);
 
-    // All of them must validate
+    // All of them must validate. The seeds already include ".onion" suffix,
+    // so pass them through directly. The previous version appended ".onion"
+    // a second time, producing "addr.onion.onion" which of course fails
+    // validation. We use the test's local IsValidV3Onion (with full checksum)
+    // to be consistent with the other tests in this suite.
     int nValid = 0, nInvalid = 0;
     for (int i = 0; strMainNetOnionSeed[i][0] != nullptr; i++) {
-        if (IsValidV3Onion(std::string(strMainNetOnionSeed[i][0]) + ".onion")) {
+        if (IsValidV3Onion(strMainNetOnionSeed[i][0])) {
             nValid++;
         } else {
             nInvalid++;
