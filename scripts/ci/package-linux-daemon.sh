@@ -30,7 +30,14 @@ mkdir -p "${PKG}/etc/systemd/system"
 TOR_TARBALL="tor-expert-bundle-linux-x86_64-${TOR_VERSION}.tar.gz"
 if [ ! -f "${TOR_TARBALL}" ]; then
     echo ">>> Downloading Tor ${TOR_VERSION}..."
-    curl -sL "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/${TOR_TARBALL}" -o "${TOR_TARBALL}"
+    # Resilient download: archive.torproject.org occasionally times out from
+    # CI egress (observed 2026-07-03: macOS job exit code 6 after exactly 30s
+    # of curl hang). --retry 3 + --retry-connrefused covers transient network
+    # drops; --fail-with-body surfaces HTTP errors loudly.
+    curl -fSL --connect-timeout 15 --max-time 120 \
+        --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors \
+        "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/${TOR_TARBALL}" \
+        -o "${TOR_TARBALL}"
 fi
 mkdir -p tor-extract
 tar -xzf "${TOR_TARBALL}" -C tor-extract
