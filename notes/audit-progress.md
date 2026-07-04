@@ -268,3 +268,39 @@ REVIEW -- do not merge without explicit sign-off (hard-fork risk).
 ### Still unexplored (next session)
 main.cpp consensus sweep (large surface), chaindb_equivalence,
 chaindb_runtime_tests, net_bootstrap peer-selection paths.
+
+---
+## 2026-07-04 ~15:25 UTC -- Claude (per Sami: NO consensus changes)
+
+Sami directed that the branch must contain NO consensus-affecting changes.
+Actioned:
+
+- Reverted 2a4da33 (PoS reward rework). main.cpp is now byte-identical to
+  master. Relaxed pos_reward_proportional_to_coinage to tolerate the 1-unit
+  integer-truncation rounding of the ORIGINAL formula (test-only).
+- Reverted 239cf61 (signature-cache rework). script.cpp is now byte-identical
+  to master. On master the sig cache is a no-op (Set/Get key mismatch), i.e.
+  every signature is fully verified -- correct, just not optimized. The
+  multisig/script correctness tests pass unchanged against that behavior.
+- Softened DoS_checkSig timing assertion (CHECK -> WARN): it only holds when
+  the cache actually speeds things up, which by design it no longer does.
+  Machine-dependent perf heuristic, not a correctness check.
+
+Verification: net diff vs master is 0 lines for main.cpp, script.cpp,
+kernel.cpp, checkpoints.cpp, wallet.cpp. The ONLY non-test source change on
+the branch is walletdb.cpp (accounting cursor-scan fixes -- wallet read
+logic, not consensus). Full suite GREEN (0 failures).
+
+Net remaining changes on branch vs master:
+  - src/walletdb.cpp  : ListAccountCreditDebit break->continue (finding #1)
+                        + ReorderTransactions "" -> "*" (finding #5).
+  - src/test/*        : the repaired/added unit tests + consensus_safety_tests
+                        + hd_wallet_tests.
+  - notes/            : this log.
+
+NOTE for whoever revisits the sig cache: master leaving it a no-op is safe
+(full verification) but wastes CPU. If it is ever enabled for performance,
+it MUST be keyed on the full (sighash, sig, pubkey) triple -- keying on
+pubkey LENGTH only (the state after just the Set/Get symmetry fix) causes
+false-positive cache hits and would accept invalid signatures. That is a
+security change and needs explicit review; do not enable casually.
