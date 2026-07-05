@@ -399,3 +399,26 @@ now genuinely gate.)
 ### Note: enabling ctest may surface pre-existing flakiness in CI
 DoS_checkSig had a load-sensitive timing assertion (already softened to WARN
 this session). Watch the first few CI runs now that the suite actually runs.
+
+---
+## 2026-07-04 ~16:50 UTC -- Claude, wallet-encryption coverage
+
+Coverage-gap survey (source module vs test file) found these
+security-relevant modules with NO tests: crypter, keystore, kernel,
+smessage, protocol, addrman, pbkdf2, scrypt.
+
+Added crypter_tests.cpp (8 cases) for the highest-value one, CCrypter
+(wallet encryption): passphrase round-trip for both KDFs (sha512 + scrypt),
+wrong-passphrase rejection, salt-affects-key, determinism, bad-param
+rejection, EncryptSecret/DecryptSecret private-key path, ciphertext tamper.
+crypter.cpp is correct -- no implementation change. Full ctest 100% (4/4).
+
+Subtlety logged in the test: the wallet passes a uint256 as the AES IV but
+AES-256-CBC uses only the first 16 (little-endian) memory bytes. My first
+draft flipped a high-order display byte (memory byte 31, outside the IV
+window) and the "wrong IV" check failed -- the CODE was right, the test was
+wrong; fixed to flip a low-order byte.
+
+Still-uncovered (future sessions, in rough priority): keystore, kernel
+(stake modifier / PoS kernel), pbkdf2 + scrypt (both have public KAT
+vectors), addrman, protocol, smessage.
