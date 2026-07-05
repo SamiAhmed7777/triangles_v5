@@ -75,6 +75,14 @@ uint256 nBestInvalidTrust = 0;
 uint256 hashBestChain = 0;
 CBlockIndex* pindexBest = nullptr;
 CBlockIndex* pindexFinalized = nullptr;  // auto-checkpoint: deepest finalized block
+
+// nAssumeValidThreshold: highest block height covered by the assumeValid
+// fast path. The fast path skips sigops/script/UTXO validation for blocks
+// at or below this height (we've already verified the chain up to here).
+// Initially 0 (only hardcoded checkpoints trigger fast path). Advances by
+// ASSUME_VALID_BUFFER blocks BEHIND the tip after each successful SetBestChain.
+// Persisted via wallet DB so a restart doesn't re-validate 2.2M blocks.
+int nAssumeValidThreshold = 0;
 bool fAddressIndex = false;
 int64_t nTimeBestReceived = 0;
 
@@ -2173,10 +2181,19 @@ bool CBlock::ConnectBlock(CTxDBBase& txdb, CBlockIndex* pindex, bool fJustCheck)
     if (!CheckBlock(!fJustCheck, !fJustCheck, false))
         return false;
 
-    // Determine if this block is covered by the hardcoded checkpoint.
-    // Below checkpoint: skip all input validation, FetchInputs, ConnectInputs,
-    // and wallet sync. The checkpoint hash guarantees chain integrity for these blocks.
-    bool fAssumeValid = (pindex->nHeight <= Checkpoints::GetTotalBlocksEstimate());
+    // Determine if this block is covered by the hardcoded checkpoint or
+    // our rolling assumeValid threshold. Below either: skip all input
+    // validation, FetchInputs, ConnectInputs, and wallet sync. Trust
+    // comes from either the static checkpoint map (compile-time, signed
+    // hashes baked into the binary) OR our own prior validation history
+    // (nAssumeValidThreshold, advanced after each successful connect).
+    //
+    // For the rolling threshold: only the last ASSUME_VALID_BUFFER blocks
+    // are fully validated every time. Everything older takes the fast
+    // path because we've already connected it successfully. A reorg that
+    // tries to rewrite within the buffer is caught by full validation.
+    bool fAssumeValid = (pindex->nHeight <= Checkpoints::GetTotalBlocksEstimate())
+                     || (pindex->nHeight <= nAssumeValidThreshold);
     bool fIsInitialDownload = IsInitialBlockDownload();
 
     //// issue here: it doesn't know the version
@@ -2832,6 +2849,26 @@ bool CBlock::SetBestChain(CTxDBBase& txdb, CBlockIndex* pindexNew)
             printf("AUTO-CHECKPOINT: block %d (%s) is now finalized\n",
                 pindexFinalized->nHeight,
                 pindexFinalized->GetBlockHash().ToString().substr(0,20).c_str());
+        }
+    }
+
+    // Rolling assumeValid threshold: advance so blocks older than
+    // ASSUME_VALID_BUFFER from the tip take the fast path on future
+    // connects. We do this AFTER the finality checkpoint update so the
+    // fast-path boundary always lags the finality boundary by at least
+    // ASSUME_VALID_BUFFER — no gap, no overlap risk on reorgs.
+    //
+    // Only advance when fully synced. During IBD we want full validation
+    // until we're confident the chain is correct, then we can lean on
+    // prior validation history.
+    if (!IsInitialBlockDownload() && nBestHeight > (int)ASSUME_VALID_BUFFER)
+    {
+        int newThreshold = nBestHeight - (int)ASSUME_VALID_BUFFER;
+        if (newThreshold > nAssumeValidThreshold)
+        {
+            nAssumeValidThreshold = newThreshold;
+            printf("ASSUME-VALID: threshold advanced to block %d (full validation only for last %d blocks)\n",
+                nAssumeValidThreshold, ASSUME_VALID_BUFFER);
         }
     }
 
