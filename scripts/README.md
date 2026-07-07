@@ -1,7 +1,7 @@
 # Scripts
 
-Operational scripts for the Triangles project. See also `release-process.md`
-at the repo root for the canonical release pipeline documentation.
+Operational scripts for the Triangles project. See also `doc/release-process.md`
+for the canonical release pipeline documentation.
 
 ## Build verification
 
