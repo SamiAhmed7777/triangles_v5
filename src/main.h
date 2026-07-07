@@ -147,6 +147,10 @@ unsigned int ComputeMinWork(unsigned int nBase, int64_t nTime);
 unsigned int ComputeMinStake(unsigned int nBase, int64_t nTime, unsigned int nBlockTime);
 int GetNumBlocksOfPeers();
 [[nodiscard]] bool IsInitialBlockDownload();
+// Height-based consensus fast path for historical checkpoint / rolling
+// assume-valid validation. This intentionally excludes operational IBD states
+// such as a stale tip; stale-tip IBD must not disable live PoS checks.
+[[nodiscard]] bool IsConsensusAssumeValidHeight(int nHeight);
 std::string GetWarnings(std::string strFor);
 bool GetTransaction(const uint256 &hash, CTransaction &tx, uint256 &hashBlock);
 uint256 WantedByOrphan(const CBlock* pblockOrphan);

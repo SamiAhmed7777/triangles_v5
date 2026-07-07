@@ -1670,6 +1670,12 @@ bool IsInitialBlockDownload()
     return false;
 }
 
+bool IsConsensusAssumeValidHeight(int nHeight)
+{
+    return (nHeight <= Checkpoints::GetTotalBlocksEstimate())
+        || (nHeight <= nAssumeValidThreshold);
+}
+
 void static InvalidChainFound(CBlockIndex* pindexNew)
 {
     if (pindexNew->nChainTrust > nBestInvalidTrust)
@@ -2192,8 +2198,7 @@ bool CBlock::ConnectBlock(CTxDBBase& txdb, CBlockIndex* pindex, bool fJustCheck)
     // are fully validated every time. Everything older takes the fast
     // path because we've already connected it successfully. A reorg that
     // tries to rewrite within the buffer is caught by full validation.
-    bool fAssumeValid = (pindex->nHeight <= Checkpoints::GetTotalBlocksEstimate())
-                     || (pindex->nHeight <= nAssumeValidThreshold);
+    bool fAssumeValid = IsConsensusAssumeValidHeight(pindex->nHeight);
     bool fIsInitialDownload = IsInitialBlockDownload();
 
     //// issue here: it doesn't know the version
@@ -2371,9 +2376,11 @@ bool CBlock::ConnectBlock(CTxDBBase& txdb, CBlockIndex* pindex, bool fJustCheck)
 
             int64_t nCalculatedStakeReward = GetProofOfStakeReward(nCoinAge, nFees);
 
-            // Enforce coinstake reward check only after IBD completes.
-            // During IBD the UTXO set is incomplete, causing nCalculatedStakeReward=0.
-            if (!IsInitialBlockDownload())
+            // Enforce coinstake reward for every fully validated block.
+            // Historical checkpoint / rolling-assume-valid blocks take the
+            // fAssumeValid fast path above; stale-tip IBD must not disable
+            // live reward validation for blocks above that fast path.
+            if (!fAssumeValid)
             {
                 if (nStakeReward > nCalculatedStakeReward)
                     return DoS(100, error("ConnectBlock() : coinstake pays too much(actual=%" PRId64 " vs calculated=%" PRId64 ")", nStakeReward, nCalculatedStakeReward));
@@ -3345,17 +3352,22 @@ bool CBlock::AcceptBlock()
     uint256 hashProofOfStake = 0, targetProofOfStake = 0;
     if (IsProofOfStake())
     {
-        if (IsInitialBlockDownload())
+        if (IsConsensusAssumeValidHeight(nHeight))
         {
-            // During IBD the UTXO set isn't fully loaded; CheckProofOfStake()
-            // would fail reading txPrev. Skip with a throttled log.
+            // Historical fast path: blocks at/below hardcoded checkpoint or
+            // rolling assume-valid have already been accepted by chain-level
+            // trust, so skip expensive PoS kernel verification there only.
+            // Do not key this off IsInitialBlockDownload(): stale-tip IBD is
+            // operational state, not permission to accept unchecked live PoS.
             if (nHeight % 10000 == 0)
-                printf("SKIP: PoS kernel check skipped for block %d during IBD\n", nHeight);
+                printf("SKIP: PoS kernel check skipped for historical fast-path block %d\n", nHeight);
             hashProofOfStake = 0; targetProofOfStake = 0;
         }
         else
         {
-            // Post-IBD: verify the PoS kernel signature normally.
+            // Verify the PoS kernel signature normally for every live block
+            // above the historical fast path, even if the tip is stale enough
+            // for IsInitialBlockDownload() to be true.
             if (!CheckProofOfStake(vtx[1], nBits, hashProofOfStake, targetProofOfStake))
                 return DoS(100, error("AcceptBlock() : check proof-of-stake failed for block %d", nHeight));
         }

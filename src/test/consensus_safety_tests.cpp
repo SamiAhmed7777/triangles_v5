@@ -18,6 +18,7 @@
 #include "../main.h"
 #include "../kernel.h"
 #include "../script.h"
+#include "../checkpoints.h"
 
 extern CBlockIndex* pindexBest;
 extern unsigned int nTargetSpacing;
@@ -315,6 +316,27 @@ BOOST_AUTO_TEST_CASE(stake_age_soft_cap_does_not_apply_pre_v5)
     // One second past: also capped.
     int64_t justPastMax = now - nStakeMinAge - nStakeMaxAge - 1;
     BOOST_CHECK_EQUAL(GetWeight(justPastMax, now), (int64_t)nStakeMaxAge);
+}
+
+// ─── PoS validation fast path must be height-based (P0) ───────────────────
+// IsInitialBlockDownload() can also mean "tip is stale". That operational
+// state must never disable proof-of-stake kernel/reward validation for new
+// blocks above the hardened-checkpoint / rolling-assume-valid fast path.
+BOOST_AUTO_TEST_CASE(pos_validation_skip_is_only_historical_fast_path)
+{
+    int oldAssumeValid = nAssumeValidThreshold;
+    nAssumeValidThreshold = 0;
+
+    const int checkpointHeight = Checkpoints::GetTotalBlocksEstimate();
+
+    BOOST_CHECK(IsConsensusAssumeValidHeight(checkpointHeight));
+    BOOST_CHECK(!IsConsensusAssumeValidHeight(checkpointHeight + 1));
+
+    nAssumeValidThreshold = checkpointHeight + 25;
+    BOOST_CHECK(IsConsensusAssumeValidHeight(checkpointHeight + 25));
+    BOOST_CHECK(!IsConsensusAssumeValidHeight(checkpointHeight + 26));
+
+    nAssumeValidThreshold = oldAssumeValid;
 }
 
 // ─── Orphan block cap (P1 — DoS) ──────────────────────────────────────────

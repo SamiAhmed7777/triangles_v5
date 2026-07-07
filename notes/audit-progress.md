@@ -565,3 +565,33 @@ Verification:
 - Normal build/test: `ctest --output-on-failure` => 4/4 passed in build.
 
 This work intentionally does not touch production datadir `/root/.triangles/`, wallet files, consensus constants, or live daemon state.
+
+
+## 2026-07-07 -- Krystie (stake modifier / PoS validation audit)
+
+### Action taken: checked stake modifier and fixed stale-tip PoS validation bypass
+
+Sami asked to check the stake modifier. Findings:
+
+1. **Stake modifier interval deviation (documented, not changed):**
+   - Upstream Peercoin v0.3/v0.4 uses the full `GetStakeModifierSelectionInterval()` in `GetKernelStakeModifier()`.
+   - Triangles has a 2014 consensus override: `nStakeModifierSelectionInterval = 2 * nModifierInterval`.
+   - Mainnet numbers: `nModifierInterval = 300s`; full 64-section interval = `10554s` (~2h56m); Triangles lookup delay = `600s` (~10m).
+   - Because minting and validation both use this, it is live consensus. Removing it without an activation gate would hard-fork historical/live behavior. Treat restoring the upstream interval as a future coordinated protocol upgrade, not a silent patch.
+
+2. **Critical stale-tip IBD validation bug (fixed on branch `audit/stake-modifier-review`):**
+   - `IsInitialBlockDownload()` also returns true when a synced node's tip is stale for >24h.
+   - `AcceptBlock()` used that operational IBD state to skip `CheckProofOfStake()` for any PoS block.
+   - `ConnectBlock()` used the same state to skip coinstake reward limit enforcement.
+   - Result: a stale-but-above-checkpoint node could accept live PoS blocks without kernel-target validation and without reward-limit validation.
+   - Fix: introduced `IsConsensusAssumeValidHeight(int nHeight)` so only the height-based historical fast path (hardcoded checkpoint / rolling assume-valid) skips PoS kernel/reward checks. Stale-tip IBD no longer disables live PoS checks.
+
+Cross-check: Z.Ai agreed the interval finding is correctly framed as a consensus/security weakening requiring activation, and agreed the stale-tip IBD validation bypass is a real critical bug with the height-based fix direction.
+
+Verification:
+- Watched new regression test fail before implementation (missing helper / compile red).
+- Targeted test: `./bin/test_triangles --run_test=consensus_safety_tests/pos_validation_skip_is_only_historical_fast_path --catch_system_errors=no --log_level=test_suite` => pass.
+- Normal build: `ctest --output-on-failure` in `build` => 4/4 passed.
+- Sanitizer build with CI flags: `ctest --output-on-failure` in `build-san-local` => 4/4 passed.
+
+No wallet files, production datadir, or live daemon state touched.
