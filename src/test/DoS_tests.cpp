@@ -304,11 +304,18 @@ BOOST_AUTO_TEST_CASE(DoS_checkSig)
     // OpenSSL instead of libsecp256k1). Adjust if this false-fires on a
     // materially slower CI runner — the per-trial prints above make the
     // threshold-defining evidence reproducible.
+#if defined(__SANITIZE_ADDRESS__)
+    // ASan/UBSan builds intentionally instrument every memory access and are
+    // not meaningful microbenchmark environments. Keep the correctness checks
+    // above and below, but do not enforce the perf threshold under sanitizers.
+    if (fDebug) printf("DoS_Checksig sanitizer build: skipping perf threshold (%ld ms)\n", nPerVerifyMs);
+#else
     BOOST_CHECK_MESSAGE(nPerVerifyMs < 600,
         "Signature verify regression: " << nPerVerifyMs
         << "ms for 500 verifies (expected <600ms). "
         << "Cache is a no-op by design (see script.cpp CheckSig); "
         << "if this fires, an actual verify-path change has slowed it down.");
+#endif
 
     // Empty a signature, validation should fail:
     CScript save = tx.vin[0].scriptSig;

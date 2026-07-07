@@ -971,17 +971,19 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, co
                     if (stack.size() < 1)
                         return false;
                     valtype& vch = stacktop(-1);
+                    static unsigned char pblank[1];
+                    const unsigned char* pch = vch.empty() ? pblank : &vch[0];
                     valtype vchHash((opcode == OP_RIPEMD160 || opcode == OP_SHA1 || opcode == OP_HASH160) ? 20 : 32);
                     if (opcode == OP_RIPEMD160)
                     {
                         TRI_OPENSSL_SUPPRESS_DEPRECATED_BEGIN
-                        RIPEMD160(&vch[0], vch.size(), &vchHash[0]);
+                        RIPEMD160(pch, vch.size(), &vchHash[0]);
                         TRI_OPENSSL_SUPPRESS_DEPRECATED_END
                     }
                     else if (opcode == OP_SHA1)
-                        SHA1(&vch[0], vch.size(), &vchHash[0]);
+                        SHA1(pch, vch.size(), &vchHash[0]);
                     else if (opcode == OP_SHA256)
-                        SHA256(&vch[0], vch.size(), &vchHash[0]);
+                        SHA256(pch, vch.size(), &vchHash[0]);
                     else if (opcode == OP_HASH160)
                     {
                         uint160 hash160 = Hash160(vch);
