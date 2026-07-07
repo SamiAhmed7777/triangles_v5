@@ -58,7 +58,7 @@ following properties:
 | `BUILD_DESC` | Git describe output, written to `build.h` at build time |
 | `BUILD_DATE` | **Commit timestamp** (NOT wall-clock), from `git log -n 1 --format=%ci` |
 | `__DATE__`/`__TIME__` fallback | Dead code in practice — `build.h` always defines `BUILD_DATE` |
-| Build paths in binaries | Currently absolute; should add `-ffile-prefix-map` for full reproducibility |
+| Build paths in binaries | Mapped with `-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.` so absolute source paths do not leak into debug info |
 
 ### Verifying reproducibility
 
