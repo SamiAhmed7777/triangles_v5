@@ -544,3 +544,24 @@ Full suite: 262/262 cases, 21713/21713 assertions. ctest: 4/4 green. Branch push
 
 ### PR #14 CI: ALL REAL JOBS GREEN
 Final CI run (run 28845879030 on f9a11fc) — every required job passes except the pre-existing simd.c sanitizer failure. PR #14 is merge-ready.
+
+## 2026-07-07 -- Krystie
+
+### Action taken: sanitizer lane fixed (branch fix/simd-ubsan-shift)
+
+Sami asked to fix the sanitizer failure after the release-infrastructure merge made all open PRs green except the known sanitizer issue.
+
+Root failures fixed:
+- `src/simd.c`: SPHlib SIMD FFT macros performed signed left shifts on values that can be negative (`simd.c:265` in CI). Replaced the signed arithmetic shifts with equivalent bounded multiplications by powers of two. This preserves intended arithmetic while removing C undefined behavior.
+- `src/util.cpp`: `DecodeBase32(std::string)` and `DecodeBase64(std::string)` took `&vchRet[0]` on empty decoded vectors. Added empty-return guards.
+- `src/base58.h` + `src/test/base58_tests.cpp`: `EncodeBase58(vector)` and its test harness took `&vch[0]` for empty vectors. Added an empty-vector guard and routed the test through the vector overload.
+- `src/util.h`: `Hash160(vector)` took `&vch[0]` for empty vectors. Switched to the existing pblank/length-0 pattern used by `Hash()` helpers.
+- `src/script.cpp`: OP_RIPEMD160 / OP_SHA1 / OP_SHA256 used `&vch[0]` for empty stack data. Added pblank/length-0 handling; OP_HASH160 already routes through `Hash160`.
+- `src/test/DoS_tests.cpp`: sanitizer instrumentation made the signature microbenchmark threshold false-fire. Kept all signature correctness checks, but skips the perf threshold under ASan builds.
+- `.github/workflows/build-all.yml`: removed `continue-on-error: true` from `test-linux-sanitizers`; sanitizer regressions are blocking again.
+
+Verification:
+- Local sanitizer build with CI flags: `ctest --output-on-failure` => 4/4 passed in build-san-local.
+- Normal build/test: `ctest --output-on-failure` => 4/4 passed in build.
+
+This work intentionally does not touch production datadir `/root/.triangles/`, wallet files, consensus constants, or live daemon state.

@@ -88,11 +88,9 @@ jobs:
         run: cd build && ctest --output-on-failure || true
 
   test-linux-sanitizers:
-    # ASan + UBSan build of the daemon + unit tests. Allowed to fail until
-    # findings are triaged — see .github/workflows/lint.yml comment block.
-    # Once the test suite is clean under sanitizers, drop continue-on-error.
+    # ASan + UBSan build of the daemon + unit tests. This is a blocking
+    # signal: sanitizer regressions should fail the PR.
     runs-on: ubuntu-22.04
-    continue-on-error: true
     env:
       # ASan: leak detection off by default (BDB and OpenSSL produce noise on shutdown).
       # Re-enable once we've quieted the legitimate suspects.
