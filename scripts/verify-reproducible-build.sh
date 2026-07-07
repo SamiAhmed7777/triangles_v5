@@ -58,14 +58,14 @@ if [ ! -d "$SOURCE_DIR" ]; then
     exit 2
 fi
 
-# Refuse to run if the working tree is dirty -- dirty tree = non-deterministic
-# git describe output = non-deterministic binary. Run on a clean checkout
-# or a release tag.
-if [ -n "$(cd "$SOURCE_DIR" && git status --porcelain 2>/dev/null)" ]; then
-    echo "WARNING: working tree has uncommitted changes." >&2
-    echo "         build.h will include '-dirty' suffix and the binary will NOT be" >&2
-    echo "         reproducible. Commit/stash your changes first, or accept that the" >&2
-    echo "         hashes below prove your dirty-tree build is at least internally consistent." >&2
+# Warn if tracked files are dirty -- git describe --dirty (used by build.h)
+# ignores untracked files, but includes modified/staged tracked files in the
+# version string. Untracked notes/build outputs are safe and should not scare
+# release builders.
+if [ -n "$(cd "$SOURCE_DIR" && git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    echo "WARNING: tracked working tree changes detected." >&2
+    echo "         build.h will include a '-dirty' suffix, so the binary will not" >&2
+    echo "         match a clean checkout/tag. Commit or stash tracked changes first." >&2
 fi
 
 # ── Helpers ────────────────────────────────────────────────────────────────
