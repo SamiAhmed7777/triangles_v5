@@ -241,7 +241,7 @@
   </property>
   <property name="styleSheet">
    <string notr="true">QWidget {
-	color: #f26522;
+	color: #e32105;
 	background-color: #000;
 	}</string>
   </property>
@@ -367,7 +367,7 @@
 	}
 
 QLabel {
-	color: #f26522;
+	color: #e32105;
 	}</string>
      </property>
      <layout class="QVBoxLayout" name="verticalLayout_10" stretch="0,1">
@@ -405,7 +405,7 @@ QLabel {
           <property name="styleSheet">
            <string notr="true">QLineEdit {
 	background-color: #1c1c1c;
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	}</string>
           </property>
          </widget>
@@ -426,7 +426,7 @@ QLabel {
           </property>
           <property name="styleSheet">
            <string notr="true">QComboBox {
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	background-color: #1c1c1c;
 	}
 
@@ -435,7 +435,7 @@ QComboBox::drop-down {
 	subcontrol-position: top right;
 	/*width: 15px;*/
 	border-left-width: 1px;
-	border-left-color: #f26522;
+	border-left-color: #e32105;
 	border-left-style: solid;
 	}
 
@@ -445,10 +445,10 @@ QComboBox::down-arrow {
 
 QComboBox QAbstractItemView {
 	background-color: #1c1c1c;
-	selection-background-color:#61280E;
-	selection-color: #f26522; 
-	border: 1px solid #f26522;
-	color:#f26522;
+	selection-background-color:#3d0e04;
+	selection-color: #e32105; 
+	border: 1px solid #e32105;
+	color:#e32105;
 	}</string>
           </property>
          </widget>
@@ -890,7 +890,7 @@ QComboBox QAbstractItemView {
           </property>
           <property name="styleSheet">
            <string notr="true">QComboBox {
-    border: 1px solid #f26522;
+    border: 1px solid #e32105;
 	background-color: #1c1c1c;
 	}
 
@@ -899,7 +899,7 @@ QComboBox::drop-down {
 	subcontrol-position: top right;
 	/*width: 15px;*/
 	border-left-width: 1px;
-	border-left-color: #f26522;
+	border-left-color: #e32105;
 	border-left-style: solid;
 	}
 
@@ -909,10 +909,10 @@ QComboBox::down-arrow {
 
 QComboBox QAbstractItemView {
 	background-color: #1c1c1c;
-	selection-background-color:#61280E;
-	selection-color: #f26522; 
-	border: 1px solid #f26522;
-	color:#f26522;
+	selection-background-color:#3d0e04;
+	selection-color: #e32105; 
+	border: 1px solid #e32105;
+	color:#e32105;
 	}</string>
           </property>
           <property name="iconSize">
@@ -946,7 +946,7 @@ QComboBox QAbstractItemView {
           <property name="styleSheet">
            <string notr="true">QLineEdit {
 	background-color: #1c1c1c;
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	}</string>
           </property>
          </widget>
@@ -1442,11 +1442,11 @@ QComboBox QAbstractItemView {
         </property>
         <property name="styleSheet">
          <string notr="true">#transactionView {
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	}
 
 QHeaderView::section {
-	border: 1px solid #f26522; 
+	border: 1px solid #e32105; 
 	background-color: #1c1c1c;
 	height: 20px;
 	padding: 0px 3px; 
@@ -1462,10 +1462,10 @@ QHeaderView::up-arrow {
 	}
 
 QTableView::item:focus {
-	border: 0px solid #f26522;
-	color: #f26522;
+	border: 0px solid #e32105;
+	color: #e32105;
 	outline: none;
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QTableView {

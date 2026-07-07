@@ -53,8 +53,8 @@ CoinControlDialog::CoinControlDialog(QWidget *parent) :
     //contextMenu->addAction(unlockAction);
     contextMenu->setStyleSheet("QMenu {\
                                background-color: #000; \
-                               border: 1px solid #f26522;\
-                               color: #f26522;\
+                               border: 1px solid #e32105;\
+                               color: #e32105;\
                            }\
                            \
                            QMenu::item {\
@@ -62,11 +62,11 @@ CoinControlDialog::CoinControlDialog(QWidget *parent) :
                            }\
                            \
                            QMenu::item:selected {\
-                               color: #f26522;\
-                               background-color: #61280E;\
+                               color: #e32105;\
+                               background-color: #3d0e04;\
                            }\
                            QMenu::item:disabled {\
-                               color: #61280E;\
+                               color: #3d0e04;\
                            }\
                            ");
 
@@ -138,7 +138,7 @@ CoinControlDialog::CoinControlDialog(QWidget *parent) :
 
     ui->treeWidget->setStyleSheet("\
 		    CoinControlTreeWidget { \
-			       border: 1px solid #f26522; \
+			       border: 1px solid #e32105; \
     		    } \
         QTreeView::indicator:unchecked{\
             image: url(:/icons/stylesheet-checkbox-unchecked) 0;\

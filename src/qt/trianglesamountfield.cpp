@@ -33,8 +33,8 @@ TrianglesAmountField::TrianglesAmountField(QWidget *parent):
     unit->setMinimumWidth(50);
     unit->setStyleSheet("QToolTip \
                         {\
-                             color: #f26522;\
-                             border: 1px solid #61280E;\
+                             color: #e32105;\
+                             border: 1px solid #3d0e04;\
                              background-color: #000;\
                              /*padding: 10px 10px;*/\
                              border-radius: 3px;\

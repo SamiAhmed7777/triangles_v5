@@ -103,8 +103,8 @@ TransactionView::TransactionView(QWidget *parent) :
     contextMenu->addAction(abandonAction);
     contextMenu->setStyleSheet("QMenu {\
                                background-color: #000; \
-                               border: 1px solid #f26522;\
-                               color: #f26522;\
+                               border: 1px solid #e32105;\
+                               color: #e32105;\
                            }\
                            \
                            QMenu::item {\
@@ -112,8 +112,8 @@ TransactionView::TransactionView(QWidget *parent) :
                            }\
                            \
                            QMenu::item:selected {\
-                               color: #f26522;\
-                               background-color: #61280E;\
+                               color: #e32105;\
+                               background-color: #3d0e04;\
                            }\
                            ");
 

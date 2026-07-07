@@ -26,14 +26,14 @@ IntroDialog::IntroDialog(QWidget *parent) :
 
     // Match existing Triangles dark theme
     setStyleSheet(
-        "QDialog { background-color: #000; color: #f26522; }"
-        "QLabel { color: #f26522; }"
-        "QRadioButton { color: #f26522; }"
-        "QRadioButton::indicator { border: 1px solid #f26522; background-color: #000; width: 12px; height: 12px; border-radius: 7px; }"
-        "QRadioButton::indicator:checked { background-color: #f26522; }"
-        "QLineEdit { background-color: #1c1c1c; border: 1px solid #f26522; color: #f26522; padding: 4px; }"
-        "QPushButton { background-color: #000; color: #f26522; border: 1px solid #f26522; padding: 4px 16px; min-height: 20px; }"
-        "QPushButton:hover { background-color: #61280E; }"
+        "QDialog { background-color: #000; color: #e32105; }"
+        "QLabel { color: #e32105; }"
+        "QRadioButton { color: #e32105; }"
+        "QRadioButton::indicator { border: 1px solid #e32105; background-color: #000; width: 12px; height: 12px; border-radius: 7px; }"
+        "QRadioButton::indicator:checked { background-color: #e32105; }"
+        "QLineEdit { background-color: #1c1c1c; border: 1px solid #e32105; color: #e32105; padding: 4px; }"
+        "QPushButton { background-color: #000; color: #e32105; border: 1px solid #e32105; padding: 4px 16px; min-height: 20px; }"
+        "QPushButton:hover { background-color: #3d0e04; }"
     );
 
     defaultDataDir = QString::fromStdString(GetDefaultDataDir().string());
@@ -44,7 +44,7 @@ IntroDialog::IntroDialog(QWidget *parent) :
 
     // Welcome header
     QLabel *welcomeLabel = new QLabel(tr("Welcome to Triangles!"));
-    welcomeLabel->setStyleSheet("font-size: 16px; font-weight: bold; color: #f26522;");
+    welcomeLabel->setStyleSheet("font-size: 16px; font-weight: bold; color: #e32105;");
     mainLayout->addWidget(welcomeLabel);
 
     // Description

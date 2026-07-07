@@ -11,7 +11,7 @@ static const int MAX_PASSPHRASE_SIZE = 1024;
 static const int STATUSBAR_ICONSIZE = 16;
 
 /* Invalid field background style */
-#define STYLE_INVALID "border: 1px solid #ff0000;background:#1c1c1c;color: #f26522;"
+#define STYLE_INVALID "border: 1px solid #ff0000;background:#1c1c1c;color: #e32105;"
 
 /* Transaction list -- unconfirmed transaction */
 #define COLOR_UNCONFIRMED QColor(97, 40, 14)

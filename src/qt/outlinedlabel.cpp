@@ -9,7 +9,7 @@
 
 OutlinedLabel::OutlinedLabel(QWidget* parent)
     : QLabel(parent)
-    , m_outlineColor(QColor("#f26522"))
+    , m_outlineColor(QColor("#e32105"))
     , m_outlineWidth(3)
 {
     // OutlinedLabel is always styled; do not let QSS override our paint.

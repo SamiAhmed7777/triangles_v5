@@ -38,7 +38,7 @@ void MessageViewDelegate::paint(QPainter *painter, const QStyleOptionViewItem &o
 
     QTextDocument doc;
     QString align(index.data(MessageModel::TypeRole) == 1 ? "left" : "right");
-    QString html = "<p align=\"" + align + "\" style=\"color:#f26522;\">" + index.data(MessageModel::HTMLRole).toString() + "</p>";
+    QString html = "<p align=\"" + align + "\" style=\"color:#e32105;\">" + index.data(MessageModel::HTMLRole).toString() + "</p>";
     doc.setHtml(html);
 
     /// Painting item without text
@@ -100,8 +100,8 @@ MessagePage::MessagePage(QWidget *parent) :
     contextMenu->addAction(deleteAction);
     contextMenu->setStyleSheet("QMenu {\
                                background-color: #000; \
-                               border: 1px solid #f26522;\
-                               color: #f26522;\
+                               border: 1px solid #e32105;\
+                               color: #e32105;\
                            }\
                            \
                            QMenu::item {\
@@ -110,7 +110,7 @@ MessagePage::MessagePage(QWidget *parent) :
                            \
                            QMenu::item:selected {\
                                color: #000;\
-                               background-color: #f26522;\
+                               background-color: #e32105;\
                            }\
                            ");
 

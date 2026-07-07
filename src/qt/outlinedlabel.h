@@ -7,7 +7,7 @@
  * QLabel that renders its text with an outline (stroke) in the
  * outline color, and a fill in the fill color. Used for the
  * "HD" badge in the status bar of the Triangles Qt wallet so
- * that each letter is outlined in the same red (#f26522) as
+ * that each letter is outlined in the same red (#e32105) as
  * the triangle icons.
  *
  * Outline is drawn first (wide red pen), then the fill is drawn

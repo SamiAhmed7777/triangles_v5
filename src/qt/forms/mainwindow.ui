@@ -457,7 +457,7 @@ QMenu::item:selected {
 
 /* ================= combobox */
 QComboBox {
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	background-color: #1c1c1c;
 	}
 
@@ -466,7 +466,7 @@ QComboBox::drop-down {
 	subcontrol-position: top right;
 	/*width: 15px;*/
 	border-left-width: 1px;
-	border-left-color: #f26522;
+	border-left-color: #e32105;
 	border-left-style: solid;
 	}
 
@@ -476,10 +476,10 @@ QComboBox::down-arrow {
 
 QComboBox QAbstractItemView {
 	background-color: #1c1c1c;
-	selection-background-color:#61280E;
-	selection-color: #f26522; 
-	border: 1px solid #f26522;
-	color:#f26522;
+	selection-background-color:#3d0e04;
+	selection-color: #e32105; 
+	border: 1px solid #e32105;
+	color:#e32105;
 	}
 
 /* =========== QLineEdit =============*/
@@ -534,7 +534,7 @@ QCheckBox::indicator:checked:pressed {
    <property name="styleSheet">
     <string notr="true">#centralWidget {
 	background-color: #000;
-	border: 2px solid #f26522;
+	border: 2px solid #e32105;
 	}</string>
    </property>
    <layout class="QVBoxLayout" name="verticalLayout_8">
@@ -593,7 +593,7 @@ QCheckBox::indicator:checked:pressed {
 }
 
 QWidget {
-	color: #f26522;
+	color: #e32105;
 	}</string>
         </property>
         <layout class="QVBoxLayout" name="verticalLayout_2">
@@ -605,7 +605,7 @@ QWidget {
 }
 
 QWidget {
-	color: #f26522;
+	color: #e32105;
 	}</string>
            </property>
            <layout class="QHBoxLayout" name="horizontalLayout">
@@ -682,7 +682,7 @@ QWidget {
 
 QPushButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 	}</string>
               </property>
               <property name="text">
@@ -738,7 +738,7 @@ QPushButton:pressed:flat {
 
 QPushButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 	}</string>
               </property>
               <property name="text">
@@ -794,7 +794,7 @@ QPushButton:pressed:flat {
 
 QPushButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 	}</string>
               </property>
               <property name="text">
@@ -936,11 +936,11 @@ QPushButton:hover {
 	}
 
 QPushButton:pressed:flat {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QPushButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}</string>
              </property>
              <property name="text">
@@ -989,11 +989,11 @@ QPushButton:hover {
 	}
 
 QPushButton:pressed:flat {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QPushButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}</string>
              </property>
              <property name="text">
@@ -1042,11 +1042,11 @@ QPushButton:hover {
 	}
 
 QPushButton:pressed:flat {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QPushButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}</string>
              </property>
              <property name="text">
@@ -1095,11 +1095,11 @@ QPushButton:hover {
 	}
 
 QPushButton:pressed:flat {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QPushButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}</string>
              </property>
              <property name="text">
@@ -1148,11 +1148,11 @@ QPushButton:hover {
 	}
 
 QPushButton:pressed:flat {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QPushButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}</string>
              </property>
              <property name="text">
@@ -1201,11 +1201,11 @@ QPushButton:hover {
 	}
 
 QPushButton:pressed:flat {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QPushButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}</string>
              </property>
              <property name="text">
@@ -1351,7 +1351,7 @@ QPushButton:hover {
          </palette>
         </property>
         <property name="styleSheet">
-         <string notr="true">background-color: #f26522;</string>
+         <string notr="true">background-color: #e32105;</string>
         </property>
         <property name="lineWidth">
          <number>0</number>
@@ -1380,7 +1380,7 @@ QPushButton:hover {
 	background-color: #000;
 	}
 QLabel {
-	color: #f26522;
+	color: #e32105;
 	}</string>
         </property>
         <layout class="QHBoxLayout" name="horizontalLayout_6" stretch="0,0,0,1,0,1,0,0,0,0,0,0,0">
@@ -1602,12 +1602,12 @@ QLabel {
            </property>
            <property name="styleSheet">
             <string notr="true">QProgressBar {
-    border: 1px solid#f26522;
+    border: 1px solid#e32105;
 	background-color: #000;
 	}
 
 QProgressBar::chunk {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	/*width: 20px;*/
 	}</string>
            </property>

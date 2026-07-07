@@ -127,8 +127,8 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     this->setStyleSheet(".TrianglesGUI \
                         QToolTip \
                         {\
-                             color: #f26522;\
-                             border: 1px solid #61280E;\
+                             color: #e32105;\
+                             border: 1px solid #3d0e04;\
                              background-color: #000;\
                              /*padding: 10px 10px;*/\
                              border-radius: 3px;\
@@ -141,7 +141,7 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
                         subcontrol-position: top right;\
                         /*width: 15px;*/\
                         border-left-width: 1px;\
-                        border-left-color: #f26522;\
+                        border-left-color: #e32105;\
                         border-left-style: solid;\
                         }\
                         QComboBox::down-arrow {\
@@ -149,8 +149,8 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
                         }\
                         QMenu {\
                              background-color: #000; \
-                             border: 1px solid #f26522;\
-                             color: #f26522;\
+                             border: 1px solid #e32105;\
+                             color: #e32105;\
                          }\
                          \
                          QMenu::item {\
@@ -158,11 +158,11 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
                          }\
                          \
                          QMenu::item:selected {\
-                             background-color: #61280E;\
+                             background-color: #3d0e04;\
                          }\
                         \
                         QScrollBar:horizontal {\
-                             border: 1px solid #f26522;\
+                             border: 1px solid #e32105;\
                              background: #000;\
                              height: 15px;\
                              margin: 0px 16px 0 16px;\
@@ -170,14 +170,14 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
                         \
                         QScrollBar::handle:horizontal\
                         {\
-                              border: 1px solid #f26522;\
+                              border: 1px solid #e32105;\
                               background: #1c1c1c;\
                               min-height: 20px;\
                               /*border-radius: 2px;*/\
                         }\
                         \
                         QScrollBar::add-line:horizontal {\
-                              border: 1px solid #f26522;\
+                              border: 1px solid #e32105;\
                               /*border-radius: 2px;*/\
                               background: #1c1c1c;\
                               width: 14px;\
@@ -186,7 +186,7 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
                         }\
                         \
                         QScrollBar::sub-line:horizontal {\
-                              border: 1px solid #f26522;\
+                              border: 1px solid #e32105;\
                               /*border-radius: 2px;*/\
                               background: #1c1c1c;\
                               width: 14px;\
@@ -196,10 +196,10 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
                         \
                         QScrollBar::right-arrow:horizontal, QScrollBar::left-arrow:horizontal\
                         {\
-                              border: 1px solid #f26522;\
+                              border: 1px solid #e32105;\
                               width: 1px;\
                               height: 1px;\
-                              background: #f26522;\
+                              background: #e32105;\
                         }\
                         \
                         QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal\
@@ -212,12 +212,12 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
                               background: #000;\
                               width: 15px;\
                               margin: 16px 0 16px 0;\
-                              border: 1px solid #f26522;\
+                              border: 1px solid #e32105;\
                         }\
                         \
                         QScrollBar::handle:vertical\
                         {\
-                              border: 1px solid #f26522;\
+                              border: 1px solid #e32105;\
                               background: #1c1c1c;\
                               min-height: 20px;\
                               /*border-radius: 2px;*/\
@@ -225,7 +225,7 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
                         \
                         QScrollBar::add-line:vertical\
                         {\
-                              border: 1px solid #f26522;\
+                              border: 1px solid #e32105;\
                               /*border-radius: 2px;*/\
                               background: #1c1c1c;\
                               height: 14px;\
@@ -235,7 +235,7 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
                         \
                         QScrollBar::sub-line:vertical\
                         {\
-                              border: 1px solid #f26522;\
+                              border: 1px solid #e32105;\
                               /*border-radius: 2px;*/\
                               background: #1c1c1c;\
                               height: 14px;\
@@ -245,10 +245,10 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
                         \
                         QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical\
                         {\
-                              border: 1px solid #f26522;\
+                              border: 1px solid #e32105;\
                               width: 1px;\
                               height: 1px;\
-                              background: #f26522;\
+                              background: #e32105;\
                         }\
                         \
                         \
@@ -1097,7 +1097,7 @@ void TrianglesGUI::requestShutdown()
 
 void TrianglesGUI::askFee(qint64 nFeeRequired, bool *payFee)
 {
-    QString strMessage = tr("<font color='#f26522'>This transaction is over the size limit.  You can still send it for a fee of %1, "
+    QString strMessage = tr("<font color='#e32105'>This transaction is over the size limit.  You can still send it for a fee of %1, "
           "which goes to the nodes that process your transaction and helps to support the network.  </font>"
           "Do you want to pay the fee?").arg(TrianglesUnits::formatWithUnit(TrianglesUnits::TRI, nFeeRequired));
           
@@ -1109,21 +1109,21 @@ void TrianglesGUI::askFee(qint64 nFeeRequired, bool *payFee)
                                           
     msgBox->setIconPixmap(QPixmap(":/msgbox/question"));
     msgBox->setStyleSheet("\
-                          QMessageBox {border: 2px solid #f26522;\
+                          QMessageBox {border: 2px solid #e32105;\
                                        background-color: #000;}\
                           ");
     msgBox->button(QMessageBox::Yes)->setStyleSheet("\
-                          QMessageBox QPushButton {background-color: #000;color: #f26522;border: 1px solid #f26522;\
+                          QMessageBox QPushButton {background-color: #000;color: #e32105;border: 1px solid #e32105;\
                               min-width: 120px;max-width: 120px;max-height: 20px;min-height: 20px;}\
-                          QMessageBox QPushButton:hover {background-color: #61280E;}\
-                          QMessageBox QPushButton:pressed:flat {color: #000;background-color: #f26522;}\
+                          QMessageBox QPushButton:hover {background-color: #3d0e04;}\
+                          QMessageBox QPushButton:pressed:flat {color: #000;background-color: #e32105;}\
                           ");
                           
     msgBox->button(QMessageBox::Cancel)->setStyleSheet("\
-                          QMessageBox QPushButton {background-color: #000;color: #f26522;border: 1px solid #f26522;\
+                          QMessageBox QPushButton {background-color: #000;color: #e32105;border: 1px solid #e32105;\
                               min-width: 120px;max-width: 120px;max-height: 20px;min-height: 20px;}\
-                          QMessageBox QPushButton:hover {background-color: #61280E;}\
-                          QMessageBox QPushButton:pressed:flat {color: #000;background-color: #f26522;}\
+                          QMessageBox QPushButton:hover {background-color: #3d0e04;}\
+                          QMessageBox QPushButton:pressed:flat {color: #000;background-color: #e32105;}\
                           ");
                                                                                                               
     int retval = msgBox->exec();                                      
@@ -1886,7 +1886,7 @@ void TrianglesGUI::updateI2PAddress()
 
 void TrianglesGUI::updateHDStatus()
 {
-    // Red (#f26522 — TRI brand color) when HD is enabled, grey when not.
+    // Red (#e32105 — TRI brand color) when HD is enabled, grey when not.
     // Placed next to the lock icon as a wallet-capability indicator.
     if (!labelHdIcon) return;
 
@@ -1898,7 +1898,7 @@ void TrianglesGUI::updateHDStatus()
     if (fHD) {
         // Both letters outlined in the brand red, 3px stroke (matches the
         // triangles beside it).
-        labelHdIcon->setOutlineColor(QColor("#f26522"));
+        labelHdIcon->setOutlineColor(QColor("#e32105"));
         labelHdIcon->setOutlineWidth(3);
         labelHdIcon->setToolTip(tr("HD wallet: BIP39 seed active. Backup your seed phrase — individual keys alone will not restore this wallet."));
     } else {

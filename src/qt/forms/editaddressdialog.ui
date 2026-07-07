@@ -14,7 +14,7 @@
    <string/>
   </property>
   <property name="styleSheet">
-   <string notr="true">color: #f26522;
+   <string notr="true">color: #e32105;
 background-color: #000;
 </string>
   </property>
@@ -38,7 +38,7 @@ background-color: #000;
     <widget class="QFrame" name="frame">
      <property name="styleSheet">
       <string notr="true">#frame {
-	border: 2px solid #f26522;
+	border: 2px solid #e32105;
 	}</string>
      </property>
      <property name="frameShape">
@@ -290,7 +290,7 @@ background-color: #000;
              <property name="styleSheet">
               <string notr="true">QLineEdit {
 	background-color: #1c1c1c;
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	margin: 0px 10px;
 	}</string>
              </property>
@@ -354,7 +354,7 @@ background-color: #000;
              <property name="styleSheet">
               <string notr="true">QLineEdit {
 	background-color: #1c1c1c;
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	margin: 0px 10px;
 	}</string>
              </property>
@@ -392,15 +392,15 @@ background-color: #000;
 
 QPushButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 	}
 
 QPushButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QPushButton:!enabled {
-	color: #61280E;
+	color: #3d0e04;
 	}</string>
              </property>
              <property name="text">
@@ -444,8 +444,8 @@ QPushButton:!enabled {
                <property name="styleSheet">
                 <string notr="true">QPushButton {
 	background-color: #000;
-	color: #f26522;
-	border: 1px solid #f26522;
+	color: #e32105;
+	border: 1px solid #e32105;
 	max-height: 20px;
 	min-height: 20px;
 	max-width: 120px;
@@ -453,12 +453,12 @@ QPushButton:!enabled {
 	}
 
 QPushButton:hover {
-	background-color: #61280E;
+	background-color: #3d0e04;
 	}
 
 QPushButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 	}</string>
                </property>
                <property name="orientation">

@@ -429,7 +429,7 @@
    <string notr="true"/>
   </property>
   <property name="styleSheet">
-   <string notr="true">color: #f26522;
+   <string notr="true">color: #e32105;
 background-color: #000;
 
 </string>
@@ -454,8 +454,8 @@ background-color: #000;
     <widget class="QWidget" name="f_toolbar" native="true">
      <property name="styleSheet">
       <string notr="true">QToolTip {
-                             color: #f26522;
-                             border: 1px solid #61280E;
+                             color: #e32105;
+                             border: 1px solid #3d0e04;
                              background-color: #000;
                              /*padding: 10px 10px;*/
                              border-radius: 3px;
@@ -465,27 +465,27 @@ background-color: #000;
                         }
 QToolButton {
 	background-color: #000;
-	color: #f26522;
-	border: 1px solid #f26522;
+	color: #e32105;
+	border: 1px solid #e32105;
 }
 
 QToolButton:hover {
-	color: #f26522;
-	background-color: #61280E;
+	color: #e32105;
+	background-color: #3d0e04;
 }
 
 QToolButton:pressed:flat {
 	color: #000;
-	background-color: #f26522;
+	background-color: #e32105;
 }
 
 QToolButton:!enabled {
-	color: #61280E;
-	border: 1px solid #61280E;
+	color: #3d0e04;
+	border: 1px solid #3d0e04;
 }
 
 QComboBox {
-    border: 1px solid #f26522;
+    border: 1px solid #e32105;
 	background-color: #1c1c1c;
 }
 
@@ -494,7 +494,7 @@ QComboBox::drop-down {
     subcontrol-position: top right;
     /*width: 15px;*/
     border-left-width: 1px;
-    border-left-color: #f26522;
+    border-left-color: #e32105;
     border-left-style: solid;
 }
 
@@ -505,10 +505,10 @@ QComboBox::down-arrow {
 QComboBox QAbstractItemView
 {
 background-color: #1c1c1c;;
-selection-background-color:#61280E;
-selection-color: #f26522; 
-border: 1px solid #f26522;
-color:#f26522;
+selection-background-color:#3d0e04;
+selection-color: #e32105; 
+border: 1px solid #e32105;
+color:#e32105;
 }
 </string>
      </property>
@@ -538,7 +538,7 @@ color:#f26522;
         </property>
         <property name="styleSheet">
          <string notr="true">QComboBox {
-    border: 1px solid #f26522;
+    border: 1px solid #e32105;
 	background-color: #1c1c1c;
 }
 
@@ -547,7 +547,7 @@ QComboBox::drop-down {
     subcontrol-position: top right;
     /*width: 15px;*/
     border-left-width: 1px;
-    border-left-color: #f26522;
+    border-left-color: #e32105;
     border-left-style: solid;
 }
 
@@ -558,10 +558,10 @@ QComboBox::down-arrow {
 QComboBox QAbstractItemView
 {
 background-color: #1c1c1c;
-selection-background-color:#61280E;
-selection-color: #f26522; 
-border: 1px solid #f26522;
-color:#f26522;
+selection-background-color:#3d0e04;
+selection-color: #e32105; 
+border: 1px solid #e32105;
+color:#e32105;
 }
 </string>
         </property>
@@ -1033,7 +1033,7 @@ color:#f26522;
         </property>
         <property name="styleSheet">
          <string notr="true">QComboBox {
-    border: 1px solid #f26522;
+    border: 1px solid #e32105;
 	background-color: #1c1c1c;
 }
 
@@ -1042,7 +1042,7 @@ QComboBox::drop-down {
     subcontrol-position: top right;
     /*width: 15px;*/
     border-left-width: 1px;
-    border-left-color: #f26522;
+    border-left-color: #e32105;
     border-left-style: solid;
 }
 
@@ -1053,10 +1053,10 @@ QComboBox::down-arrow {
 QComboBox QAbstractItemView
 {
 background-color: #1c1c1c;
-selection-background-color:#61280E;
-selection-color: #f26522; 
-border: 1px solid #f26522;
-color:#f26522;
+selection-background-color:#3d0e04;
+selection-color: #e32105; 
+border: 1px solid #e32105;
+color:#e32105;
 }
 </string>
         </property>
@@ -1114,7 +1114,7 @@ color:#f26522;
    <item>
     <widget class="QTextEdit" name="f_textedit">
      <property name="styleSheet">
-      <string notr="true">border: 1px solid #f26522;</string>
+      <string notr="true">border: 1px solid #e32105;</string>
      </property>
      <property name="autoFormatting">
       <set>QTextEdit::AutoNone</set>

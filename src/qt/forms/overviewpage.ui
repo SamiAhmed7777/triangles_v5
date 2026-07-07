@@ -429,10 +429,10 @@
    <string>Form</string>
   </property>
   <property name="styleSheet">
-   <string notr="true">color: #f26522;
+   <string notr="true">color: #e32105;
 background-color: #000;
 QWidget#line	{
-	border: 2px solid #f26522;
+	border: 2px solid #e32105;
 	}
 
 </string>
@@ -450,7 +450,7 @@ QWidget#line	{
          <widget class="QFrame" name="frame">
           <property name="styleSheet">
            <string notr="true">#frame {
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	}</string>
           </property>
           <property name="frameShape">
@@ -635,7 +635,7 @@ QWidget#line	{
               <widget class="Line" name="line">
                <property name="styleSheet">
                 <string notr="true">#line {
-	border: 2px solid #f26522;
+	border: 2px solid #e32105;
 	}</string>
                </property>
                <property name="orientation">
@@ -727,7 +727,7 @@ QWidget#line	{
          <widget class="QFrame" name="frame_2">
           <property name="styleSheet">
            <string notr="true">#frame_2 {
-	border: 1px solid #f26522;
+	border: 1px solid #e32105;
 	}
 </string>
           </property>
@@ -808,10 +808,10 @@ QWidget#line	{
              <property name="text">
               <string>&lt;head&gt;
 	&lt;style type=&quot;text/css&quot; media=&quot;screen&quot;&gt;
-	a:link { color:#f26522; text-decoration: none;font-weight:bold; }
-	a:visited { color:#f26522; text-decoration: none; }
-	a:hover { color:#f26522; text-decoration: underline; }
-	a:active { color:#f26522; text-decoration: underline; }
+	a:link { color:#e32105; text-decoration: none;font-weight:bold; }
+	a:visited { color:#e32105; text-decoration: none; }
+	a:hover { color:#e32105; text-decoration: underline; }
+	a:active { color:#e32105; text-decoration: underline; }
 	&lt;/style&gt;
 	&lt;/head&gt;
 	&lt;body&gt;
@@ -833,10 +833,10 @@ QWidget#line	{
              <property name="text">
               <string>&lt;head&gt;
 	&lt;style type=&quot;text/css&quot; media=&quot;screen&quot;&gt;
-	a:link { color:#f26522; text-decoration: none;font-weight:bold; }
-	a:visited { color:#f26522; text-decoration: none; }
-	a:hover { color:#f26522; text-decoration: underline; }
-	a:active { color:#f26522; text-decoration: underline; }
+	a:link { color:#e32105; text-decoration: none;font-weight:bold; }
+	a:visited { color:#e32105; text-decoration: none; }
+	a:hover { color:#e32105; text-decoration: underline; }
+	a:active { color:#e32105; text-decoration: underline; }
 	&lt;/style&gt;
 	&lt;/head&gt;
 	&lt;body&gt;
@@ -861,10 +861,10 @@ QWidget#line	{
              <property name="text">
               <string>&lt;head&gt;
 	&lt;style type=&quot;text/css&quot; media=&quot;screen&quot;&gt;
-	a:link { color:#f26522; text-decoration: none;font-weight:bold; }
-	a:visited { color:#f26522; text-decoration: none; }
-	a:hover { color:#f26522; text-decoration: underline; }
-	a:active { color:#f26522; text-decoration: underline; }
+	a:link { color:#e32105; text-decoration: none;font-weight:bold; }
+	a:visited { color:#e32105; text-decoration: none; }
+	a:hover { color:#e32105; text-decoration: underline; }
+	a:active { color:#e32105; text-decoration: underline; }
 	&lt;/style&gt;
 	&lt;/head&gt;
 	&lt;body&gt;
