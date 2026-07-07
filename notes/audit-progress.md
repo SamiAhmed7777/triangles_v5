@@ -521,3 +521,26 @@ failure is allowed by the workflow and does not block merge.
 4. pbkdf2 + scrypt KAT vector tests
 5. net_bootstrap peer-selection paths
 6. PR #13 wallet brand color alignment (UI-only, low risk)
+
+
+## 2026-07-06 -- Krystie (continued 2)
+
+### Action taken: keystore coverage (branch audit/keystore-coverage, commit 06853d4)
+
+The keystore layer guards every spendable key in the wallet. Audit flagged it as security-critical with zero coverage. CCrypter is covered separately; this suite focuses on CBasicKeyStore + CCryptoKeyStore map operations, lock/unlock state machine, and encrypt/decrypt round-trips.
+
+27 cases covering:
+- CBasicKeyStore: add/have/get roundtrips, missing-key negatives, pubkey derivation, secret compressed-flag preservation, GetKeys enumeration + input-clearing, CScript storage (BIP-0013) roundtrips and idempotency
+- CCryptoKeyStore: state machine (initial state, LockKeyStore flip, refuse-to-Lock-when-plaintext-keys-exist), encrypt/decrypt roundtrip with the documented EncryptKeys -> Unlock sequence, wrong-master rejection, AddKey-when-locked refusal, AddKey-when-crypted-and-unlocked actually encrypts, crypted-mode HaveKey/GetKeys/GetPubKey paths, edge cases (empty Unlock, double Unlock)
+
+Used TestableCryptoKeyStore (unit-test-only subclass widening protected access via using-declarations) so the test can drive the protected paths without modifying production code.
+
+Subtle findings while writing the tests:
+- `Unlock()` refuses when mapKeys is non-empty (SetCrypted precondition) -- must use `EncryptKeys` to migrate plaintext -> encrypted first
+- `EncryptKeys` sets fUseCrypto=true but does NOT set vMasterKey; subsequent `Unlock(master)` is required to install the key
+- `AddKey` when crypted+unlocked ENCRYPTS the new key (good); when crypted+locked refuses (good); when crypted+unlocked and AddKey is called then Lock+Unlock, the encrypted key round-trips correctly
+
+Full suite: 262/262 cases, 21713/21713 assertions. ctest: 4/4 green. Branch pushed to origin + gitea.
+
+### PR #14 CI: ALL REAL JOBS GREEN
+Final CI run (run 28845879030 on f9a11fc) — every required job passes except the pre-existing simd.c sanitizer failure. PR #14 is merge-ready.
