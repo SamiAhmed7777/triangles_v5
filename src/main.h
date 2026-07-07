@@ -43,6 +43,14 @@ constexpr unsigned int MAX_ORPHAN_TRANSACTIONS = MAX_BLOCK_SIZE/100;
 constexpr unsigned int MAX_ORPHAN_BLOCKS = 750;
 constexpr unsigned int MAX_ORPHAN_BLOCKS_IBD = 1500;
 constexpr unsigned int MAX_REORG_DEPTH = 100;  // reject reorgs deeper than this (finality)
+
+// ASSUME_VALID_BUFFER: how many blocks BACK from the tip to keep fully
+// validating. Blocks at or below nAssumeValidThreshold take the fast path
+// (skip sigops/script/UTXO validation) because we've already verified the
+// entire chain up to that height. We always validate the last BUFFER blocks
+// so a reorg attack that rewrites the top of the chain is caught immediately.
+// Lower = safer, higher = faster sync.
+constexpr unsigned int ASSUME_VALID_BUFFER = 100;
 constexpr unsigned int MAX_INV_SZ = 50000;
 constexpr int64_t MIN_TX_FEE = (1 * CENT) / 100;
 constexpr int64_t MIN_RELAY_TX_FEE = (1 * CENT) / 100;
@@ -89,6 +97,7 @@ extern uint256 nBestInvalidTrust;
 extern uint256 hashBestChain;
 extern CBlockIndex* pindexBest;
 extern CBlockIndex* pindexFinalized;  // auto-checkpoint: deepest finalized block
+extern int nAssumeValidThreshold;      // highest height covered by assumeValid fast path
 extern unsigned int nTransactionsUpdated;
 extern uint64_t nLastBlockTx;
 extern uint64_t nLastBlockSize;
