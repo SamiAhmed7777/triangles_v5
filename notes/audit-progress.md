@@ -422,3 +422,34 @@ wrong; fixed to flip a low-order byte.
 Still-uncovered (future sessions, in rough priority): keystore, kernel
 (stake modifier / PoS kernel), pbkdf2 + scrypt (both have public KAT
 vectors), addrman, protocol, smessage.
+
+
+## 2026-07-06 -- Krystie (this session)
+
+### Hermes's 2026-07-04 handoff letter: corrected
+
+The handoff letter (notes/hermes-handoff-2026-07-04.md) said H4/W1/W2 were "uncommitted on DNS2, ready to land once W2 is fixed." That was incorrect: W2/H4/W1 were committed on 2026-07-02 by Krystie as 6cadf7f ("chaindb: W2 iterator-scoping + H4 marker-verify + W1 INADDR_ANY"), tagged v6.1.3 and v6.1.4, and reachable from both master and audit/sync-fast-assumevalid. Verified: git log shows the commit on those branches; the working tree has the W2 iterator scope comment ("W2 root cause: this iterator MUST be destroyed before source.Close()") and the H4 marker-verify block at chaindb_migrate.cpp:210-251.
+
+So the "blocked on W2" framing in the handoff letter was stale by the time it was written. W2 has been runtime-verified against the full DNS2 2.2M-block chain (per the 6cadf7f commit message).
+
+### Action taken this session: DoS_checkSig timing fix (PR #14, commit b79e2b8)
+
+The previous timing assertion in DoS_tests.cpp compared `nManyValidate < nOneValidate` -- loops with different op counts (100 signs vs 500 verifies), never meaningful. The downgrade to BOOST_WARN_MESSAGE that was on the branch fires every run because the signature cache is intentionally a no-op on master.
+
+Replaced with: warmup pass, 3 timed trials of 500 verifies each, take the min, assert <600ms. Threshold calibrated to ~1.6x observed p100 on this DNS2 dev box (~380ms real perf in debug builds).
+
+Verification: 5 consecutive runs all pass with min in [361, 411]ms; full unit suite 227/227 cases, 21597/21597 assertions, 0 warnings.
+
+What this catches that the WARN missed: an actual verify-path regression (accidental O(n) cache key, double-verify, hooking up OpenSSL instead of libsecp256k1) would roughly double the verify time and trip the 600ms check. Ordinary CI variance does not.
+
+### PR #14 status as of 2026-07-06
+
+- Mergeable: MERGEABLE (UNSTABLE because CI is in progress)
+- 9 CI jobs running: linux/win/macos builds + lint + sanitizers + unit. Started 2026-07-07T05:56:39Z, ~5 min before this log.
+- New commit on top of branch tip: b79e2b8 (DoS_checkSig timing)
+- Branch tip before my commit: ded9073
+- Pushed to origin (GitHub) + gitea + gitsami (PC mirror)
+
+### Next: kernel / PoS coverage
+
+The audit's flagged remaining uncovered security-critical module is kernel (stake modifier / PoS kernel hash). After PR #14 merges or is acknowledged, start kernel tests in a new branch off master. Will cross-check the kernel algorithm against Z.Ai glm-4.6 before writing the tests.
