@@ -270,6 +270,17 @@ include(BuildLevelDB)
 # ── Generate build.h from git describe ──
 include(GenerateBuildInfo)
 
+# ── Enable CTest at the TOP level ──
+# add_test() is called in src/CMakeLists.txt, but without enable_testing()
+# here the top-level build/CTestTestfile.cmake is never generated, so
+# `ctest` run from the build root discovers ZERO tests. CI does exactly
+# `cd build && ctest`, which means the unit suites were silently not run.
+# Calling enable_testing() at the root generates the top-level test file
+# that recurses into src/ and registers all four test executables.
+if(BUILD_TESTS)
+    enable_testing()
+endif()
+
 # ── Descend into source tree ──
 add_subdirectory(src)
 

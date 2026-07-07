@@ -597,6 +597,15 @@ if(BUILD_TESTS)
     # Exclude the standalone chaindb test driver — it gets its own target
     # because it needs to run without the TestingSetup global fixture.
     list(FILTER TEST_SOURCES EXCLUDE REGEX "chaindb_equivalence_tests_main\\.cpp$")
+    # These two are standalone test drivers: each #defines its own
+    # BOOST_TEST_MODULE and redefines the wallet/UI globals, and each has
+    # a dedicated executable + add_test below. They must NOT also be
+    # globbed into test_triangles, or the duplicate module/main and global
+    # symbols only link by virtue of -Wl,--allow-multiple-definition (which
+    # silently drops duplicates and can run their suites under the wrong
+    # global fixture). Excluding them keeps each standalone module isolated.
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "chaindb_runtime_tests\\.cpp$")
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "snapshotnet_tests\\.cpp$")
 
     add_executable(test_triangles
         ${TEST_SOURCES}
@@ -607,7 +616,7 @@ if(BUILD_TESTS)
     # No init.cpp — test_triangles.cpp provides its own StartShutdown() stub
 
     target_compile_definitions(test_triangles PRIVATE
-        "TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/test/data\""
+        "TEST_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/test/data"
     )
 
     target_include_directories(test_triangles PRIVATE
