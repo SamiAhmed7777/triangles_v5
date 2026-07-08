@@ -68,6 +68,39 @@ if [ -n "$(cd "$SOURCE_DIR" && git status --porcelain --untracked-files=no 2>/de
     echo "         match a clean checkout/tag. Commit or stash tracked changes first." >&2
 fi
 
+# ── Embedded sub-libraries (Tor, I2P) ─────────────────────────────────────
+# The daemon statically links libtor.a and libi2pd*.a; both must exist
+# before cmake's link step. On a fresh checkout they need to be built from
+# the embedded submodules. CI does this in build-all.yml before the main
+# build; this script does the same so a local `scripts/verify-reproducible-build.sh`
+# works out of the box.
+TOR_LIB="$SOURCE_DIR/src/tor/tor-src/libtor.a"
+I2P_LIBS=(
+    "$SOURCE_DIR/src/i2p/i2pd-src/libi2pd.a"
+    "$SOURCE_DIR/src/i2p/i2pd-src/libi2pdclient.a"
+    "$SOURCE_DIR/src/i2p/i2pd-src/libi2pdlang.a"
+)
+NEED_TOR_BUILD=0
+NEED_I2P_BUILD=0
+[ -f "$TOR_LIB" ] || NEED_TOR_BUILD=1
+for lib in "${I2P_LIBS[@]}"; do [ -f "$lib" ] || NEED_I2P_BUILD=1; done
+
+if [ "$NEED_TOR_BUILD" = "1" ]; then
+    echo "Building libtor.a (one-time, ~5 min)..." >&2
+    # CI passes /usr paths for native Linux; defaults in build-libtor.sh
+    # are MINGW64 cross-compile paths.
+    LIBEVENT_DIR=/usr OPENSSL_DIR=/usr ZLIB_DIR=/usr \
+        bash "$SOURCE_DIR/src/tor/build-libtor.sh" \
+        > /tmp/triangles-build-libtor.log 2>&1 \
+        || { echo "ERROR: libtor build failed; see /tmp/triangles-build-libtor.log" >&2; exit 5; }
+fi
+if [ "$NEED_I2P_BUILD" = "1" ]; then
+    echo "Building libi2pd*.a (one-time, ~3 min)..." >&2
+    bash "$SOURCE_DIR/src/i2p/build-libi2pd.sh" \
+        > /tmp/triangles-build-libi2pd.log 2>&1 \
+        || { echo "ERROR: libi2pd build failed; see /tmp/triangles-build-libi2pd.log" >&2; exit 5; }
+fi
+
 # ── Helpers ────────────────────────────────────────────────────────────────
 build_one() {
     local dir="$1" log="$2"
