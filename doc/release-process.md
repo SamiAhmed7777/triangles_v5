@@ -83,17 +83,27 @@ Options:
 **One-time setup** (the maintainer's machine):
 
 ```bash
-# Generate a fresh Ed25519 signing subkey under your existing PGP master.
-# Ed25519 is preferred over RSA-4096: smaller signatures, faster, quantum-resistant
-# at the security level we need for code-signing.
-gpg --quick-generate-key 'Sami Ahmed <sami@cryptographic-triangles.org>' ed25519 sign never
+# The release-signing key currently in use is:
+#
+#   uid:  Krystie Triangles Release <krystie-triangles-release@dns2.sami.tailnet>
+#   fp:   523A 8183 3EB7 2015 73E1 EFE1 DCF2 5799 6810 7984
+#   sub:  6913 E136 10F6 9818 3429 CE20 C2DC 6061 8C85 A159
+#   algo: RSA-4096, created 2026-04-29, expires 2028-04-28
+#
+# This is an unattended signing key used by the release CI to sign
+# release artifacts (daemon.tar.gz, qt.tar.gz, .deb, .dmg, .exe, .AppImage)
+# without a human in the loop. It is stored as a GitHub Actions secret.
+#
+# Git tags are signed by the maintainer's personal key
+# (uid `Sami <hello@sami-ahmed.net>`, fp `53AA 858E F0DD D528 EC2C 2ABD
+# 0BF7 F887 2FE0 E859`) so the tag and the artifacts can be verified
+# independently.
 
-# Print the public key block to publish on the website / GitHub.
-gpg --armor --export 'sami@cryptographic-triangles.org' > release-pubkey.asc
+# To print the public key for the current release-signing key:
+gpg --armor --export 0xDCF2579968107984 > release-pubkey.asc
 
-# Export your secret key BACKUP. Store this on airgapped / offline media.
-# Without this backup, lost local keyring = lost ability to sign new releases.
-gpg --export-secret-keys 'sami@cryptographic-triangles.org' > release-seckey-BACKUP.asc
+# To export the maintainer's tag-signing secret key (for backup):
+gpg --export-secret-keys 0x0BF7F8872FE0E859 > release-seckey-BACKUP.asc
 chmod 600 release-seckey-BACKUP.asc
 ```
 
