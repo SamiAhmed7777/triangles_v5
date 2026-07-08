@@ -107,6 +107,13 @@
 
 ## P2 — Polish & Optimization
 
+### T024: PoS reward exact-proportionality rework — REJECTED
+- **Status**: REJECTED
+- **Depends**: none
+- **Description**: Audit review of 2a4da33 (PoS reward rework, reverted by 05b5606) and 239cf61 (sigcache fix, reverted by 36d5f29) on 2026-07-07 concluded the PoS reward rework must stay reverted. Reasons: (1) consensus split risk — round-half-up pays 1 unit more than truncation for ~half of all inputs, so a block claiming that unit is valid to upgraded nodes and rejected by un-upgraded nodes; (2) motivation gone — the only driver was a unit-test assertion of exact proportionality (a78a420 already relaxed it to ±1 truncation), which is aesthetic, not correctness; (3) the new formula is worse than advertised — pre-truncating coin-age to whole-COIN units *before* multiplying drops fractional coin-age that the old formula credited, and `nWholeCoinAge * RATE * 2` is int64_t and can overflow. If exact proportionality is ever truly wanted, it must ship as a height-gated hard fork (both formulas in code, switch at activation height, coordinated node upgrade). Not worth it for cosmetic rounding. The sigcache fix from the same review (239cf61) was approved and re-landed in PR #21 / branch `fix/sigcache-false-positives` as a 6.1.6 candidate.
+- **Files**: `src/main.cpp` (GetProofOfStakeReward)
+- **Acceptance**: none — task is to leave the code as-is and not reopen
+
 ### T020: Remove unused Gemini/Google references from codebase
 - **Status**: TODO
 - **Depends**: none
