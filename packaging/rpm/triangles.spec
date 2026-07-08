@@ -42,3 +42,33 @@ install -Dm644 %{SOURCE2} %{buildroot}%{_datadir}/applications/triangles-qt.desk
 %{_bindir}/triangles-qt
 %{_bindir}/trianglesd
 %{_datadir}/applications/triangles-qt.desktop
+
+%changelog
+* Wed Jul 08 2026 Sami Ahmed <sami@cryptographic-triangles.org> - 6.1.5-1
+- 6.1.5 release. UI: olive-green for unconfirmed/immature stake balances.
+  Wallet: close-hang on Windows from detached Tor/I2P threads fixed.
+  Consensus: live PoS checks during stale-tip IBD. Plus release
+  infrastructure (reproducible builds, signed release pipeline) and
+  audit follow-ups.
+
+* Sat Jul 04 2026 Sami Ahmed <sami@cryptographic-triangles.org> - 6.1.4-1
+- 6.1.4 release. CI: Tor bundle download resilience. NeedsBootstrap
+  flag now correctly persists across rocksdb/ restarts. CI reliability
+  only; no protocol/wallet/chain format changes.
+
+* Thu Jul 02 2026 Sami Ahmed <sami@cryptographic-triangles.org> - 6.1.3-1
+- 6.1.3 release. Chain-DB migration hardening, BIP39 passphrase
+  support, HD-wallet indicator, test isolation improvements.
+  Supersedes the broken v6.1.2 hotfix.
+
+* Wed Jul 01 2026 Sami Ahmed <sami@cryptographic-triangles.org> - 6.1.1-1
+- 6.1.1 release. v3 snapshot support, portable x86-64-v2 baseline,
+  anti-spam fix, continuous finality checkpoints.
+
+* Tue Jun 30 2026 Sami Ahmed <sami@cryptographic-triangles.org> - 6.1.0-1
+- 6.1.0 release. SQLite wallet backend, RocksDB default, Boost
+  removal, I2P startup fix. Initial 6.x line with C++20 modernization
+  and embedded Tor/I2P support.
+
+* Tue Mar 24 2026 Sami Ahmed <sami@cryptographic-triangles.org> - 5.3.7-1
+- 5.3.7 release.
