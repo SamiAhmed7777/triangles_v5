@@ -1,5 +1,5 @@
 Name:           triangles
-Version:        6.1.5
+Version:        6.1.6
 Release:        1%{?dist}
 Summary:        Cryptographic Triangles (TRI) cryptocurrency wallet
 License:        MIT
@@ -44,6 +44,12 @@ install -Dm644 %{SOURCE2} %{buildroot}%{_datadir}/applications/triangles-qt.desk
 %{_datadir}/applications/triangles-qt.desktop
 
 %changelog
+* Wed Jul 08 2026 Sami Ahmed <sami@cryptographic-triangles.org> - 6.1.6-1
+- 6.1.6 release. UI: Overview Total label now conditional (green when
+  total > 0, red when empty), Transactions amount column now 3-tier
+  (grey / pale mint / money-green) by confirmation depth. Plus
+  sigcache entry-size fix and Polish CI/build fixes.
+
 * Wed Jul 08 2026 Sami Ahmed <sami@cryptographic-triangles.org> - 6.1.5-1
 - 6.1.5 release. UI: olive-green for unconfirmed/immature stake balances.
   Wallet: close-hang on Windows from detached Tor/I2P threads fixed.

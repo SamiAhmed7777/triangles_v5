@@ -5,6 +5,32 @@ All notable changes to Triangles (TRI) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.6] - 2026-07-08
+
+### Changed
+- Overview page UI: conditional color on the **Total** balance label.
+  Renders money-green (`#7CDB8A`) when the total is greater than zero
+  and brand-red (`#e32105`) when the wallet is empty. Previously a
+  static green stylesheet rule failed to cascade on some Qt builds,
+  leaving Total always red.
+- Transactions list (and Overview recent-5 list) **amount column** now
+  uses a 3-tier color rule keyed off the existing `TransactionStatus`
+  state machine, so the amount color agrees with the status icon:
+  - 0 confirms (`Unconfirmed`) → grey (`#61280E`)
+  - 1–3 confirms (`Confirming`) → pale mint (`#C5EBC9`)
+  - 4+ confirms (`Confirmed`) → money-green (`#7CDB8A`)
+  - Conflicted → grey
+  - Negative amounts (spent) stay red across all tiers.
+- Internal: added `COLOR_CONFIRMING` constant in `guiconstants.h`;
+  rewired both amount paint sites
+  (`overviewpage.cpp::TxViewDelegate::paint` and
+  `transactiontablemodel.cpp::ForegroundRole`) to share the rule.
+
+### Fixed
+- `overviewpage.cpp` now includes `transactionrecord.h` so the
+  `TransactionStatus::Confirming` enum value is in scope (was
+  previously only forward-declared via `transactiontablemodel.h`).
+
 ## [6.1.5] - 2026-07-08
 
 ### Added
@@ -65,6 +91,7 @@ Do not use.
 ### Added
 - Initial 6.x release line. C++20 modernization, embedded Tor/I2P support.
 
+[6.1.6]: https://github.com/SamiAhmed7777/triangles_v5/compare/v6.1.5...v6.1.6
 [6.1.5]: https://github.com/SamiAhmed7777/triangles_v5/compare/v6.1.4...v6.1.5
 [6.1.4]: https://github.com/SamiAhmed7777/triangles_v5/compare/v6.1.3...v6.1.4
 [6.1.3]: https://github.com/SamiAhmed7777/triangles_v5/compare/v6.1.2...v6.1.3
