@@ -52,11 +52,15 @@ public:
 
         if(amount < 0)
         {
-            foreground = confirmed ? COLOR_NEGATIVE : COLOR_UNCONFIRMED_NEGATIVE;
+            foreground = COLOR_NEGATIVE;
         }
         else if(!confirmed)
         {
-            foreground = COLOR_UNCONFIRMED_POSITIVE;
+            foreground = COLOR_UNCONFIRMED;
+        }
+        else if(index.data(TransactionTableModel::StatusRole).toInt() == (int)TransactionStatus::Confirming)
+        {
+            foreground = COLOR_CONFIRMING;
         }
         else
         {
