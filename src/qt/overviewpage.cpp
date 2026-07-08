@@ -5,6 +5,7 @@
 #include "trianglesunits.h"
 #include "optionsmodel.h"
 #include "transactiontablemodel.h"
+#include "transactionrecord.h"
 #include "transactionfilterproxy.h"
 #include "guiutil.h"
 #include "guiconstants.h"
