@@ -554,6 +554,7 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
                         Stop();
                         return;
                     }
+
                     if (!socksReady) {
 #ifdef WIN32
                         SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -616,7 +617,7 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
                 printf("ERROR: Embedded I2P background init failed: %s\n", e.what());
                 fflush(stdout);
             }
-        }); // routerThread = std::thread([this]() { ... });
+        });
 
         printf("Embedded I2P: router init delegated to background thread\n");
         fflush(stdout);
