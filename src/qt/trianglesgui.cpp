@@ -1817,24 +1817,26 @@ void TrianglesGUI::updateOnionAddress()
 
     bool hasOnion = !onionAddress.empty();
 
-    // V3 indicator — always visible when onion is active, independent of the address toggle
+    // V3 indicator — green when active, red when not
     if (hasOnion) {
         labelV3Icon->setStyleSheet("color: #00ff00; font-weight: bold;");
         labelV3Icon->setToolTip(tr("V3 Tor enabled"));
         labelV3Icon->setVisible(true);
     } else {
-        labelV3Icon->setStyleSheet("color: #555555; font-weight: bold;");
+        labelV3Icon->setStyleSheet("color: #e32105; font-weight: bold;");
         labelV3Icon->setToolTip(tr("V3 Tor not active"));
         labelV3Icon->setVisible(true);
     }
 
-    // Tor icon in the stacked address group — green when onion present, hidden otherwise
+    // Tor icon in the stacked address group — green when onion present, red when off
     if (hasOnion) {
-        labelTorIcon->setStyleSheet("color: #7eb6ff; font-weight: bold;");
+        labelTorIcon->setStyleSheet("color: #00ff00; font-weight: bold;");
         labelTorIcon->setToolTip(tr("Tor V3 hidden service active"));
         labelTorIcon->setVisible(true);
     } else {
-        labelTorIcon->setVisible(false);
+        labelTorIcon->setStyleSheet("color: #e32105; font-weight: bold;");
+        labelTorIcon->setToolTip(tr("Tor V3 hidden service not active"));
+        labelTorIcon->setVisible(true);
     }
 
     // Onion address text — respects user preference
@@ -1859,9 +1861,9 @@ void TrianglesGUI::updateI2PAddress()
     std::string i2pAddress = CI2PEmbedded::GetInstance()->GetI2PAddress();
     bool hasI2P = CI2PEmbedded::GetInstance()->IsRunning() && !i2pAddress.empty();
 
-    // I2P indicator
+    // I2P indicator — green when on, red when off
     if (hasI2P) {
-        labelI2PIcon->setStyleSheet("color: #6a4cff; font-weight: bold;");
+        labelI2PIcon->setStyleSheet("color: #00ff00; font-weight: bold;");
         labelI2PIcon->setToolTip(tr("I2P router active"));
         labelI2PIcon->setVisible(true);
     } else if (CI2PEmbedded::GetInstance()->IsRunning()) {
@@ -1869,9 +1871,9 @@ void TrianglesGUI::updateI2PAddress()
         labelI2PIcon->setToolTip(tr("I2P router running (building tunnels...)"));
         labelI2PIcon->setVisible(true);
     } else {
-        labelI2PIcon->setStyleSheet("color: #555555; font-weight: bold;");
+        labelI2PIcon->setStyleSheet("color: #e32105; font-weight: bold;");
         labelI2PIcon->setToolTip(tr("I2P not active"));
-        labelI2PIcon->setVisible(false);
+        labelI2PIcon->setVisible(true);
     }
 
     // I2P address text

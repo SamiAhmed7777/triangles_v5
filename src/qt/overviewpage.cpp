@@ -60,7 +60,7 @@ public:
         }
         else
         {
-            foreground = option.palette.color(QPalette::Text);
+            foreground = COLOR_POSITIVE;
         }
         painter->setPen(foreground);
         QString amountText = TrianglesUnits::formatWithUnit(unit, amount, true);
