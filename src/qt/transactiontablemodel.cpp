@@ -577,18 +577,32 @@ QVariant TransactionTableModel::data(const QModelIndex &index, int role) const
     case Qt::TextAlignmentRole:
         return column_alignments[index.column()];
     case Qt::ForegroundRole:
-        // Non-confirmed (but not immature) as transactions are grey
+        // Amount column color rule (3 tiers for positives, 2 for negatives):
+        //   0 confirms (Unconfirmed)                       -> COLOR_UNCONFIRMED grey
+        //   Confirming (1..RecommendedNumConfirmations-1)  -> COLOR_CONFIRMING light green (positives only)
+        //   Confirmed (depth >= RecommendedNumConfirmations) -> COLOR_POSITIVE bright green
+        //   Immature stays olive via stylesheet (unchanged)
+        //   Conflicted (depth < 0)                         -> COLOR_UNCONFIRMED grey
+        //   Negative amounts (spent) stay red across all confirmation tiers.
+        if(index.column() == Amount)
+        {
+            qint64 amount = rec->credit + rec->debit;
+            // Grey: unconfirmed, conflicted, or otherwise not counting for balance (and not immature)
+            if(!rec->status.countsForBalance && rec->status.status != TransactionStatus::Immature)
+            {
+                return COLOR_UNCONFIRMED;
+            }
+            // Negative amounts always red (spent), no matter confirmation tier
+            if(amount < 0)
+            {
+                return COLOR_NEGATIVE;
+            }
+            // Positive amounts: lighter green while still confirming, bright green once fully confirmed
+            return rec->status.status == TransactionStatus::Confirming ? COLOR_CONFIRMING : COLOR_POSITIVE;
+        }
         if(!rec->status.countsForBalance && rec->status.status != TransactionStatus::Immature)
         {
             return COLOR_UNCONFIRMED;
-        }
-        if(index.column() == Amount && (rec->credit+rec->debit) < 0)
-        {
-            return COLOR_NEGATIVE;
-        }
-        if(index.column() == Amount && (rec->credit+rec->debit) > 0)
-        {
-            return COLOR_POSITIVE;
         }
         if(index.column() == ToAddress)
         {

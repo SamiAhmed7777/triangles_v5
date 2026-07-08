@@ -5,6 +5,7 @@
 #include "trianglesunits.h"
 #include "optionsmodel.h"
 #include "transactiontablemodel.h"
+#include "transactionrecord.h"
 #include "transactionfilterproxy.h"
 #include "guiutil.h"
 #include "guiconstants.h"
@@ -57,6 +58,10 @@ public:
         else if(!confirmed)
         {
             foreground = COLOR_UNCONFIRMED;
+        }
+        else if(index.data(TransactionTableModel::StatusRole).toInt() == (int)TransactionStatus::Confirming)
+        {
+            foreground = COLOR_CONFIRMING;
         }
         else
         {
@@ -146,7 +151,13 @@ void OverviewPage::setBalance(qint64 balance, qint64 stake, qint64 unconfirmedBa
     ui->labelStake->setText(TrianglesUnits::formatWithUnit(unit, stake));
     ui->labelUnconfirmed->setText(TrianglesUnits::formatWithUnit(unit, unconfirmedBalance));
     ui->labelImmature->setText(TrianglesUnits::formatWithUnit(unit, immatureBalance));
-    ui->labelTotal->setText(TrianglesUnits::formatWithUnit(unit, balance + stake + unconfirmedBalance + immatureBalance));
+    qint64 total = balance + stake + unconfirmedBalance + immatureBalance;
+    ui->labelTotal->setText(TrianglesUnits::formatWithUnit(unit, total));
+    // Total: green when there are coins, red when empty. C++ owns the color
+    // (stylesheet can't do conditional logic), so the rule is applied every time
+    // the balance updates.
+    ui->labelTotal->setStyleSheet(total > 0 ? QStringLiteral("color: #7CDB8A; font: 12pt bold;")
+                                            : QStringLiteral("color: #e32105; font: 12pt bold;"));
 
     // only show immature (newly mined) balance if it's non-zero, so as not to complicate things
     // for the non-mining users

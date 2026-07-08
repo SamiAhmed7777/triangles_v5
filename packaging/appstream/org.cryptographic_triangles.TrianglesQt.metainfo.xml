@@ -41,6 +41,31 @@
   </provides>
 
   <releases>
+    <release version="6.1.5" date="2026-07-08">
+      <description>
+        <p>UI: olive-green for unconfirmed/immature stake balances. Wallet: close-hang on Windows from detached Tor/I2P threads fixed. Consensus: live PoS checks during stale-tip IBD. Plus release infrastructure (reproducible builds, signed release pipeline) and audit follow-ups.</p>
+      </description>
+    </release>
+    <release version="6.1.4" date="2026-07-04">
+      <description>
+        <p>CI: Tor bundle download resilience. NeedsBootstrap flag now correctly persists across rocksdb/ restarts. CI reliability only; no protocol/wallet/chain format changes.</p>
+      </description>
+    </release>
+    <release version="6.1.3" date="2026-07-02">
+      <description>
+        <p>Chain-DB migration hardening, BIP39 passphrase support, HD-wallet indicator, test isolation improvements. Supersedes the broken v6.1.2 hotfix.</p>
+      </description>
+    </release>
+    <release version="6.1.1" date="2026-07-01">
+      <description>
+        <p>v3 snapshot support, portable x86-64-v2 baseline, anti-spam fix, continuous finality checkpoints.</p>
+      </description>
+    </release>
+    <release version="6.1.0" date="2026-06-30">
+      <description>
+        <p>SQLite wallet backend, RocksDB default, Boost removal, I2P startup fix. Initial 6.x line with C++20 modernization and embedded Tor/I2P support.</p>
+      </description>
+    </release>
     <release version="5.3.7" date="2026-03-24">
       <description>
         <p>Version 5.3.7 release.</p>
