@@ -1260,8 +1260,9 @@ public:
 
     void Set(uint256 hash, const std::vector<unsigned char>& vchSig, const std::vector<unsigned char>& pubKey)
     {
-        // Increased default to 200,000 entries (~1.6MB at 8 bytes each).
-        // The old 50,000 limit was too small and caused frequent evictions.
+        // Default 200,000 entries (~6.4MB at 32 bytes each — entries are
+        // uint256 SHA256(sighash || sig || pubkey)). The old 50,000 limit
+        // was too small and caused frequent evictions.
         int64_t nMaxCacheSize = GetArg("-maxsigcachesize", 200000);
         if (nMaxCacheSize <= 0) return;
 
