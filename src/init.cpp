@@ -333,6 +333,24 @@ void Shutdown(void* parg)
     // Make this thread recognisable as the shutdown thread
     RenameThread("Triangles-shutoff");
 
+    // Belt-and-suspenders: spawn a watchdog that force-exits if Shutdown()
+    // doesn't complete in 30 seconds. This protects against deadlock in the
+    // embedded Tor/I2P teardown paths (see notes/wallet-close-hang-fix-2026-07-07.md).
+    std::thread([]()
+    {
+#ifdef WIN32
+        Sleep(30000);
+        fprintf(stderr, "Shutdown watchdog: 30s elapsed, force-exiting process\n");
+        fflush(stderr);
+        ExitProcess(1);
+#else
+        sleep(30);
+        fprintf(stderr, "Shutdown watchdog: 30s elapsed, force-exiting process\n");
+        fflush(stderr);
+        _exit(1);
+#endif
+    }).detach();
+
     bool fFirstThread = false;
     {
         TRY_LOCK(cs_Shutdown, lockShutdown);

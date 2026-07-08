@@ -20,6 +20,10 @@ private:
     std::string torDataDir;
     std::string onionHostname;
     std::string lastError;
+    // Tor runs in a background thread; we keep the handle so Stop() can
+    // join it instead of leaking a detached thread that blocks process exit.
+    // (Detached + still running = OS refuses to exit the process.)
+    std::thread torThread;
 
 public:
     static CTorEmbedded* GetInstance();
@@ -30,7 +34,8 @@ public:
     // Start Tor in a background thread (blocks that thread until shutdown)
     bool Start(int socksPort = 19099, int hsPort = 24112, bool enableHiddenService = true);
 
-    // Request Tor to shut down
+    // Request Tor to shut down and join the background thread (with timeout).
+    // Safe to call multiple times.
     void Stop();
 
     // Check if Tor is running and bootstrapped

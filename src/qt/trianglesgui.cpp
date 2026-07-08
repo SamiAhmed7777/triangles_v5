@@ -91,7 +91,7 @@
 #include <QSizeGrip>
 
 #include <iostream>
-
+#include <atomic>
 #include <memory>
 extern std::unique_ptr<CWallet> pwalletMain;
 extern int64_t nLastCoinStakeSearchInterval;
@@ -1084,6 +1084,20 @@ void TrianglesGUI::closeEvent(QCloseEvent *event)
         }
     }
 #endif
+    // Second close attempt while the first shutdown is still in progress:
+    // force-exit immediately. This is the user's "get me out" path when the
+    // graceful shutdown is taking too long (e.g. embedded Tor/I2P teardown
+    // is stuck). See notes/wallet-close-hang-fix-2026-07-07.md.
+    static std::atomic<bool> fShuttingDown(false);
+    if (fShuttingDown.exchange(true)) {
+        fprintf(stderr, "TrianglesGUI::closeEvent: second close while shutting down, force-exit\n");
+        fflush(stderr);
+#ifdef WIN32
+        ExitProcess(2);
+#else
+        _exit(2);
+#endif
+    }
     // Actually closing - request a full core shutdown before leaving the UI loop.
     StartShutdown();
     event->accept();
