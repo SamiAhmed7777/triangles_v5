@@ -284,35 +284,16 @@ void CTorEmbedded::Stop()
     // triggered by the `running` flag being observed by the calling code,
     // but tor_run_main itself does not poll it). In practice Tor exits when
     // the process exits, so we just join with a timeout below.
-#ifndef WIN32
+#if !defined(WIN32) || defined(__MINGW32__)
+    // MINGW std::thread is pthread-based, so signal-based shutdown works
+    // there too. Raise SIGTERM so tor_run_main can observe it.
     raise(SIGTERM);
 #endif
 
     // Give Tor up to 5 seconds to shut down cleanly.
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (torThread.joinable() && std::chrono::steady_clock::now() < deadline) {
-        // Spin briefly waiting for the thread to finish. join_for is C++20;
-        // backport the loop on C++17.
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        // Probe thread state via a non-blocking join attempt: if the thread
-        // is done, join() returns immediately.
-        // We use a try-join pattern with native_handle() timed wait.
-#ifdef WIN32
-        // On Windows, wait on the thread handle with a 0ms timeout.
-        DWORD result = WaitForSingleObject(torThread.native_handle(), 0);
-        if (result == WAIT_OBJECT_0) {
-            torThread.join();
-            break;
-        }
-#else
-        // On Linux, pthread_tryjoin is the cheapest non-blocking probe.
-        if (torThread.joinable()) {
-            // Use try_join via timed wait pattern: detach-and-rejoin trick.
-            // pthread_tryjoin is not exposed by std::thread, so we just sleep.
-            // We periodically check `running` — if Tor set it false, the
-            // thread is exiting.
-        }
-#endif
         if (!running.load()) {
             // Tor's TorThreadFunc sets running=false after tor_run_main returns.
             torThread.join();
@@ -324,16 +305,19 @@ void CTorEmbedded::Stop()
         // Tor did not exit cleanly within 5 seconds. Force-terminate the
         // thread as a last resort — we are about to exit the process anyway.
         printf("WARNING: embedded Tor did not exit within 5s; force-terminating thread\n");
-#ifdef WIN32
+#if defined(WIN32) && !defined(__MINGW32__)
+        // MSVC std::thread::native_handle_type is HANDLE (a pointer) on
+        // Windows. TerminateThread is unsafe but the process is exiting.
         TerminateThread(torThread.native_handle(), 0);
         WaitForSingleObject(torThread.native_handle(), 1000);
         // After TerminateThread the handle is still valid; detach to release.
         torThread.detach();
 #else
-        // pthread_cancel is async: the thread exits at its next cancellation
-        // point (or immediately for C code with no cancellation points — in
-        // which case pthread_join blocks). Either way, pthread_join drains
-        // the thread. We then detach the std::thread handle so the
+        // Linux + MINGW: std::thread is pthread-based, native_handle() returns
+        // pthread_t. pthread_cancel is async: the thread exits at its next
+        // cancellation point (or immediately for C code with no cancellation
+        // points — in which case pthread_join blocks). Either way,
+        // pthread_join drains the thread. Detach the std::thread handle so the
         // destructor doesn't call std::terminate on a still-joinable handle.
         pthread_cancel(torThread.native_handle());
         void* retval = nullptr;
