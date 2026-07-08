@@ -434,8 +434,10 @@ background-color: #000;
 QWidget#line	{
 	border: 2px solid #e32105;
 	}
-QLabel#labelBalance, QLabel#labelTotal, QLabel#labelStake { color: #7CDB8A; }
-QLabel#labelUnconfirmed, QLabel#labelImmature { color: #A8B847; }
+QLabel#labelBalance, QLabel#labelStake { color: #7CDB8A; }
+QLabel#labelTotal { color: #7CDB8A; font: 12pt bold; }
+QLabel#labelUnconfirmed { color: #A8B847; }
+QLabel#labelImmature { color: #A8B847; }
 </string>
   </property>
   <layout class="QHBoxLayout" name="horizontalLayout" stretch="0">
