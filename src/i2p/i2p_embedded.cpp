@@ -524,7 +524,9 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
         printf("Embedded I2P: launching router in background thread...\n");
         fflush(stdout);
 
-        std::thread([this]() {
+        // Keep the thread handle so Stop() can join it. A detached thread
+        // that is still running would block the wallet from exiting.
+        routerThread = std::thread([this]() {
             try {
                 // Start the I2P router (netdb, transports, tunnels, reseed)
                 auto logStream = std::make_shared<std::ostream>(std::cout.rdbuf());
@@ -615,7 +617,7 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
                 printf("ERROR: Embedded I2P background init failed: %s\n", e.what());
                 fflush(stdout);
             }
-        }).detach();
+        });
 
         printf("Embedded I2P: router init delegated to background thread\n");
         fflush(stdout);
@@ -632,7 +634,10 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
 
 void CI2PEmbedded::Stop()
 {
-    if (!running.load()) return;
+    if (!running.load()) {
+        if (routerThread.joinable()) routerThread.join();
+        return;
+    }
     printf("Requesting embedded I2P shutdown...\n");
 
     try {
@@ -646,6 +651,24 @@ void CI2PEmbedded::Stop()
         i2p::api::TerminateI2P();
     } catch (const std::exception& e) {
         printf("WARNING: error during I2P shutdown: %s\n", e.what());
+    }
+
+    // Wait for the bootstrap thread to finish (up to 5s).
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (routerThread.joinable() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!running.load()) {
+            // The thread observes fShutdown and exits its loop on its own
+            // once running is set false by the API teardown above.
+            routerThread.join();
+            break;
+        }
+    }
+    if (routerThread.joinable()) {
+        printf("WARNING: embedded I2P did not exit within 5s; detaching thread\n");
+        // Detach as a last resort — the process is about to exit and the OS
+        // will reap the thread.
+        routerThread.detach();
     }
 
     running.store(false);

@@ -94,6 +94,9 @@ private:
     std::string i2pDataDir; // i2pd data directory (under wallet datadir)
     std::string i2pHostname; // Our .b32.i2p address (available after router startup)
     std::string lastError;
+    // I2P bootstrap runs in a background thread; we keep the handle so Stop()
+    // can join it. (A detached thread that is still running blocks process exit.)
+    std::thread routerThread;
 
 public:
     static CI2PEmbedded* GetInstance();

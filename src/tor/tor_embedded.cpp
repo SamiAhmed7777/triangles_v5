@@ -20,14 +20,17 @@
 #include <ctime>
 #include <vector>
 #include <string>
+#include <signal.h>
 
 #ifdef WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <pthread.h>
 #endif
 
 #ifdef ENABLE_TOR_EMBEDDED
@@ -202,8 +205,10 @@ bool CTorEmbedded::Start(int socks, int hsPort, bool enableHiddenService)
     running.store(true);
 
     // Launch Tor on a dedicated thread (tor_run_main blocks)
-    std::thread torThread(TorThreadFunc, argv);
-    torThread.detach();
+    // We keep the handle (do NOT detach) so Stop() can join the thread.
+    // A detached thread that is still running will block process exit
+    // indefinitely on both Windows and Linux.
+    torThread = std::thread(TorThreadFunc, argv);
 
     // Wait for SOCKS port to become available (up to 60s)
     printf("Waiting for embedded Tor to bootstrap...\n");
@@ -265,15 +270,62 @@ bool CTorEmbedded::Start(int socks, int hsPort, bool enableHiddenService)
 
 void CTorEmbedded::Stop()
 {
-    if (!running.load()) return;
+    if (!running.load()) {
+        // Not running; just make sure the thread handle is released
+        if (torThread.joinable()) torThread.join();
+        return;
+    }
     printf("Requesting embedded Tor shutdown...\n");
-    // tor_run_main respects signals; raise SIGTERM to trigger graceful exit
-#ifndef WIN32
-    // On Unix we can signal our own process; the Tor thread handles it
-    // Actually, tor_api doesn't provide a clean shutdown function in 0.4.x
-    // For now, the thread will exit when the process exits.
-    // TODO: Tor 0.4.9+ may add tor_api_shutdown(), use it when available
+
+    // tor_run_main respects signals; raise SIGTERM to trigger graceful exit.
+    // On Linux this causes tor_run_main to return and the thread to exit.
+    // On Windows there is no signal mechanism in tor_api 0.4.x — we have to
+    // wait for tor_run_main to return on its own (the shutdown path is
+    // triggered by the `running` flag being observed by the calling code,
+    // but tor_run_main itself does not poll it). In practice Tor exits when
+    // the process exits, so we just join with a timeout below.
+#if !defined(WIN32) || defined(__MINGW32__)
+    // MINGW std::thread is pthread-based, so signal-based shutdown works
+    // there too. Raise SIGTERM so tor_run_main can observe it.
+    raise(SIGTERM);
 #endif
+
+    // Give Tor up to 5 seconds to shut down cleanly.
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (torThread.joinable() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!running.load()) {
+            // Tor's TorThreadFunc sets running=false after tor_run_main returns.
+            torThread.join();
+            break;
+        }
+    }
+
+    if (torThread.joinable()) {
+        // Tor did not exit cleanly within 5 seconds. Force-terminate the
+        // thread as a last resort — we are about to exit the process anyway.
+        printf("WARNING: embedded Tor did not exit within 5s; force-terminating thread\n");
+#if defined(WIN32) && !defined(__MINGW32__)
+        // MSVC std::thread::native_handle_type is HANDLE (a pointer) on
+        // Windows. TerminateThread is unsafe but the process is exiting.
+        TerminateThread(torThread.native_handle(), 0);
+        WaitForSingleObject(torThread.native_handle(), 1000);
+        // After TerminateThread the handle is still valid; detach to release.
+        torThread.detach();
+#else
+        // Linux + MINGW: std::thread is pthread-based, native_handle() returns
+        // pthread_t. pthread_cancel is async: the thread exits at its next
+        // cancellation point (or immediately for C code with no cancellation
+        // points — in which case pthread_join blocks). Either way,
+        // pthread_join drains the thread. Detach the std::thread handle so the
+        // destructor doesn't call std::terminate on a still-joinable handle.
+        pthread_cancel(torThread.native_handle());
+        void* retval = nullptr;
+        pthread_join(torThread.native_handle(), &retval);
+        torThread.detach();
+#endif
+    }
+
     running.store(false);
 }
 
