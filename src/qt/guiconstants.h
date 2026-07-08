@@ -13,12 +13,16 @@ static const int STATUSBAR_ICONSIZE = 16;
 /* Invalid field background style */
 #define STYLE_INVALID "border: 1px solid #ff0000;background:#1c1c1c;color: #e32105;"
 
-/* Transaction list -- unconfirmed transaction */
+/* Transaction list -- unconfirmed transaction (text only) */
 #define COLOR_UNCONFIRMED QColor(97, 40, 14)
-/* Transaction list -- negative amount */
+/* Transaction list -- negative amount (confirmed: spent) */
 #define COLOR_NEGATIVE QColor(255, 0, 0)
-/* Transaction list -- positive amount */
+/* Transaction list -- positive amount (confirmed: received/mined) */
 #define COLOR_POSITIVE QColor(124, 219, 138)
+/* Transaction list -- unconfirmed positive amount (pending credit, dim green) */
+#define COLOR_UNCONFIRMED_POSITIVE QColor(61, 139, 90)
+/* Transaction list -- unconfirmed negative amount (pending debit, dim red) */
+#define COLOR_UNCONFIRMED_NEGATIVE QColor(142, 26, 4)
 /* Transaction list -- bare address (without label) */
 #define COLOR_BAREADDRESS QColor(97, 40, 14)
 

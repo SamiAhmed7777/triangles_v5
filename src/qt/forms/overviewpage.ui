@@ -435,7 +435,7 @@ QWidget#line	{
 	border: 2px solid #e32105;
 	}
 QLabel#labelBalance, QLabel#labelStake { color: #7CDB8A; }
-QLabel#labelTotal { color: #7CDB8A; font: 12pt bold; }
+/* labelTotal color is set dynamically in setBalance() — green when > 0, red when == 0 */
 QLabel#labelUnconfirmed { color: #A8B847; }
 QLabel#labelImmature { color: #A8B847; }
 </string>

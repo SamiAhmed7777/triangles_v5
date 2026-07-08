@@ -577,18 +577,21 @@ QVariant TransactionTableModel::data(const QModelIndex &index, int role) const
     case Qt::TextAlignmentRole:
         return column_alignments[index.column()];
     case Qt::ForegroundRole:
-        // Non-confirmed (but not immature) as transactions are grey
+        // Amount column: 4 states — confirmed/unconfirmed × positive/negative.
+        // Other columns fall through to addressColor/etc.
+        if(index.column() == Amount)
+        {
+            qint64 amount = rec->credit + rec->debit;
+            bool unconfirmed = !rec->status.countsForBalance && rec->status.status != TransactionStatus::Immature;
+            if(unconfirmed)
+            {
+                return amount < 0 ? COLOR_UNCONFIRMED_NEGATIVE : COLOR_UNCONFIRMED_POSITIVE;
+            }
+            return amount < 0 ? COLOR_NEGATIVE : COLOR_POSITIVE;
+        }
         if(!rec->status.countsForBalance && rec->status.status != TransactionStatus::Immature)
         {
             return COLOR_UNCONFIRMED;
-        }
-        if(index.column() == Amount && (rec->credit+rec->debit) < 0)
-        {
-            return COLOR_NEGATIVE;
-        }
-        if(index.column() == Amount && (rec->credit+rec->debit) > 0)
-        {
-            return COLOR_POSITIVE;
         }
         if(index.column() == ToAddress)
         {
