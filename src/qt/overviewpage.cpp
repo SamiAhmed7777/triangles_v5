@@ -59,13 +59,14 @@ public:
         {
             foreground = COLOR_UNCONFIRMED;
         }
-        else if(index.data(TransactionTableModel::StatusRole).toInt() == (int)TransactionStatus::Confirming)
-        {
-            foreground = COLOR_CONFIRMING;
-        }
         else
         {
-            foreground = COLOR_POSITIVE;
+            // Use depth directly (DepthRole) instead of the status enum, so the
+            // rule fires on every confirmation increment, not only on enum state
+            // transitions. RecommendedNumConfirmations is 4; depths 1..3 = Confirming.
+            int64_t depth = index.data(TransactionTableModel::DepthRole).toLongLong();
+            foreground = (depth > 0 && depth < (int64_t)TransactionRecord::RecommendedNumConfirmations)
+                         ? COLOR_CONFIRMING : COLOR_POSITIVE;
         }
         painter->setPen(foreground);
         QString amountText = TrianglesUnits::formatWithUnit(unit, amount, true);
