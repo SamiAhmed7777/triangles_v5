@@ -5,6 +5,27 @@ All notable changes to Triangles (TRI) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.7] - 2026-07-08
+
+### Changed
+- Overview page UI: the Total balance label is now rendered with
+  `font-weight: 900` (full bold) instead of Qt's default bold (75,
+  medium-bold). On builds where the font has a true heavy variant,
+  the Total now visually pops as the headline number against the
+  Spendable / Stake / Unconfirmed rows.
+- Transactions amount column **Confirming tier color** is now
+  `#4A8C5E` (mid green) instead of `#C5EBC9` (pale mint). The pale
+  mint was too close to the bright `#7CDB8A` Confirmed green on
+  the dark background and read as the same color. Mid green sits
+  clearly between grey (Unconfirmed) and bright green (Confirmed)
+  so the three tiers are visually distinct.
+- Transactions amount column **now reads confirmation depth
+  directly** (new `DepthRole` on `TransactionTableModel`) instead
+  of going through the `TransactionStatus` enum. The rule fires on
+  every block increment, not just on enum state transitions.
+  Affects both `transactiontablemodel.cpp` (Transactions tab) and
+  `overviewpage.cpp` (Overview recent-5 list).
+
 ## [6.1.6] - 2026-07-08
 
 ### Changed
@@ -91,6 +112,7 @@ Do not use.
 ### Added
 - Initial 6.x release line. C++20 modernization, embedded Tor/I2P support.
 
+[6.1.7]: https://github.com/SamiAhmed7777/triangles_v5/compare/v6.1.6...v6.1.7
 [6.1.6]: https://github.com/SamiAhmed7777/triangles_v5/compare/v6.1.5...v6.1.6
 [6.1.5]: https://github.com/SamiAhmed7777/triangles_v5/compare/v6.1.4...v6.1.5
 [6.1.4]: https://github.com/SamiAhmed7777/triangles_v5/compare/v6.1.3...v6.1.4

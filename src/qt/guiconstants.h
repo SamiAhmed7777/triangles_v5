@@ -19,8 +19,10 @@ static const int STATUSBAR_ICONSIZE = 16;
 #define COLOR_NEGATIVE QColor(255, 0, 0)
 /* Transaction list -- positive amount (fully confirmed, depth >= RecommendedNumConfirmations) */
 #define COLOR_POSITIVE QColor(124, 219, 138)
-/* Transaction list -- partially confirmed positive amount (1..RecommendedNumConfirmations-1 confirms) */
-#define COLOR_CONFIRMING QColor(197, 235, 201)
+/* Transaction list -- partially confirmed positive amount (1..RecommendedNumConfirmations-1 confirms)
+   Mid-tone green (#4A8C5E): clearly green but visibly dimmer than the saturated final-state
+   #7CDB8A so the eye reads the difference between "in progress" and "final" at a glance. */
+#define COLOR_CONFIRMING QColor(74, 140, 94)
 /* Transaction list -- bare address (without label) */
 #define COLOR_BAREADDRESS QColor(97, 40, 14)
 

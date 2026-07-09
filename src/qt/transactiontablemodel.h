@@ -49,7 +49,9 @@ public:
         /** Formatted amount, without brackets when unconfirmed */
         FormattedAmountRole,
         /** Transaction status (TransactionRecord::Status) */
-        StatusRole
+        StatusRole,
+        /** Raw confirmation depth (number of confirmations, or -1 if conflicted) */
+        DepthRole
     };
 
     int rowCount(const QModelIndex &parent) const;
