@@ -156,8 +156,8 @@ void OverviewPage::setBalance(qint64 balance, qint64 stake, qint64 unconfirmedBa
     // Total: green when there are coins, red when empty. C++ owns the color
     // (stylesheet can't do conditional logic), so the rule is applied every time
     // the balance updates.
-    ui->labelTotal->setStyleSheet(total > 0 ? QStringLiteral("color: #7CDB8A; font: 12pt bold;")
-                                            : QStringLiteral("color: #e32105; font: 12pt bold;"));
+    ui->labelTotal->setStyleSheet(total > 0 ? QStringLiteral("color: #7CDB8A; font: 900 12pt;")
+                                            : QStringLiteral("color: #e32105; font: 900 12pt;"));
 
     // only show immature (newly mined) balance if it's non-zero, so as not to complicate things
     // for the non-mining users
