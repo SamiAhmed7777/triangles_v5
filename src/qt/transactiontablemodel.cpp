@@ -636,7 +636,7 @@ QVariant TransactionTableModel::data(const QModelIndex &index, int role) const
     case StatusRole:
         return rec->status.status;
     case DepthRole:
-        return rec->status.depth;
+        return QVariant::fromValue<qlonglong>(rec->status.depth);
     }
     return QVariant();
 }
