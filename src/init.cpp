@@ -1191,6 +1191,9 @@ bool AppInit2()
         bool noBootstrap = GetBoolArg("-nobootstrap", false);
         bool snapshotMode = GetBoolArg("-snapshot", true);
         fs::path dataPath = GetDataDir();
+        // Load any runtime trusted snapshot publisher override that was
+        // persisted by a previous settrustedv2snapshotpublisher call.
+        Bootstrap::LoadTrustedSnapshotPublisher();
         bool needsBootstrap = Bootstrap::NeedsBootstrap(dataPath);
 
         if (needsBootstrap && !noBootstrap) {

@@ -175,6 +175,29 @@ Check staking status:
 trianglesd getstakinginfo
 ```
 
+### Trusted Snapshot Publisher (UTXO Snapshots)
+
+The daemon verifies that any UTXO snapshot it loads was signed by a
+**trusted publisher**. Starting with v6.1.8, the trusted publisher can
+be rotated at runtime via RPC — no rebuild required. The compiled-in
+fallback (`TG8f76yktTxDrT7JJymY3wVAusXiD3fVvX`, Sami's legacy key)
+remains in effect if no runtime override is set.
+
+```bash
+# Rotate to a new publisher
+trianglesd settrustedv2snapshotpublisher TGotWuftzH7rD9tXC7whE8EXiyC3mr1CrH
+
+# Check current publisher
+trianglesd gettrustedv2snapshotpublisher
+
+# Revert to the compiled-in fallback
+trianglesd unsettrustedv2snapshotpublisher
+```
+
+The model is single-slot: calling `settrustedv2snapshotpublisher`
+atomically drops the previous publisher. See `docs/snapshot-publisher.md`
+for the full operator guide.
+
 ### Encrypted Messaging
 
 Send and receive encrypted messages between wallet addresses:
@@ -233,6 +256,13 @@ Then set `externalip=<your-onion-address>` in `triangles.conf`.
 - `smsgoutbox [all|clear]` - View sent messages
 - `smsglocalkeys` - List messaging-enabled addresses
 - `smsgscanchain` - Scan blockchain for public keys
+
+### Trusted Snapshot Publisher (v6.1.8+)
+- `settrustedv2snapshotpublisher <address>` - Atomically replace the trusted snapshot publisher (previous one dropped immediately). Persists to `<datadir>/snapshot-publisher.json`.
+- `gettrustedv2snapshotpublisher` - Returns the currently active runtime publisher and whether a runtime override is in effect.
+- `unsettrustedv2snapshotpublisher` - Clear the runtime override and revert to the compiled-in fallback list.
+
+See `docs/snapshot-publisher.md` for the full operator guide.
 
 ## Chain History
 
