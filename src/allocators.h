@@ -9,6 +9,11 @@
 #include <string>
 #include <mutex>
 #include <map>
+// assert() is used in the LockedPageManager implementation below; include
+// explicitly so this header doesn't rely on transitive includes from
+// <mutex>/<map> (clang's stricter include resolution surfaces the missing
+// include even though gcc tolerates it via some other transitive path).
+#include <cassert>
 
 #ifdef WIN32
 #ifdef _WIN32_WINNT
