@@ -10,8 +10,13 @@ on:
 
 jobs:
   test-linux-unit:
+    # This is the canonical CI gate for unit tests. Failures here MUST block
+    # the PR — see PR #26 incident (2026-07-11): the previous
+    # `continue-on-error: true` + `|| true` soft-gate allowed a PR with broken
+    # master-side code to merge because the link failure wasn't blocking.
+    # Sanitizer regression = blocking PR (test-linux-sanitizers below).
+    # Unit regression = blocking PR (this job).
     runs-on: ubuntu-22.04
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,7 +90,11 @@ jobs:
           fi
 
       - name: Run unit tests
-        run: cd build && ctest --output-on-failure || true
+        # ctest exit code is the gate. NO `|| true` — failures must block
+        # the PR (see comment at top of this job). --output-on-failure gives
+        # the failing assertion + suite name inline rather than requiring a
+        # log download.
+        run: cd build && ctest --output-on-failure
 
   test-linux-sanitizers:
     # ASan + UBSan build of the daemon + unit tests. This is a blocking
