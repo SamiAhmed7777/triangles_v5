@@ -964,11 +964,25 @@ exec \"\$PROG\" \"\${OBJS[@]}\" \"\$@\"
         "${CMAKE_BINARY_DIR}/lib/libleveldb_lib.a"
         "-lssl" "-lcrypto" "-ldb_cxx" "-levent" "-lsqlite3" "-lminiupnpc"
         "${CMAKE_BINARY_DIR}/lib/libsecp256k1.a"
-        # RocksDB: prefer the linked target if it's a shared library (CI build
-        # via scripts/ci/build-rocksdb.sh installs librocksdb.so.8.9.1 to
-        # /usr/local and exposes RocksDB::rocksdb). Fall back to the
-        # system .a filename if the target is unknown / static.
-        "$<IF:$<TARGET_EXISTS:RocksDB::rocksdb>,-lrocksdb,${ROCKSDB_LIBRARY}>"
+        # RocksDB: build-rocksdb.sh installs librocksdb.so.8.9.1 to
+        # /usr/local (CI) or the user has it via the distro package
+        # (DNS2 has librocksdb-dev). The library search path picks up
+        # either /usr/local/lib or /usr/lib automatically, so a bare
+        # "-lrocksdb" works on both. The previous generator expression
+        # ($<IF:$<TARGET_EXISTS:RocksDB::rocksdb>,-lrocksdb,${ROCKSDB_LIBRARY}>)
+        # failed on CI because:
+        #   1. CMake's find_package(RocksDB CONFIG) does NOT find the .cmake
+        #      config RocksDB 8.9.1 ships, only the .pc file.
+        #   2. The pkg-config path exposes PkgConfig::RocksDB (NOT
+        #      RocksDB::rocksdb), so $<TARGET_EXISTS:RocksDB::rocksdb> is
+        #      FALSE.
+        #   3. The fallback ${ROCKSDB_LIBRARY} is only set inside the manual
+        #      find_library() probe at CMakeLists.txt:170-190, which is
+        #      skipped when EITHER target exists.
+        # Result on CI: an empty string landed in the link line, and the
+        # fuzz binary linked against every RocksDB symbol it referenced
+        # turned into "undefined reference" errors.
+        "-lrocksdb"
         "-lz" "-lgflags" "-lsnappy" "-lbz2" "-llz4" "-lzstd"
         # i2p is inlined into triangles_common as i2p_embedded.cpp.o and is a
         # NO-OP when USE_I2P_EMBEDDED=OFF (which is the CI default; the
