@@ -4,6 +4,8 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #include "txdb.h"
 #include "walletdb.h"
+#include "walletdb-recover.h"   // BerkeleyRecoverWallet / BerkeleyZapWalletTx
+#include "walletmigrate.h"      // MaybeMigrateBerkeleyWalletToSQLite / IsSQLiteFile
 #include "trianglesrpc.h"
 #include "net.h"
 #include "netbase.h"
@@ -37,12 +39,16 @@ static bool InitError(const std::string& str);
 static bool InitWarning(const std::string& str);
 #include <filesystem>
 #include <fstream>
-#include <boost/interprocess/sync/file_lock.hpp>
 #include <algorithm>
 #include <openssl/crypto.h>
 
 #ifndef WIN32
 #include <signal.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 // Windows.h (transitively included) defines these as macros, clobbering Checkpoints:: enum values.
@@ -57,8 +63,40 @@ static bool InitWarning(const std::string& str);
 #endif
 
 using namespace std;
-using namespace boost;
 namespace fs = std::filesystem;
+
+namespace {
+// Acquire an exclusive, non-blocking advisory lock on the datadir .lock file
+// and hold it for the lifetime of the process. Replaces
+// boost::interprocess::file_lock. The descriptor/handle is intentionally never
+// released — the OS drops the lock automatically when the process exits.
+bool LockDataDirectory(const std::filesystem::path& pathLockFile)
+{
+#ifdef WIN32
+    HANDLE hFile = CreateFileA(pathLockFile.string().c_str(),
+                               GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
+                               nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE)
+        return false;
+    OVERLAPPED ov = {};
+    if (!LockFileEx(hFile, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                    0, MAXDWORD, MAXDWORD, &ov)) {
+        CloseHandle(hFile);
+        return false;
+    }
+    return true; // handle held until process exit
+#else
+    int fd = open(pathLockFile.string().c_str(), O_RDWR | O_CREAT, 0644);
+    if (fd < 0)
+        return false;
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        close(fd);
+        return false;
+    }
+    return true; // fd held until process exit
+#endif
+}
+} // namespace
 
 std::unique_ptr<CWallet> pwalletMain;
 CClientUIInterface uiInterface;
@@ -340,10 +378,12 @@ void Shutdown(void* parg)
             pScriptCheckQueue.reset();
         }
 
+        // Stop the embedded I2P router.
+        StopEmbeddedI2P();
+
         // NOW safe to destroy Tor state - all threads have stopped
         ShutdownTorV3();
         StopEmbeddedTor();
-        StopEmbeddedI2P();
 
 #ifdef ENABLE_ZMQ
         if (pzmqNotifier)
@@ -884,8 +924,7 @@ bool AppInit2()
     fs::path pathLockFile = GetDataDir() / ".lock";
     FILE* file = fopen(pathLockFile.string().c_str(), "a"); // empty lock file; created if it doesn't exist.
     if (file) fclose(file);
-    static boost::interprocess::file_lock lock(pathLockFile.string().c_str());
-    if (!lock.try_lock())
+    if (!LockDataDirectory(pathLockFile))
         return InitError(strprintf(_("Cannot obtain a lock on data directory %s.  Triangles is probably already running."), strDataDir.c_str()));
 
 #if !defined(WIN32) && !defined(QT_GUI)
@@ -931,6 +970,21 @@ bool AppInit2()
     uiInterface.InitMessage(_("Verifying database integrity..."));
     nStart = GetTimeMillis();
 
+    // The pre-rebase Berkeley-only paths (salvagewallet, zapwallettxes,
+    // bitdb.Verify, and the Berkeley→SQLite migration hook itself) only
+    // apply to a wallet.dat that is still a Berkeley DB file. Once the
+    // migration has run — or if the user is starting with a wallet that was
+    // already SQLite — those steps would either no-op or (worse) misinterpret
+    // the SQLite file as a corrupt Berkeley file and abort startup.
+    //
+    // The SQLite backend runs its own PRAGMA integrity_check in
+    // SQLiteDatabase::Open(), so the wallet is validated against the SQLite
+    // schema before the wallet handle is ever constructed downstream.
+    //
+    // Note: the snapshot is taken AFTER any migration hook below, so that
+    // post-migration the verify/salvage paths are skipped automatically.
+    bool walletIsSqlite = false;
+
     if (!bitdb.Open(GetDataDir()))
     {
         string msg = strprintf(_("Error initializing database environment %s!"
@@ -941,33 +995,63 @@ bool AppInit2()
 
     if (GetBoolArg("-salvagewallet"))
     {
-        // Recover readable keypairs:
-        if (!CWalletDB::Recover(bitdb, strWalletFileName, true))
+        // Recover readable keypairs (Berkeley path; only relevant for legacy
+        // wallet.dat files that haven't been migrated to SQLite yet):
+        if (!BerkeleyRecoverWallet(bitdb, strWalletFileName, true))
             return false;
     }
 
     if (GetBoolArg("-zapwallettxes") && fs::exists(GetDataDir() / strWalletFileName))
     {
         uiInterface.InitMessage(_("Zapping all transactions from wallet..."));
-        if (!CWalletDB::ZapWalletTx(strWalletFileName))
+        if (!BerkeleyZapWalletTx(strWalletFileName))
             return InitError(_("Error: could not zap wallet transactions"));
     }
 
-    if (fs::exists(GetDataDir() / strWalletFileName))
+    // ── Wallet backend migration ──────────────────────────────────────────────
+    // The daemon now defaults to SQLite (-walletdb=sqlite). If the wallet file
+    // on disk is still a Berkeley DB, convert it non-destructively to a SQLite
+    // wallet here, before the CWalletDB handle is opened downstream. The
+    // Berkeley original is preserved as "<name>.bdb.bak" alongside.
+    if (ResolveWalletDbKind() == WalletDbKind::SQLite &&
+        fs::exists(GetDataDir() / strWalletFileName) &&
+        !IsSQLiteFile(GetDataDir() / strWalletFileName))
     {
-        CDBEnv::VerifyResult r = bitdb.Verify(strWalletFileName, CWalletDB::Recover);
-        if (r == CDBEnv::RECOVER_OK)
-        {
-            string msg = strprintf(_("Warning: wallet.dat corrupt, data salvaged!"
-                                     " Original wallet.dat saved as wallet.{timestamp}.bak in %s; if"
-                                     " your balance or transactions are incorrect you should"
-                                     " restore from a backup."), strDataDir.c_str());
-            uiInterface.ThreadSafeMessageBox(msg, _("Triangles"), CClientUIInterface::OK | CClientUIInterface::ICON_EXCLAMATION | CClientUIInterface::MODAL);
-        }
-        if (r == CDBEnv::RECOVER_FAIL)
-            return InitError(_("wallet.dat corrupt, salvage failed"));
+        uiInterface.InitMessage(_("Migrating wallet from Berkeley DB to SQLite..."));
+        std::string migErr;
+        if (!MaybeMigrateBerkeleyWalletToSQLite(GetDataDir() / strWalletFileName, migErr))
+            return InitError(_("Wallet migration failed: ") + migErr);
+        // Snapshot AFTER migration so the post-migration verify step below
+        // is skipped automatically when the wallet is now SQLite.
+        walletIsSqlite =
+            fs::exists(GetDataDir() / strWalletFileName) &&
+            IsSQLiteFile(GetDataDir() / strWalletFileName);
     }
-    StartupPerfLog("verify_db", GetTimeMillis() - nStart, strprintf("wallet=%s", strWalletFileName.c_str()));
+    else
+    {
+        walletIsSqlite =
+            fs::exists(GetDataDir() / strWalletFileName) &&
+            IsSQLiteFile(GetDataDir() / strWalletFileName);
+    }
+
+    if (!walletIsSqlite)
+    {
+        if (fs::exists(GetDataDir() / strWalletFileName))
+        {
+            CDBEnv::VerifyResult r = bitdb.Verify(strWalletFileName, BerkeleyRecoverWallet);
+            if (r == CDBEnv::RECOVER_OK)
+            {
+                string msg = strprintf(_("Warning: wallet.dat corrupt, data salvaged!"
+                                         " Original wallet.dat saved as wallet.{timestamp}.bak in %s; if"
+                                         " your balance or transactions are incorrect you should"
+                                         " restore from a backup."), strDataDir.c_str());
+                uiInterface.ThreadSafeMessageBox(msg, _("Triangles"), CClientUIInterface::OK | CClientUIInterface::ICON_EXCLAMATION | CClientUIInterface::MODAL);
+            }
+            if (r == CDBEnv::RECOVER_FAIL)
+                return InitError(_("wallet.dat corrupt, salvage failed"));
+        }
+    }
+    StartupPerfLog("verify_db", GetTimeMillis() - nStart, strprintf("wallet=%s wallet_is_sqlite=%d", strWalletFileName.c_str(), (int)walletIsSqlite));
 
     // ********************************************************* Step 6: network initialization
     nStart = GetTimeMillis();
@@ -1021,10 +1105,19 @@ bool AppInit2()
     if (true) {
         if (true) {
             do {
-                // Bind to all interfaces so external peers can connect
+                // W1: Bind to all interfaces so external peers can connect.
+                //
+                // The previous code went through Lookup("0.0.0.0", ...) which
+                // hands the literal string to getaddrinfo(). On Windows that
+                // resolver can fail to map "0.0.0.0" to INADDR_ANY and the
+                // daemon would abort at startup with "Cannot resolve binding
+                // address". Construct the CService directly from INADDR_ANY
+                // instead — this is the canonical "any-address" binding and
+                // works on every platform without consulting the resolver.
                 CService addrBind;
-                if (!Lookup("0.0.0.0", addrBind, GetListenPort(), false))
-                    return InitError(strprintf(_("Cannot resolve binding address: '%s'"),  "0.0.0.0"));
+                struct in_addr any;
+                any.s_addr = htonl(INADDR_ANY);
+                addrBind = CService(any, GetListenPort());
                 fBound |= Bind(addrBind);
             } while (false);
         }
@@ -1183,14 +1276,49 @@ bool AppInit2()
         }
     }
 
-    // ********************************************************* Step 6d: optional LevelDB -> RocksDB chain DB migration
-    if (GetBoolArg("-migratechaindb", false) || GetBoolArg("-migratechaindbforce", false))
+    // ********************************************************* Step 6d: LevelDB -> RocksDB chain DB migration
+    // Runs when explicitly requested (-migratechaindb[force]) OR automatically
+    // when RocksDB is the active backend and the only chain DB present is a
+    // legacy LevelDB (txleveldb). This makes the RocksDB default transparent
+    // for existing nodes: their chain state is copied (and verified) into a new
+    // rocksdb/ directory on first launch, leaving the LevelDB source untouched
+    // as a fallback. MaybeMigrateLevelDbToRocksDb() is a no-op when there is no
+    // LevelDB source or a RocksDB directory already exists, so it is safe to
+    // call on every startup.
     {
-        uiInterface.InitMessage(_("Migrating chain database to RocksDB..."));
-        std::string strMigrateError;
-        bool fForce = GetBoolArg("-migratechaindbforce", false);
-        if (!MaybeMigrateLevelDbToRocksDb(fForce, strMigrateError))
-            return InitError(strprintf(_("Chain DB migration failed: %s"), strMigrateError.c_str()));
+        bool fExplicit = GetBoolArg("-migratechaindb", false) ||
+                         GetBoolArg("-migratechaindbforce", false);
+        // A rocksdb/ directory containing the MIGRATION_INCOMPLETE marker is a
+        // crashed previous migration, NOT a usable chain DB — treat it the same
+        // as "no rocksdb yet" so the migration is retried instead of silently
+        // opening a truncated database.
+        bool fCrashedMigration = fs::exists(GetDataDir() / "rocksdb" / "MIGRATION_INCOMPLETE");
+        bool fAuto = IsRocksDbChainBackend() &&
+                     fs::exists(GetDataDir() / "txleveldb") &&
+                     (!fs::exists(GetDataDir() / "rocksdb") || fCrashedMigration);
+        if (fExplicit || fAuto)
+        {
+            uiInterface.InitMessage(_("Migrating chain database to RocksDB..."));
+            if (fAuto && !fExplicit)
+                printf("ChainDB: RocksDB backend active with a legacy LevelDB present%s; "
+                       "migrating automatically.\n",
+                       fCrashedMigration ? " and a previous migration was interrupted" : "");
+            std::string strMigrateError;
+            bool fForce = GetBoolArg("-migratechaindbforce", false);
+            if (!MaybeMigrateLevelDbToRocksDb(fForce, strMigrateError))
+                return InitError(strprintf(_("Chain DB migration failed: %s"), strMigrateError.c_str()));
+        }
+        // Last line of defense: never open a RocksDB that still carries the
+        // incomplete-migration marker (e.g. the LevelDB source was deleted so
+        // the migration cannot be retried). Opening it would silently run on a
+        // partial chain state.
+        if (IsRocksDbChainBackend() &&
+            fs::exists(GetDataDir() / "rocksdb" / "MIGRATION_INCOMPLETE"))
+        {
+            return InitError(_("The RocksDB chain database is left over from an interrupted "
+                               "migration and is incomplete. Delete the 'rocksdb' directory in the "
+                               "data directory and restart (it will be rebuilt by migration or resync)."));
+        }
     }
 
     // ********************************************************* Step 7: load blockchain
@@ -1669,6 +1797,26 @@ bool AppInit2()
         if (torStarted) {
             if (!NewThread(ThreadTorMaintenance, nullptr))
                 printf("Warning: ThreadTorMaintenance could not be started\n");
+        }
+
+        // Bring up I2P (SAM) transport alongside Tor so the wallet has both a
+        // .onion and a .b32.i2p address. On by default; disable with -i2p=0.
+        // A bundled i2pd router is launched automatically (mirroring embedded
+        // Tor); if -i2psam points at a non-loopback bridge, or a router is
+        // already running, we use that instead.
+        if (GetBoolArg("-i2p", true)) {
+            int64_t nI2PStart = GetTimeMillis();
+
+            uiInterface.InitMessage(_("Starting the I2P router..."));
+            bool i2pStarted = StartEmbeddedI2P();
+            StartupPerfLog("i2p_start", GetTimeMillis() - nI2PStart, strprintf("started=%d", i2pStarted));
+            if (i2pStarted) {
+                SetReachable(NET_I2P, true);
+                std::string i2pAddr = CI2PEmbedded::GetInstance()->GetI2PAddress();
+                printf("I2P network enabled. Our address: %s\n", i2pAddr.c_str());
+            } else {
+                printf("NOTICE: I2P not available this session; continuing with Tor only\n");
+            }
         }
     }
 

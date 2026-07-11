@@ -97,7 +97,8 @@ BOOST_AUTO_TEST_CASE(dechunk_uppercase_hex)
 BOOST_AUTO_TEST_CASE(dechunk_payload_containing_crlf)
 {
     // Chunk data itself contains CRLF — must not be mistaken for framing.
-    string body = "B\r\nline1\r\nline2\r\n0\r\n\r\n";
+    // 0x0C = 12 bytes: "line1\r\nline2" is exactly 12 chars.
+    string body = "C\r\nline1\r\nline2\r\n0\r\n\r\n";
     string decoded;
     BOOST_CHECK_EQUAL(DechunkTransferEncoding(body, decoded), DECHUNK_OK);
     BOOST_CHECK_EQUAL(decoded, "line1\r\nline2");
@@ -106,12 +107,15 @@ BOOST_AUTO_TEST_CASE(dechunk_payload_containing_crlf)
 BOOST_AUTO_TEST_CASE(dechunk_split_at_awkward_boundary)
 {
     // A long chunk whose internal "data" happens to look like a chunk-size
-    // line. Hex 0x0B = 11 bytes; the data "FAKE\r\nFOO\r" contains CRLF.
-    string body = "B\r\nFAKE\r\nFOO\r\r\n0\r\n\r\n";
+    // line. Hex 0x0B = 11 bytes; the data "FAKE\r\nFOO\r\r" contains CRLF
+    // and a trailing CR that must not be mistaken for a chunk terminator.
+    // Body layout: "B\r\n" (size) + "FAKE\r\nFOO\r\r" (11 bytes data) +
+    //              "\r\n" (data terminator) + "0\r\n\r\n" (last chunk + trailer)
+    string body = "B\r\nFAKE\r\nFOO\r\r\r\n0\r\n\r\n";
     string decoded;
     BOOST_CHECK_EQUAL(DechunkTransferEncoding(body, decoded), DECHUNK_OK);
-    // 11 bytes consumed: "FAKE\r\nFOO\r" (5 + 2 + 3 + 1 = 11)
-    BOOST_CHECK_EQUAL(decoded, "FAKE\r\nFOO\r");
+    // 11 bytes consumed: "FAKE\r\nFOO\r\r" (4 + 2 + 3 + 2 = 11)
+    BOOST_CHECK_EQUAL(decoded, "FAKE\r\nFOO\r\r");
 }
 
 BOOST_AUTO_TEST_CASE(dechunk_last_chunk_with_extension)
@@ -129,10 +133,12 @@ BOOST_AUTO_TEST_CASE(dechunk_last_chunk_with_extension)
 
 BOOST_AUTO_TEST_CASE(dechunk_no_crlf_after_size)
 {
-    // No CRLF after the chunk-size hex — must not be silently accepted.
+    // "5XX" has invalid hex — must be rejected as DECHUNK_INVALID_HEX
+    // before we ever look for a CRLF. (The old loose parser would have
+    // scanned for CRLF instead, which masked real protocol errors.)
     string body = "5XXhello\r\n0\r\n\r\n";
     string decoded;
-    BOOST_CHECK_EQUAL(DechunkTransferEncoding(body, decoded), DECHUNK_NO_CHUNK_TERMINATOR);
+    BOOST_CHECK_EQUAL(DechunkTransferEncoding(body, decoded), DECHUNK_INVALID_HEX);
 }
 
 BOOST_AUTO_TEST_CASE(dechunk_invalid_hex)

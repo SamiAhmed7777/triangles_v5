@@ -32,6 +32,7 @@
 #include "guiconstants.h"
 #include "askpassphrasedialog.h"
 #include "hdseeddialog.h"
+#include "outlinedlabel.h"
 #include "notificator.h"
 #include "guiutil.h"
 #include "rpcconsole.h"
@@ -349,9 +350,19 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
     labelOnionAddress->setCursor(Qt::PointingHandCursor);
     labelOnionAddress->installEventFilter(this);
 
+    labelI2PAddress = ui->label_i2p;
+    labelI2PAddress->setVisible(false);
+    labelI2PAddress->setCursor(Qt::PointingHandCursor);
+    labelI2PAddress->installEventFilter(this);
+
     // V3 indicator next to staking icon (hidden until onion is active)
     labelV3Icon = ui->label_v3;
     labelV3Icon->setVisible(false);
+
+    // HD indicator next to lock icon (always visible; color reflects state)
+    labelHdIcon = ui->label_hd;
+    labelHdIcon->setVisible(true);
+    updateHDStatus();
 
     // Tor icon next to onion address in the stacked address group (hidden until populated)
     labelTorIcon = ui->label_tor_icon;
@@ -370,7 +381,6 @@ TrianglesGUI::TrianglesGUI(bool fIsTestnet, QWidget *parent):
 
     labelI2PIcon = ui->label_i2p_icon;
     labelI2PIcon->setVisible(false);
-
     QTimer *timerI2P = new QTimer(this);
     connect(timerI2P, SIGNAL(timeout()), this, SLOT(updateI2PAddress()));
     timerI2P->start(5000);
@@ -644,6 +654,9 @@ void TrianglesGUI::setWalletModel(WalletModel *walletModel)
         connect(walletModel, SIGNAL(transactionSyncStateChanged(bool)), this, SLOT(setWalletTransactionSyncState(bool)));
         connect(walletModel, SIGNAL(transactionSyncProgressChanged(bool,int)), this, SLOT(setWalletTransactionSyncProgress(bool,int)));
         setWalletTransactionSyncState(walletModel->isTransactionSyncing());
+
+        // HD status reflects wallet capability — refresh whenever the wallet model changes
+        updateHDStatus();
 
         // Balloon pop-up for new transaction
         connect(walletModel->getTransactionTableModel(), SIGNAL(rowsInserted(QModelIndex,int,int)),
@@ -1861,16 +1874,42 @@ void TrianglesGUI::updateI2PAddress()
         labelI2PIcon->setVisible(false);
     }
 
+    // I2P address text
     if (!hasI2P) {
         labelI2PAddress->setVisible(false);
         return;
     }
-
     labelI2PAddress->setText(QString::fromStdString(i2pAddress));
     labelI2PAddress->setToolTip(tr("This node's I2P .b32.i2p address. Click to copy."));
     labelI2PAddress->setVisible(true);
 }
 
+void TrianglesGUI::updateHDStatus()
+{
+    // Red (#f26522 — TRI brand color) when HD is enabled, grey when not.
+    // Placed next to the lock icon as a wallet-capability indicator.
+    if (!labelHdIcon) return;
+
+    bool fHD = false;
+    if (walletModel) {
+        fHD = walletModel->hdEnabled();
+    }
+
+    if (fHD) {
+        // Both letters outlined in the brand red, 3px stroke (matches the
+        // triangles beside it).
+        labelHdIcon->setOutlineColor(QColor("#f26522"));
+        labelHdIcon->setOutlineWidth(3);
+        labelHdIcon->setToolTip(tr("HD wallet: BIP39 seed active. Backup your seed phrase — individual keys alone will not restore this wallet."));
+    } else {
+        // Greyed-out (dim) badge until the user runs hdnew.
+        labelHdIcon->setOutlineColor(QColor("#555555"));
+        labelHdIcon->setOutlineWidth(3);
+        labelHdIcon->setToolTip(tr("Non-HD wallet: backup each address key separately. Use hdnew to upgrade to an HD seed."));
+    }
+    labelHdIcon->setText(QStringLiteral("HD"));
+    labelHdIcon->setVisible(true);
+}
 
 void TrianglesGUI::on_bHelp_clicked()
 {    

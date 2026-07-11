@@ -53,8 +53,14 @@ bool NeedsBootstrap(const fs::path& dataDir)
     // Need bootstrap if there's no chain database (the UTXO set / block index).
     // blk0001.dat alone is NOT sufficient — it's raw block data that requires
     // (fast-import was removed; UTXO snapshot is the only sync path)
-    // Check for both LevelDB (txleveldb/) and RocksDB (chainstate/) backends.
+    // Check for both LevelDB (txleveldb/), RocksDB (rocksdb/), and legacy
+    // chainstate paths. The rocksdb/ check is critical for v6.1.x+ nodes that
+    // fully migrated from LevelDB — without it, removing the legacy txleveldb/
+    // directory causes the boot path to incorrectly decide "no blockchain data"
+    // and trigger a 943 MB bootstrap download over Tor (DNS2 incident
+    // 2026-07-03, 5-hour wedge; recovery via v3 snapshot + rm -rf rocksdb).
     bool hasChainDb = fs::exists(dataDir / "txleveldb")
+                   || fs::exists(dataDir / "rocksdb")
                    || fs::exists(dataDir / "blocks" / "chainstate")
                    || fs::exists(dataDir / "chainstate");
     return !hasChainDb;

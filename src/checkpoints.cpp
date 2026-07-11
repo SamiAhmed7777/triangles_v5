@@ -32,12 +32,27 @@ namespace Checkpoints
         {  9002, uint256("0xa1e20fb1d44688b763690cf74d6aefe859e4cc32981f9e3f2b2ae9702bbcf249")},
         { 10881, uint256("0x4b6554c45e1e6764a6f3c309c47baf53c9edd81f624e52b072518cd15da237e6")},
         { 17650, uint256("0x224940e1f986a202209b8e762728d1452ab45870c308abf84905674acf326a47")},
-        // Recent finality pin (PoS era). Closes the long unchecked span from
-        // 17650 to the live tip so stale-bootstrap / low-trust forks below
-        // this height are rejected outright. Hash from the canonical chain.
-        { 2205000, uint256("0x6bdd3c5e5a32e1dd9a70e705f1a28d1dd84929f89579bd2696d41bc87f39446f")},
-        { 2206004, uint256("0xb34e8e6a7bb7f52167d81aaad4d26f87a876898fdd0fce860916fc1aaf9a2a46")},
-    };
+                // Recent finality pin (PoS era). Closes the long unchecked span from
+                // 17650 to the live tip so stale-bootstrap / low-trust forks below
+                // this height are rejected outright. Hash from the canonical chain.
+                { 2205000, uint256("0x6bdd3c5e5a32e1dd9a70e705f1a28d1dd84929f89579bd2696d41bc87f39446f")},
+                { 2206004, uint256("0xb34e8e6a7bb7f52167d81aaad4d26f87a876898fdd0fce860916fc1aaf9a2a46")},
+                // Continuous finality pins: every 1000 blocks from 2206500 onward so the
+                // gap between the last hardcoded checkpoint and the live tip stays bounded.
+                // Without these, a fresh node syncing from zero (no snapshot) has 8,400+
+                // unverified blocks at tip — a peer feeding fork blocks at those heights
+                // could trick an IBD node into accepting a divergent chain. With these
+                // pins, any divergence >1000 blocks is rejected at AcceptBlock time.
+                // All hashes verified against the canonical chain on 2026-07-01.
+                { 2206500, uint256("0x707ea288242227e9b36ceeeecd5a16a6c918f8b6f7e6375128cba908ebfcbf27")},
+                { 2207000, uint256("0x7af1cc23fdffb3a9ed2eb9aa5a8697e8af2f98c67c4f6baa9f4d7899cbfaf4ca")},
+                { 2210000, uint256("0xe2dc2e55c6e1b3d2ea9d8a1f2b274bf64053ddd6a61335dc6896aa9c056956be")},
+                { 2211000, uint256("0x61c8a179c928a1f0bbffa029b4f1aea67b04a98227a6d02e6137280404ed29dc")},
+                { 2212000, uint256("0xf4df2b5d0d1de326b97ed5a3eeefef307a51791e03af401373e142f00453a9a8")},
+                { 2213000, uint256("0x7bc9652d423676c52ba8b0a287e0b46e1eca6e8eecc51d3f30e0d665d3b236f5")},
+                { 2214000, uint256("0x17e61ceb45db36358aaabe91b094a77ecba32370a467185fa9af75eef6c8e414")},
+                { 2214400, uint256("0x8ebb818f7280850c5a3916b7c8a2bca603f7c4f9926d3cdc2262f726035d96ed")},
+            };
 
     // Published UTXO snapshot file SHA256, keyed by snapshot height.
     // Each entry binds height -> SHA256 of the canonical snapshot file produced by

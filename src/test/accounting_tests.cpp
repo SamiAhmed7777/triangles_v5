@@ -119,4 +119,38 @@ BOOST_AUTO_TEST_CASE(acc_orderupgrade)
     BOOST_CHECK(6 == vpwtx[1]->nOrderPos);
 }
 
+// Regression (2026-07-04): ReorderTransactions must assign order positions to
+// accounting entries in EVERY account. It previously called
+// ListAccountCreditDebit("") which, after the cursor-scan fix, returns only
+// default-account entries -- so entries booked to a named account kept
+// nOrderPos == -1 permanently and sorted incorrectly in listtransactions.
+BOOST_AUTO_TEST_CASE(acc_reorder_covers_named_accounts)
+{
+    CWalletDB walletdb(pwalletMain->strWalletFile);
+
+    CAccountingEntry ae;
+    ae.nCreditDebit = 1;
+    ae.nOrderPos = -1;
+
+    ae.strAccount = "";
+    ae.nTime = 1444444440;
+    ae.strOtherAccount = "reorder_x";
+    walletdb.WriteAccountingEntry(ae);
+
+    ae.strAccount = "reorder_named";
+    ae.nTime = 1444444441;
+    ae.strOtherAccount = "reorder_y";
+    ae.nOrderPos = -1;
+    walletdb.WriteAccountingEntry(ae);
+
+    BOOST_CHECK(walletdb.ReorderTransactions(pwalletMain.get()) == DB_LOAD_OK);
+
+    // The named-account entry must have received a real order position.
+    std::list<CAccountingEntry> named;
+    walletdb.ListAccountCreditDebit("reorder_named", named);
+    BOOST_CHECK_EQUAL(named.size(), 1u);
+    for (const CAccountingEntry& e : named)
+        BOOST_CHECK(e.nOrderPos != -1);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

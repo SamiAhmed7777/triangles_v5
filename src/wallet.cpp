@@ -221,8 +221,10 @@ bool CWallet::Lock()
     if (fDebug)
         printf("Locking wallet.\n");
 
-    if (IsCrypted())
-        hdMnemonic.clear(); // keep only the encrypted copy while locked
+    if (IsCrypted()) {
+        hdMnemonic.clear();   // keep only the encrypted copies while locked
+        hdPassphrase.clear();
+    }
 
     {
         LOCK(cs_wallet);
@@ -253,6 +255,11 @@ bool CWallet::Unlock(const SecureString& strWalletPassphrase)
                     CSecret sec;
                     if (DecryptSecret(vMasterKey, vchCryptedHDMnemonic, hdMnemonicIV, sec))
                         hdMnemonic.assign(sec.begin(), sec.end());
+                }
+                if (fHDEnabled && hdPassphrase.empty() && !vchCryptedHDPassphrase.empty()) {
+                    CSecret psec;
+                    if (DecryptSecret(vMasterKey, vchCryptedHDPassphrase, hdPassphraseIV, psec))
+                        hdPassphrase.assign(psec.begin(), psec.end());
                 }
                 return true;
             }
@@ -435,6 +442,14 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
                 if (!EncryptSecret(vMasterKey, sec, iv, cipher)) { dbEnc->TxnAbort(); return false; }
                 hdMnemonicIV = iv; vchCryptedHDMnemonic = cipher;
                 dbEnc->WriteHDCryptedMnemonic(iv, cipher);
+            }
+            if (fHDEnabled && !hdPassphrase.empty()) {
+                CSecret psec(hdPassphrase.begin(), hdPassphrase.end());
+                uint256 piv = GetRandHash();
+                std::vector<unsigned char> pcipher;
+                if (!EncryptSecret(vMasterKey, psec, piv, pcipher)) { dbEnc->TxnAbort(); return false; }
+                hdPassphraseIV = piv; vchCryptedHDPassphrase = pcipher;
+                dbEnc->WriteHDCryptedPassphrase(piv, pcipher);
             }
 
             SetMinVersion(WalletFeature::WalletCrypt, dbEnc.get(), true);
@@ -2933,8 +2948,11 @@ bool CWallet::DeriveHDKey(int64_t index, CKey& keyOut) const
 {
     if (hdMnemonic.empty())
         return false;
+    // If a BIP39 passphrase ("25th word") was set with the seed, it MUST be
+    // part of every derivation — otherwise restored wallets derive different
+    // addresses than the originals. Empty string = no passphrase (legacy).
     unsigned char priv[32];
-    if (!hd::DeriveTriangles(hdMnemonic, "", 0, 0, (uint32_t)index, priv))
+    if (!hd::DeriveTriangles(hdMnemonic, hdPassphrase, 0, 0, (uint32_t)index, priv))
         return false;
     CSecret secret(priv, priv + 32);
     memset(priv, 0, sizeof(priv));
@@ -2968,6 +2986,7 @@ bool CWallet::SetHDSeed(const std::string& mnemonicIn, const std::string& passph
     memset(priv, 0, sizeof(priv));
 
     hdMnemonic = m;
+    hdPassphrase = passphrase;
     fHDEnabled = true;
     nHDChainIndex = 0;
 
@@ -2980,8 +2999,23 @@ bool CWallet::SetHDSeed(const std::string& mnemonicIn, const std::string& passph
             if (!EncryptSecret(vMasterKey, sec, iv, cipher)) { strError = "Failed to encrypt seed."; return false; }
             hdMnemonicIV = iv; vchCryptedHDMnemonic = cipher;
             wdb.WriteHDCryptedMnemonic(iv, cipher);
+            if (!passphrase.empty()) {
+                CSecret psec(passphrase.begin(), passphrase.end());
+                uint256 piv = GetRandHash();
+                std::vector<unsigned char> pcipher;
+                if (!EncryptSecret(vMasterKey, psec, piv, pcipher)) { strError = "Failed to encrypt passphrase."; return false; }
+                hdPassphraseIV = piv; vchCryptedHDPassphrase = pcipher;
+                wdb.WriteHDCryptedPassphrase(piv, pcipher);
+            } else {
+                vchCryptedHDPassphrase.clear();
+                wdb.EraseHDPassphrase(); // re-seed without passphrase: drop any old record
+            }
         } else {
             wdb.WriteHDMnemonic(m);
+            if (!passphrase.empty())
+                wdb.WriteHDPassphrase(passphrase);
+            else
+                wdb.EraseHDPassphrase();
         }
         wdb.WriteHDChain(nHDChainIndex);
     }

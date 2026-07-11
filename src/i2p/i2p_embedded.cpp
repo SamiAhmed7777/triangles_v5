@@ -495,145 +495,137 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
     argvPtrs.push_back(nullptr);
 
     try {
-        // Initialize i2pd: config parse, filesystem, crypto, router context
+        // ----------------------------------------------------------------
+        // Phase 1 (synchronous, < 1s): config parse, crypto, router context
+        // ----------------------------------------------------------------
         i2p::api::InitI2P((int)(argvPtrs.size() - 1), argvPtrs.data(), "triangles-i2pd");
         fflush(stdout);
 
-        // Start the I2P router: netdb, transports, tunnels, router context
-        // Redirect i2pd logs to our stdout/stderr
-        auto logStream = std::make_shared<std::ostream>(std::cout.rdbuf());
-        i2p::api::StartI2P(logStream);
-        fflush(stdout);
-
-        printf("Embedded I2P: router started, starting client services...\n");
-        fflush(stdout);
-
-        // Mark running EARLY so the Qt UI's IsRunning() check passes even if
-        // the SAM/SOCKS bootstrap loop below takes longer than expected.
-        // The status bar will show "building tunnels..." (yellow) instead of
-        // nothing while we wait for the .b32.i2p address.
+        // Mark running immediately so Qt UI shows I2P as active.
         running.store(true);
 
-        // Start the client context — this initializes SAM bridge, SOCKS proxy,
-        // and tunnels based on config. The client context reads the conf we
-        // wrote above to determine which services to start.
-        i2p::client::context.Start();
-
-        printf("Embedded I2P: SOCKS proxy at 127.0.0.1:%d, SAM at 127.0.0.1:%d\n",
-               socksPort, samPort);
+        // ----------------------------------------------------------------
+        // Phase 2 (background thread): StartI2P + client context + bootstrap
+        //
+        // i2p::api::StartI2P() → NetDb::Start() → Reseed() can block for
+        // up to 180s on first run (empty netDb → HTTPS download from public
+        // I2P reseed servers). Running this on the main init thread freezes
+        // the GUI splash screen ("Starting embedded I2P router...").
+        //
+        // The background thread handles:
+        //   1. StartI2P (router, netdb, transports, tunnels, reseed)
+        //   2. client::context.Start (SAM bridge, SOCKS proxy, server tunnel)
+        //   3. Polling for SOCKS/SAM port readiness (up to 300s)
+        //   4. .b32.i2p address population
+        //
+        // Meanwhile, the main init proceeds immediately. Tor-only mode
+        // works in the meantime; I2P connectivity comes up asynchronously.
+        // ----------------------------------------------------------------
+        printf("Embedded I2P: launching router in background thread...\n");
         fflush(stdout);
 
-        // Wait for i2pd's SOCKS proxy AND SAM bridge to become available
-        // (up to 120s — I2P bootstrap is slower than Tor due to floodfill
-        // lookup and tunnel build).
-        printf("Embedded I2P: waiting for SOCKS proxy and SAM bridge...\n");
-        bool socksReady = false;
-        bool samReady = false;
+        std::thread([this]() {
+            try {
+                // Start the I2P router (netdb, transports, tunnels, reseed)
+                auto logStream = std::make_shared<std::ostream>(std::cout.rdbuf());
+                i2p::api::StartI2P(logStream);
+                fflush(stdout);
 
-        for (int i = 0; i < 120; i++) {
-            MilliSleep(1000);
-            if (fShutdown) {
-                Stop();
-                return false;
-            }
+                printf("Embedded I2P: router started, starting client services...\n");
+                fflush(stdout);
 
-            // --- Check SOCKS proxy readiness ---
-            if (!socksReady) {
+                // Start SAM bridge, SOCKS proxy, and server tunnel
+                i2p::client::context.Start();
+
+                printf("Embedded I2P: SOCKS proxy at 127.0.0.1:%d, SAM at 127.0.0.1:%d\n",
+                       socksPort, samPort);
+                fflush(stdout);
+
+                // Wait for SOCKS proxy + SAM bridge to become available
+                printf("Embedded I2P: waiting for SOCKS proxy and SAM bridge...\n");
+                bool socksReady = false;
+                bool samReady = false;
+
+                for (int i = 0; i < 300; i++) {
+                    MilliSleep(1000);
+                    if (fShutdown) {
+                        Stop();
+                        return;
+                    }
+
+                    if (!socksReady) {
 #ifdef WIN32
-                SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
-                if (sock != INVALID_SOCKET) {
+                        SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+                        if (sock != INVALID_SOCKET) {
 #else
-                int sock = socket(AF_INET, SOCK_STREAM, 0);
-                if (sock >= 0) {
+                        int sock = socket(AF_INET, SOCK_STREAM, 0);
+                        if (sock >= 0) {
 #endif
-                    struct sockaddr_in addr;
-                    memset(&addr, 0, sizeof(addr));
-                    addr.sin_family = AF_INET;
-                    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-                    addr.sin_port = htons(socksPort);
-                    bool up = (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == 0);
+                            struct sockaddr_in addr;
+                            memset(&addr, 0, sizeof(addr));
+                            addr.sin_family = AF_INET;
+                            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+                            addr.sin_port = htons(socksPort);
+                            bool up = (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == 0);
 #ifdef WIN32
-                    closesocket(sock);
+                            closesocket(sock);
 #else
-                    close(sock);
+                            close(sock);
 #endif
-                    if (up) {
-                        socksReady = true;
-                        printf("Embedded I2P: SOCKS proxy ready on port %d (took %ds)\n",
-                               socksPort, i + 1);
+                            if (up) {
+                                socksReady = true;
+                                printf("Embedded I2P: SOCKS proxy ready on port %d (took %ds)\n",
+                                       socksPort, i + 1);
+                            }
+                        }
+                    }
+
+                    if (!samReady) {
+                        samReady = IsSamAvailable();
+                        if (samReady) {
+                            printf("Embedded I2P: SAM v3 bridge ready on port %d (took %ds)\n",
+                                   samPort, i + 1);
+                        }
+                    }
+
+                    if (socksReady && samReady) {
+                        printf("Embedded I2P: all I2P endpoints ready (SOCKS %d + SAM %d)\n",
+                               socksPort, samPort);
+                        break;
+                    }
+
+                    if (i > 0 && i % 30 == 0) {
+                        printf("Embedded I2P: still bootstrapping (%ds elapsed, SOCKS:%s SAM:%s)...\n",
+                               i, socksReady ? "ready" : "wait",
+                               samReady ? "ready" : "wait");
                     }
                 }
-            }
 
-            // --- Check SAM bridge readiness ---
-            if (!samReady) {
-                samReady = IsSamAvailable();
-                if (samReady) {
-                    printf("Embedded I2P: SAM v3 bridge ready on port %d (took %ds)\n",
-                           samPort, i + 1);
-                }
-            }
-
-            // Both endpoints are up — router is fully bootstrapped
-            if (socksReady && samReady) {
-                printf("Embedded I2P: all I2P endpoints ready (SOCKS %d + SAM %d)\n",
-                       socksPort, samPort);
-                break;
-            }
-
-            if (i > 0 && i % 30 == 0) {
-                printf("Embedded I2P: still bootstrapping (%ds elapsed, SOCKS:%s SAM:%s)...\n",
-                       i, socksReady ? "ready" : "wait",
-                       samReady ? "ready" : "wait");
-            }
-        }
-
-        // Populate the .b32.i2p address from the router's identity hash.
-        // This is the I2P address that appears in the Qt status bar.
-        //
-        // Try i2pd's API first; if that fails (e.g. router info not yet loaded,
-        // exception during base32 encoding), fall back to reading the
-        // router.info file directly from the datadir — i2pd writes it as part
-        // of its crypto initialization, so it's almost always present.
+                // Populate .b32.i2p address
                 try {
                     auto identHash = i2p::context.GetRouterInfo().GetIdentHash();
                     i2pHostname = identHash.ToBase32() + ".b32.i2p";
                     printf("Embedded I2P: router address = %s\n", i2pHostname.c_str());
                 } catch (...) {
-                    printf("Embedded I2P: API ident lookup failed, trying router.info fallback...\n");
-                    try {
-                        fs::path routerInfoPath = fs::path(i2pDataDir) / "router.info";
-                        if (fs::exists(routerInfoPath)) {
-                            std::ifstream rf(routerInfoPath.string());
-                            std::string content((std::istreambuf_iterator<char>(rf)),
-                                                 std::istreambuf_iterator<char>());
-                            // Look for the "identity=" line — base64 of the signing key
-                            // The b32 address is derived from the SHA256 of this key,
-                            // but for our purposes we use the simpler approach: parse
-                            // the public key from the router.info and base32 it.
-                            // i2pd's RouterInfo has a ToBase64() we can call directly.
-                            size_t identPos = content.find("\"identity\"");
-                            if (identPos != std::string::npos) {
-                                printf("Embedded I2P: found identity in router.info (using SHA256-of-identity-hash for b32)\n");
-                                // The .b32.i2p address is just the SHA256 of the
-                                // router's identity, base32-encoded. Easiest path:
-                                // re-read via i2pd's Identity/Keys API by loading
-                                // the file. But for now, mark hostname as
-                                // "pending" and let the Qt timer retry every 5s.
-                                printf("Embedded I2P: router address not yet available, will retry from Qt timer\n");
-                            }
-                        }
-                    } catch (...) {
-                        printf("Embedded I2P: router.info fallback also failed\n");
-                    }
+                    printf("Embedded I2P: .b32.i2p address not yet available, Qt timer will retry\n");
                 }
                 fflush(stdout);
+
+            } catch (const std::exception& e) {
+                printf("ERROR: Embedded I2P background init failed: %s\n", e.what());
+                fflush(stdout);
+            }
+        }).detach();
+
+        printf("Embedded I2P: router init delegated to background thread\n");
+        fflush(stdout);
 
         return true;
 
     } catch (const std::exception& e) {
         lastError = std::string("i2pd initialization failed: ") + e.what();
         printf("ERROR: Embedded I2P startup failed: %s\n", e.what());
+        running.store(false);
         return false;
     }
 }

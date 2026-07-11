@@ -106,8 +106,12 @@ class CNetAddr
 {
     protected:
         unsigned char ip[16]; // in network byte order
-        unsigned char tor_v3_pubkey[32]; // Ed25519 public key for Tor v3 onion addresses
+        // For Tor v3 this holds the 32-byte Ed25519 public key. When m_is_i2p is
+        // set it instead holds the 32-byte SHA-256 of the I2P destination (the
+        // value rendered as the ".b32.i2p" address). A CNetAddr is never both.
+        unsigned char tor_v3_pubkey[32];
         bool m_is_tor_v3;
+        bool m_is_i2p;
 
     public:
         CNetAddr();
@@ -160,6 +164,7 @@ class CNetAddr
              READWRITE(FLATDATA(ip));
              READWRITE(FLATDATA(tor_v3_pubkey));
              READWRITE(m_is_tor_v3);
+             READWRITE(m_is_i2p);
             )
 };
 
@@ -203,6 +208,7 @@ class CService : public CNetAddr
              READWRITE(FLATDATA(ip));
              READWRITE(FLATDATA(tor_v3_pubkey));
              READWRITE(m_is_tor_v3);
+             READWRITE(m_is_i2p);
              unsigned short portN = htons(port);
              READWRITE(portN);
              if (fRead)

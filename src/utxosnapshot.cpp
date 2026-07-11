@@ -111,6 +111,23 @@ bool DumpSnapshot(const fs::path& destPath,
             if (blkSize > 0) numBlocks = (unsigned int)blkSize;
         }
     }
+    // v3: collect setStakeSeen entries (prevoutStake, nStakeTime) from the
+    // last N PoS blocks. Required so a snapshot-loaded node has the recent
+    // stake-collision set restored without walking blocks at startup.
+    static const unsigned int STAKE_SEEN_DEPTH = 5000; // 10x LoadBlockIndex default
+    std::vector<std::pair<COutPoint, unsigned int> > vStakeSeen;
+    {
+        CBlockIndex* pindex = pindexBest;
+        unsigned int nVisited = 0;
+        while (pindex && nVisited < STAKE_SEEN_DEPTH) {
+            if (pindex->IsProofOfStake()) {
+                vStakeSeen.push_back(std::make_pair(pindex->prevoutStake, pindex->nStakeTime));
+            }
+            pindex = pindex->pprev;
+            nVisited++;
+        }
+    }
+    unsigned int numStakeSeen = (unsigned int)vStakeSeen.size();
     uint256 contentHash; // placeholder, filled after writing data
 
     fwrite(&magic, sizeof(magic), 1, file);
@@ -122,6 +139,7 @@ bool DumpSnapshot(const fs::path& destPath,
     fwrite(&numHeaders, sizeof(numHeaders), 1, file);
     fwrite(&numUtxos, sizeof(numUtxos), 1, file);
     fwrite(&numBlocks, sizeof(numBlocks), 1, file); // v2+
+    fwrite(&numStakeSeen, sizeof(numStakeSeen), 1, file); // v3+
     long contentHashPos = ftell(file);
     fwrite(&contentHash, sizeof(contentHash), 1, file); // placeholder
 
@@ -195,11 +213,37 @@ bool DumpSnapshot(const fs::path& destPath,
         // Update actual count (in case it changed during iteration)
         if (nWritten != numUtxos) {
             numUtxos = nWritten;
-            // Seek back and update numUtxos in header
+            // Seek back and update numUtxos in header.
+            // Header layout (v3):
+            //   magic(4) + version(4) + network(4) + height(4) + blockHash(32)
+            //   + moneySupply(8) + numHeaders(4) + numUtxos(4)
+            //   + numBlocks(4) + numStakeSeen(4) + contentHash(32)
+            // contentHashPos is the offset of contentHash. numUtxos is at
+            // contentHashPos - sizeof(contentHash) - sizeof(numStakeSeen)
+            //                  - sizeof(numBlocks) - sizeof(numUtxos).
             long currentPos = ftell(file);
-            fseek(file, contentHashPos - sizeof(numUtxos), SEEK_SET);
+            fseek(file, contentHashPos - sizeof(uint256) - sizeof(numStakeSeen)
+                          - sizeof(numBlocks) - sizeof(numUtxos), SEEK_SET);
             fwrite(&numUtxos, sizeof(numUtxos), 1, file);
             fseek(file, currentPos, SEEK_SET);
+        }
+    }
+
+    // v3: After UTXOs, write the setStakeSeen entries collected from the last
+    // N PoS blocks. Format: a length-prefixed flat array of
+    // (COutPoint prevout, unsigned int nStakeTime) records.
+    if (version >= 3) {
+        printf("UtxoSnapshot: writing %d setStakeSeen entries...\n", numStakeSeen);
+        for (unsigned int i = 0; i < vStakeSeen.size(); i++) {
+            CDataStream ssEntry(SER_DISK, CLIENT_VERSION);
+            ssEntry << vStakeSeen[i].first;  // COutPoint (hash + index)
+            ssEntry << vStakeSeen[i].second; // nStakeTime
+            unsigned int entrySize = (unsigned int)ssEntry.size();
+            std::string strEntry = ssEntry.str();
+            fwrite(&entrySize, sizeof(entrySize), 1, file);
+            fwrite(strEntry.data(), 1, entrySize, file);
+            SHA256_Update(&sha256, &entrySize, sizeof(entrySize));
+            SHA256_Update(&sha256, strEntry.data(), entrySize);
         }
     }
 
@@ -290,7 +334,7 @@ bool LoadSnapshot(const fs::path& snapshotPath,
     int height;
     uint256 blockHash;
     int64_t moneySupply;
-    unsigned int numHeaders = 0, numUtxos = 0, numBlocks = 0;
+    unsigned int numHeaders = 0, numUtxos = 0, numBlocks = 0, numStakeSeen = 0;
     uint256 expectedContentHash;
 
     if (fread(&magic, sizeof(magic), 1, file) != 1 ||
@@ -305,11 +349,19 @@ bool LoadSnapshot(const fs::path& snapshotPath,
         strError = "Truncated snapshot header (common fields)";
         return false;
     }
-    // v2+ has numBlocks between numUtxos and contentHash. v1 stops here.
+    // v2+ has numBlocks between numUtxos and (numStakeSeen|contentHash).
     if (version >= 2) {
         if (fread(&numBlocks, sizeof(numBlocks), 1, file) != 1) {
             fclose(file);
             strError = "Truncated snapshot header (numBlocks)";
+            return false;
+        }
+    }
+    // v3+ has numStakeSeen before contentHash.
+    if (version >= 3) {
+        if (fread(&numStakeSeen, sizeof(numStakeSeen), 1, file) != 1) {
+            fclose(file);
+            strError = "Truncated snapshot header (numStakeSeen)";
             return false;
         }
     }
@@ -522,6 +574,46 @@ bool LoadSnapshot(const fs::path& snapshotPath,
             success = false;
     }
 
+    // v3: After UTXOs (before the embedded blocks), read the setStakeSeen
+    // entries collected from the last N PoS blocks of the source chain.
+    // Required so a snapshot-loaded node has the recent stake-collision set
+    // restored immediately, without having to walk blocks at startup. This
+    // is what lets the anti-spam "too little proof-of-stake" check in
+    // ProcessBlock function correctly right after a snapshot bootstrap.
+    if (success && version >= 3 && numStakeSeen > 0) {
+        printf("UtxoSnapshot: loading %d setStakeSeen entries...\n", numStakeSeen);
+        // setStakeSeen is declared in main.cpp — we reference it via the
+        // header declaration. Clear first so the snapshot's view is authoritative.
+        setStakeSeen.clear();
+        unsigned int nLoadedStakeSeen = 0;
+        for (unsigned int i = 0; i < numStakeSeen; i++) {
+            unsigned int entrySize;
+            if (fread(&entrySize, sizeof(entrySize), 1, file) != 1 || entrySize > 1000) {
+                success = false;
+                strError = "Invalid setStakeSeen entry size at index " + std::to_string(i);
+                break;
+            }
+            std::vector<char> buf(entrySize);
+            if (fread(buf.data(), 1, entrySize, file) != entrySize) {
+                success = false;
+                strError = "Truncated setStakeSeen entry at index " + std::to_string(i);
+                break;
+            }
+            SHA256_Update(&sha256, &entrySize, sizeof(entrySize));
+            SHA256_Update(&sha256, buf.data(), entrySize);
+
+            CDataStream ssEntry(buf.data(), buf.data() + buf.size(), SER_DISK, CLIENT_VERSION);
+            COutPoint prevout;
+            unsigned int nStakeTime;
+            ssEntry >> prevout;
+            ssEntry >> nStakeTime;
+            setStakeSeen.insert(std::make_pair(prevout, nStakeTime));
+            nLoadedStakeSeen++;
+        }
+        if (success)
+            printf("UtxoSnapshot: loaded %d setStakeSeen entries\n", nLoadedStakeSeen);
+    }
+
     // v2: After UTXOs, extract the raw blk0001.dat content. This makes the
     // loaded node fully self-contained — no separate bootstrap needed.
     if (success && version >= 2 && numBlocks > 0) {
@@ -549,6 +641,108 @@ bool LoadSnapshot(const fs::path& snapshotPath,
             fclose(blkOutFile);
             if (success)
                 printf("UtxoSnapshot: wrote blk0001.dat (%u bytes)\n", numBlocks);
+        }
+    }
+
+    // Build the transaction index (txindex) from the freshly-extracted blk0001.dat.
+    // The snapshot loads the UTXO set and blk0001.dat but does NOT rebuild the
+    // per-tx index that CTransaction::ReadFromDisk requires for stake-input
+    // signature verification. Without this, a new PoS block referencing any
+    // pre-snapshot tx would fail CheckProofOfStake with "read txPrev failed"
+    // and be rejected with DoS=100, stalling the node at the snapshot height.
+    //
+    // Walk every block in blk0001.dat and record CDiskTxPos for each tx, so
+    // the loaded chain is fully self-contained. The walk is O(N) over the
+    // historical block range but uses the already-cached blocks on disk and
+    // batches the writes (every 5000 txs).
+    if (success) {
+        printf("UtxoSnapshot: building transaction index from blk0001.dat...\n");
+        fs::path blkPath = GetDataDir() / "blk0001.dat";
+        FILE* blkFile = fopen(blkPath.string().c_str(), "rb");
+        if (!blkFile) {
+            success = false;
+            strError = "Cannot open blk0001.dat for txindex build: " + blkPath.string();
+        } else {
+            CAutoFile blkdat(blkFile, SER_DISK, CLIENT_VERSION);
+            if (!txdb.TxnBegin()) {
+                success = false;
+                strError = "Failed to begin txindex build transaction";
+            } else {
+                unsigned int nPos = 0;
+                unsigned int nBlocksIndexed = 0;
+                unsigned int nTxsIndexed = 0;
+                unsigned int nBatchTxs = 0;
+                int64_t nLastReport = GetTimeMillis();
+                while (success && blkdat.good()) {
+                    fseek(blkdat, nPos, SEEK_SET);
+                    // Locate block magic
+                    unsigned char pchData[65536];
+                    int nRead = fread(pchData, 1, sizeof(pchData), blkdat);
+                    if (nRead <= 8) break;
+                    void* nFind = memchr(pchData, pchMessageStart[0], nRead + 1 - sizeof(pchMessageStart));
+                    if (!nFind) {
+                        // Reached the tail of the file
+                        break;
+                    }
+                    if (memcmp(nFind, pchMessageStart, sizeof(pchMessageStart)) != 0) {
+                        nPos += ((unsigned char*)nFind - pchData) + 1;
+                        continue;
+                    }
+                    unsigned int nBlockStart = nPos + ((unsigned char*)nFind - pchData);
+                    fseek(blkdat, nBlockStart + sizeof(pchMessageStart), SEEK_SET);
+                    unsigned int nSize;
+                    blkdat >> nSize;
+                    if (nSize == 0 || nSize > MAX_BLOCK_SIZE) {
+                        nPos = nBlockStart + sizeof(pchMessageStart) + 4;
+                        continue;
+                    }
+                    CBlock block;
+                    blkdat >> block;
+                    // For each tx in the block, record the disk position.
+                    // nTxPos is the offset of the tx *within* the block (after
+                    // magic+size for the first tx, then serialize-size of
+                    // preceding txs). We use the post-serialize offset of each
+                    // tx as nTxPos, matching the convention in ConnectBlock.
+                    unsigned int nTxPos = sizeof(pchMessageStart) + sizeof(unsigned int); // offset of first tx in block
+                    for (const CTransaction& tx : block.vtx) {
+                        CDiskTxPos posThisTx(1, nBlockStart, nTxPos);
+                        txdb.UpdateTxIndex(tx.GetHash(), CTxIndex(posThisTx, tx.vout.size()));
+                        nTxPos += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
+                        nTxsIndexed++;
+                        nBatchTxs++;
+                    }
+                    nBlocksIndexed++;
+                    // Advance past this block to scan the next one
+                    nPos = nBlockStart + sizeof(pchMessageStart) + sizeof(unsigned int) + nSize;
+                    // Commit batch periodically to avoid unbounded memory
+                    if (nBatchTxs >= 5000) {
+                        if (!txdb.TxnCommit()) {
+                            success = false;
+                            strError = "txindex batch commit failed";
+                            break;
+                        }
+                        if (!txdb.TxnBegin()) {
+                            success = false;
+                            strError = "txindex batch restart failed";
+                            break;
+                        }
+                        nBatchTxs = 0;
+                        if (GetTimeMillis() - nLastReport > 5000) {
+                            printf("UtxoSnapshot: indexed %u blocks / %u txs (pos=%u)\n",
+                                   nBlocksIndexed, nTxsIndexed, nPos);
+                            nLastReport = GetTimeMillis();
+                        }
+                    }
+                }
+                if (success && !txdb.TxnCommit()) {
+                    success = false;
+                    strError = "Final txindex commit failed";
+                }
+                if (success) {
+                    printf("UtxoSnapshot: built txindex for %u blocks / %u transactions\n",
+                           nBlocksIndexed, nTxsIndexed);
+                }
+            }
         }
     }
 

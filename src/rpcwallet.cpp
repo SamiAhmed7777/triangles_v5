@@ -9,6 +9,9 @@
 #include "init.h"
 #include "base58.h"
 #include "smessage.h"
+#include "i2p/i2p_embedded.h"
+#include "tor/onion_v3.h"
+#include "tor/tor_embedded.h"
 
 using namespace json_spirit;
 using namespace std;
@@ -99,6 +102,13 @@ Value getinfo(const Array& params, bool fHelp)
     obj.push_back(Pair("connections",   (int)vNodes.size()));
     obj.push_back(Pair("proxy",         (proxy.first.IsValid() ? proxy.first.ToStringIPPort() : string())));
     obj.push_back(Pair("ip",            addrSeenByPeer.ToStringIP()));
+
+    // Anonymous network identities.
+    std::string onionAddress = CTorV3Manager::GetInstance()->GetWalletOnionAddress();
+    if (onionAddress.empty())
+        onionAddress = CTorEmbedded::GetInstance()->GetOnionAddress();
+    obj.push_back(Pair("toraddress",    onionAddress));
+    obj.push_back(Pair("i2paddress",    CI2PEmbedded::GetInstance()->GetI2PAddress()));
 
     diff.push_back(Pair("proof-of-work",  GetDifficulty()));
     diff.push_back(Pair("proof-of-stake", GetDifficulty(GetLastBlockIndex(pindexBest, true))));
@@ -1909,7 +1919,10 @@ Value hdnew(const Array& params, bool fHelp)
     Object obj;
     obj.push_back(Pair("mnemonic", mnemonic));
     obj.push_back(Pair("words", 24));
-    obj.push_back(Pair("warning", "Write these 24 words down and keep them secret and offline. Anyone with them can spend your coins."));
+    obj.push_back(Pair("passphrase_used", !passphrase.empty()));
+    obj.push_back(Pair("warning", passphrase.empty()
+        ? "Write these 24 words down and keep them secret and offline. Anyone with them can spend your coins."
+        : "Write these 24 words down and keep them secret and offline. Anyone with them can spend your coins. You ALSO set a BIP39 passphrase: the words alone will NOT restore this wallet — back up the passphrase separately."));
     return obj;
 }
 
@@ -1948,6 +1961,10 @@ Value hdshow(const Array& params, bool fHelp)
         throw JSONRPCError(RPC_WALLET_ERROR, "Wallet has no HD seed (use 'hdnew' to create one).");
     Object obj;
     obj.push_back(Pair("mnemonic", mnemonic));
-    obj.push_back(Pair("warning", "Keep these words secret and offline."));
+    obj.push_back(Pair("passphrase_used", !pwalletMain->hdPassphrase.empty()));
+    if (!pwalletMain->hdPassphrase.empty())
+        obj.push_back(Pair("warning", "Keep these words secret and offline. A BIP39 passphrase is ALSO set: the words alone will NOT restore this wallet — back up the passphrase separately."));
+    else
+        obj.push_back(Pair("warning", "Keep these words secret and offline."));
     return obj;
 }

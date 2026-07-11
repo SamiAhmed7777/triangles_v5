@@ -6,6 +6,8 @@
 #include <QMap>
 #include <QBitmap>
 
+class OutlinedLabel;
+
 class TransactionTableModel;
 class ClientModel;
 class WalletModel;
@@ -110,10 +112,11 @@ private:
     QLabel *labelConnectionsIcon;
     QLabel *labelBlocksIcon;
     QLabel *labelOnionAddress;
-    QLabel *labelV3Icon;
     QLabel *labelI2PAddress;
+    QLabel *labelV3Icon;
     QLabel *labelI2PIcon;
     QLabel *labelTorIcon;
+    OutlinedLabel *labelHdIcon;
     QLabel *progressBarLabel;
     QProgressBar *progressBar;
 
@@ -182,6 +185,7 @@ public slots:
     void setWalletTransactionSyncProgress(bool syncing, int pendingNotifications);
     void updateOnionAddress();
     void updateI2PAddress();
+    void updateHDStatus();
 
     /** Notify the user of an error in the network or transaction handling code. */
     void error(const QString &title, const QString &message, bool modal);

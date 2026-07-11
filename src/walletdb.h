@@ -5,12 +5,26 @@
 #ifndef TRIANGLES_WALLETDB_H
 #define TRIANGLES_WALLETDB_H
 
-#include "db.h"
+#include "walletdb-batch.h"   // CWalletBatchTyped (the typed batch seam)
 #include "base58.h"
 
 class CKeyPool;
 class CAccount;
 class CAccountingEntry;
+class CBlockLocator;         // forward decl — pulled in via db.h→main.h before
+class CPubKey;
+class CScript;
+class CMasterKey;
+class uint160;
+class uint256;
+class CWallet;               // pulled in via db.h→main.h→wallet.h before
+class CWalletTx;             // forward decl — walletdb.h used to pull this in
+                             // transitively via db.h; the seam removes that.
+
+// Wallet-update counter used by the periodic flush thread (db.cpp defines it).
+// Touched on every wallet write; needed regardless of backend so the daemon's
+// auto-flush logic can detect changes to the wallet file.
+extern unsigned int nWalletDBUpdated;
 
 /** Error statuses for the wallet database */
 enum DBErrors
@@ -57,39 +71,20 @@ public:
 
 
 /** Access to the wallet database (wallet.dat) */
-class CWalletDB : public CDB
+class CWalletDB : public CWalletBatchTyped
 {
 public:
-    CWalletDB(std::string strFilename, const char* pszMode="r+") : CDB(strFilename.c_str(), pszMode)
-    {
-    }
+    /**
+     * Open (or create) the wallet database via the configured backend
+     * (-walletdb, default SQLite). The legacy pszMode argument is accepted
+     * for source compatibility but currently ignored — SQLite is always
+     * opened read/write with create-if-missing.
+     */
+    CWalletDB(std::string strFilename, const char* pszMode="r+");
 private:
     CWalletDB(const CWalletDB&);
     void operator=(const CWalletDB&);
 public:
-    Dbc* GetAtCursor()
-    {
-        return GetCursor();
-    }
-
-    Dbc* GetTxnCursor()
-    {
-        if (!pdb)
-            return NULL;
-
-        DbTxn* ptxnid = activeTxn; // call TxnBegin first
-
-        Dbc* pcursor = NULL;
-        int ret = pdb->cursor(ptxnid, &pcursor, 0);
-        if (ret != 0)
-            return NULL;
-        return pcursor;
-    }
-
-    DbTxn* GetAtActiveTxn()
-    {
-        return activeTxn;
-    }
 
     bool WriteName(const std::string& strAddress, const std::string& strName);
 
@@ -183,6 +178,25 @@ public:
         nWalletDBUpdated++;
         return Write(std::string("hdchain"), nIndex);
     }
+    // BIP39 passphrase ("25th word"). Same plaintext/crypted lifecycle as the
+    // mnemonic: exactly one of the two records exists at a time; both absent
+    // means no passphrase (legacy wallets and the common case).
+    bool WriteHDPassphrase(const std::string& passphrase) {
+        nWalletDBUpdated++;
+        Erase(std::string("hdcpassphrase"));
+        return Write(std::string("hdpassphrase"), passphrase);
+    }
+    bool WriteHDCryptedPassphrase(const uint256& iv, const std::vector<unsigned char>& cipher) {
+        nWalletDBUpdated++;
+        Erase(std::string("hdpassphrase"));
+        return Write(std::string("hdcpassphrase"), std::make_pair(iv, cipher));
+    }
+    bool EraseHDPassphrase() {
+        nWalletDBUpdated++;
+        Erase(std::string("hdpassphrase"));
+        Erase(std::string("hdcpassphrase"));
+        return true;
+    }
 
     bool ReadPool(int64_t nPool, CKeyPool& keypool)
     {
@@ -225,6 +239,18 @@ public:
         return Write(std::string("minversion"), nVersion);
     }
 
+    // Mirrors the legacy CDB::WriteVersion / ReadVersion; explicitly retained
+    // because LoadWallet() upgrades the on-disk version to CLIENT_VERSION.
+    bool WriteVersion(int nVersion)
+    {
+        return Write(std::string("version"), nVersion);
+    }
+    bool ReadVersion(int& nVersion)
+    {
+        nVersion = 0;
+        return Read(std::string("version"), nVersion);
+    }
+
     bool ReadAccount(const std::string& strAccount, CAccount& account);
     bool WriteAccount(const std::string& strAccount, const CAccount& account);
 private:
@@ -236,9 +262,10 @@ public:
 
     DBErrors ReorderTransactions(CWallet*);
     DBErrors LoadWallet(CWallet* pwallet);
-    static bool Recover(CDBEnv& dbenv, std::string filename, bool fOnlyKeys);
-    static bool Recover(CDBEnv& dbenv, std::string filename);
-    static bool ZapWalletTx(const std::string& strWalletFile);
+    // NOTE: Recover() / ZapWalletTx() are Berkeley-only escape hatches. They
+    // live in walletdb-recover.{h,cpp} (which still depends on db.h / db_cxx.h).
+    // After wallet migration to SQLite those helpers are invoked on the
+    // .bdb.bak copy at startup, never on the live wallet.
 };
 
 #endif // TRIANGLES_WALLETDB_H

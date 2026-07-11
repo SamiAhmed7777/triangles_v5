@@ -108,6 +108,15 @@ endif()
 # for the rationale — RocksDB also backs the smessage store).
 list(APPEND CORE_SOURCES txdb-rocksdb.cpp)
 
+# Modernization: SQLite wallet DB backend + Berkeley→SQLite migration.
+# Built unconditionally; selection happens at runtime via -walletdb.
+list(APPEND CORE_SOURCES
+    walletdb-factory.cpp
+    walletdb-sqlite.cpp
+    walletdb-recover.cpp
+    walletmigrate.cpp
+)
+
 add_library(triangles_common OBJECT ${CORE_SOURCES})
 
 target_include_directories(triangles_common PUBLIC
@@ -126,13 +135,11 @@ target_link_libraries(triangles_common PUBLIC
     leveldb_bundled
     OpenSSL::SSL
     OpenSSL::Crypto
-    Boost::program_options
-    Boost::thread
-    Boost::chrono
     BerkeleyDB::BerkeleyDB
     Libevent::Libevent
     ZLIB::ZLIB
     Threads::Threads
+    SQLite::SQLite3
 )
 
 # Optional: UPnP
@@ -443,6 +450,7 @@ if(BUILD_QT)
         qt/qvaluecombobox.cpp
         qt/askpassphrasedialog.cpp
         qt/hdseeddialog.cpp
+        qt/outlinedlabel.cpp
         qt/notificator.cpp
         qt/qtipcserver.cpp
         qt/rpcconsole.cpp
@@ -522,6 +530,7 @@ if(BUILD_QT)
         Qt5::Core
         Qt5::Gui
         Qt5::Widgets
+        Qt5::Network
     )
 
     # Optional: D-Bus notifications (Linux)
@@ -588,6 +597,15 @@ if(BUILD_TESTS)
     # Exclude the standalone chaindb test driver — it gets its own target
     # because it needs to run without the TestingSetup global fixture.
     list(FILTER TEST_SOURCES EXCLUDE REGEX "chaindb_equivalence_tests_main\\.cpp$")
+    # These two are standalone test drivers: each #defines its own
+    # BOOST_TEST_MODULE and redefines the wallet/UI globals, and each has
+    # a dedicated executable + add_test below. They must NOT also be
+    # globbed into test_triangles, or the duplicate module/main and global
+    # symbols only link by virtue of -Wl,--allow-multiple-definition (which
+    # silently drops duplicates and can run their suites under the wrong
+    # global fixture). Excluding them keeps each standalone module isolated.
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "chaindb_runtime_tests\\.cpp$")
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "snapshotnet_tests\\.cpp$")
 
     add_executable(test_triangles
         ${TEST_SOURCES}
@@ -598,7 +616,7 @@ if(BUILD_TESTS)
     # No init.cpp — test_triangles.cpp provides its own StartShutdown() stub
 
     target_compile_definitions(test_triangles PRIVATE
-        "TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/test/data\""
+        "TEST_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/test/data"
     )
 
     target_include_directories(test_triangles PRIVATE

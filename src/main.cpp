@@ -3478,10 +3478,27 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
                 bnRequired.SetCompact(ComputeMinWork(pindexLastPow->nBits, deltaTime));
         }
 
+        // Anti-spam: reject blocks whose target exceeds the required minimum (i.e. blocks
+        // with less difficulty than required for the elapsed time-since-checkpoint).
+        // bnNewBlock is the candidate's compact-bits target; bnRequired is the minimum
+        // target for the elapsed time. In Bitcoin/PoS, a LARGER target means EASIER
+        // difficulty. So: bnNewBlock > bnRequired => block is easier than required =>
+        // "too little proof-of-stake/work" => reject.
+        //
+        // The 2026-06-30 commit cbb189a inverted this to bnNewBlock < bnRequired which
+        // rejected blocks that are HARDER than required (good blocks!) — verified by
+        // DNS3 stalling at snapshot height 2,214,547 because every canonical post-snapshot
+        // block was being rejected as "too little proof-of-stake". This restores the
+        // correct comparison and keeps the soft Misbehaving(5) score from cbb189a.
         if (bnRequired != 0 && bnNewBlock > bnRequired)
         {
+            // Anti-spam is a soft scoring signal, NOT a hard ban trigger. A single
+            // violation should log + score modestly, not 24-hour-ban honest peers
+            // (which is what happened during the 2026-06-23 DNS2 clearnet-fork
+            // incident — `Misbehaving(100)` crossed the banscore threshold on the
+            // FIRST block, instantly banning every honest peer feeding us fork blocks).
             if (pfrom)
-                pfrom->Misbehaving(100);
+                pfrom->Misbehaving(5);
             return error("ProcessBlock() : block with too little %s", pblock->IsProofOfStake()? "proof-of-stake" : "proof-of-work");
         }
     }
@@ -4007,6 +4024,290 @@ bool LoadExternalBlockFile(FILE* fileIn)
         }
     }
     printf("Loaded %i blocks from external file in %" PRId64 "ms\n", nLoaded, GetTimeMillis() - nStart);
+    return nLoaded > 0;
+}
+
+
+bool FastImportBlockFile()
+{
+    // Fast block import: reads blk0001.dat and builds the block index
+    // directly without re-writing block data. LevelDB writes are batched
+    // every 200K blocks for speed. Only used for trusted bootstrap data
+    // (blocks below the hardcoded checkpoint).
+
+    fs::path blkPath = GetDataDir() / "blk0001.dat";
+    if (!fs::exists(blkPath))
+        return false;
+
+    printf("FastImportBlockFile: starting from %s\n", blkPath.string().c_str());
+    int64_t nStart = GetTimeMillis();
+
+    FILE* fileIn = fopen(blkPath.string().c_str(), "rb");
+    if (!fileIn)
+        return false;
+
+    // Get file size for progress
+    fseek(fileIn, 0, SEEK_END);
+    int64_t nFileSize = ftell(fileIn);
+    fseek(fileIn, 0, SEEK_SET);
+
+    int nLoaded = 0;
+    int64_t nLastProgressReport = 0;
+
+    {
+        LOCK(cs_main);
+        CAutoFile blkdat(fileIn, SER_DISK, CLIENT_VERSION);
+
+        auto txdb_holder = MakeChainDB(); CTxDBBase& txdb = *txdb_holder;
+        txdb.TxnBegin();
+
+        unsigned int nPos = 0;
+        while (nPos != (unsigned int)-1 && blkdat.good() && !fRequestShutdown)
+        {
+            // Find message start bytes (same scan as LoadExternalBlockFile)
+            unsigned char pchData[65536];
+            do {
+                fseek(blkdat, nPos, SEEK_SET);
+                int nRead = fread(pchData, 1, sizeof(pchData), blkdat);
+                if (nRead <= 8)
+                {
+                    nPos = (unsigned int)-1;
+                    break;
+                }
+                void* nFind = memchr(pchData, pchMessageStart[0], nRead+1-sizeof(pchMessageStart));
+                if (nFind)
+                {
+                    if (memcmp(nFind, pchMessageStart, sizeof(pchMessageStart))==0)
+                    {
+                        nPos += ((unsigned char*)nFind - pchData) + sizeof(pchMessageStart);
+                        break;
+                    }
+                    nPos += ((unsigned char*)nFind - pchData) + 1;
+                }
+                else
+                    nPos += sizeof(pchData) - sizeof(pchMessageStart) + 1;
+            } while(!fRequestShutdown);
+
+            if (nPos == (unsigned int)-1)
+                break;
+
+            fseek(blkdat, nPos, SEEK_SET);
+            unsigned int nSize;
+            blkdat >> nSize;
+
+            if (nSize == 0 || nSize > MAX_BLOCK_SIZE)
+            {
+                nPos += 4 + nSize;
+                continue;
+            }
+
+            // nBlockPos = file position where the block data starts
+            // (after 4-byte message start + 4-byte size)
+            unsigned int nBlockPos = nPos + 4;
+
+            CBlock block;
+            blkdat >> block;
+
+            uint256 hash = block.GetHash();
+            if (mapBlockIndex.count(hash))
+            {
+                nPos += 4 + nSize;
+                continue; // already indexed
+            }
+
+            // Create CBlockIndex
+            CBlockIndex* pindexNew = new CBlockIndex(1, nBlockPos, block);
+            if (!pindexNew)
+                break;
+
+            // Link to previous block
+            auto miPrev = mapBlockIndex.find(block.hashPrevBlock);
+            if (miPrev != mapBlockIndex.end())
+            {
+                pindexNew->pprev = miPrev->second;
+                pindexNew->nHeight = pindexNew->pprev->nHeight + 1;
+            }
+
+            // Chain trust
+            pindexNew->nChainTrust = (pindexNew->pprev ? pindexNew->pprev->nChainTrust : 0) + pindexNew->GetBlockTrust();
+
+            // Stake entropy bit
+            pindexNew->SetStakeEntropyBit(block.GetStakeEntropyBit());
+
+            // Stake modifier (minimal for blocks far below checkpoint)
+            int nCheckpointHeight = Checkpoints::GetTotalBlocksEstimate();
+            if (pindexNew->nHeight >= nCheckpointHeight - 1000)
+            {
+                uint64_t nStakeModifier = 0;
+                bool fGeneratedStakeModifier = false;
+                ComputeNextStakeModifier(pindexNew->pprev, nStakeModifier, fGeneratedStakeModifier);
+                pindexNew->SetStakeModifier(nStakeModifier, fGeneratedStakeModifier);
+            }
+            else
+            {
+                pindexNew->SetStakeModifier(0, pindexNew->nHeight == 0);
+            }
+            pindexNew->nStakeModifierChecksum = GetStakeModifierChecksum(pindexNew);
+
+            // PoS stake seen set
+            if (pindexNew->IsProofOfStake())
+                setStakeSeen.insert(make_pair(pindexNew->prevoutStake, pindexNew->nStakeTime));
+
+            // Insert into mapBlockIndex
+            auto mi = mapBlockIndex.insert(make_pair(hash, pindexNew)).first;
+            pindexNew->phashBlock = &mi->first;
+
+            // Link pnext for previous block
+            if (pindexNew->pprev)
+                pindexNew->pprev->pnext = pindexNew;
+
+            // NOTE: tx-index, UTXO-set and money-supply application are
+            // DEFERRED to a second pass over the active (best-trust) chain
+            // only — see the pass after this loop. Applying them here, for
+            // every block read from the file (which permanently retains
+            // ORPHANED side-chain blocks), wrote those orphans' outputs into
+            // the UTXO set as phantom coins and over-counted nMoneySupply.
+            // That was the root cause of UTXO-set / supply inflation on every
+            // reindex. Here we only build the block index for all blocks so
+            // best-chain selection by trust still works.
+            txdb.WriteBlockIndex(CDiskBlockIndex(pindexNew));
+
+            // Update best chain
+            if (pindexNew->nChainTrust > nBestChainTrust)
+            {
+                hashBestChain = hash;
+                pindexBest = pindexNew;
+                pblockindexFBBHLast = nullptr;
+                nBestHeight = pindexNew->nHeight;
+                nBestChainTrust = pindexNew->nChainTrust;
+                nTimeBestReceived = GetTime();
+            }
+
+            // Set genesis block
+            if (pindexGenesisBlock == nullptr && pindexNew->nHeight == 0)
+                pindexGenesisBlock = pindexNew;
+
+            nLoaded++;
+            nPos += 4 + nSize;
+
+            // Batch commit every 200K blocks for LevelDB efficiency
+            if (nLoaded % 200000 == 0)
+            {
+                txdb.WriteHashBestChain(hashBestChain);
+                txdb.TxnCommit();
+                txdb.TxnBegin();
+            }
+
+            // Report progress every 5000 blocks to keep GUI responsive.
+            // AppInit2 runs on the GUI thread, so uiInterface.InitMessage
+            // triggers processEvents() which prevents the window from freezing.
+            if (nLoaded % 5000 == 0)
+            {
+                int pct = (nFileSize > 0) ? (int)((int64_t)nPos * 100 / nFileSize) : 0;
+                printf("FastImport: %d blocks indexed (%d%%)\n", nLoaded, pct);
+                uiInterface.InitMessage(strprintf(_("Importing blocks... %d indexed (%d%%)"), nLoaded, pct));
+            }
+        }
+
+        // ---- Pass 2: apply tx-index, UTXO set and money supply along the
+        // ACTIVE (best-trust) chain ONLY. The file-order pass above indexed
+        // every block including orphaned side-chain blocks; replaying only
+        // the main chain here keeps the UTXO set and money supply exactly in
+        // consensus and prevents orphan outputs becoming phantom coins. ----
+        if (pindexBest)
+        {
+            std::vector<CBlockIndex*> vMain;
+            for (CBlockIndex* p = pindexBest; p; p = p->pprev)
+                vMain.push_back(p);
+            std::reverse(vMain.begin(), vMain.end());
+            printf("FastImportBlockFile: applying UTXO/supply along %d main-chain blocks...\n", (int)vMain.size());
+            uiInterface.InitMessage(_("Building UTXO set (main chain)..."));
+
+            int64_t nRunningSupply = 0;
+            int nApplied = 0;
+            for (CBlockIndex* pindex : vMain)
+            {
+                // Genesis (height 0) is a hardcoded special block that is not
+                // re-read from disk this way; it contributes nothing to supply
+                // and the genesis-walk audit skips it identically. Carry the
+                // running supply (0) forward and move on.
+                if (pindex->nHeight == 0)
+                {
+                    pindex->nMint = 0;
+                    pindex->nMoneySupply = nRunningSupply; // still 0 here
+                    txdb.WriteBlockIndex(CDiskBlockIndex(pindex));
+                    continue;
+                }
+
+                CBlock blockMain;
+                if (!blockMain.ReadFromDisk(pindex))
+                    return error("FastImportBlockFile: ReadFromDisk failed at height %d", pindex->nHeight);
+
+                int64_t nBlockValueIn = 0;
+                int64_t nBlockValueOut = 0;
+                unsigned int nTxPos2 = pindex->nBlockPos + ::GetSerializeSize(CBlock(), SER_DISK, CLIENT_VERSION)
+                                    - (2 * GetSizeOfCompactSize(0)) + GetSizeOfCompactSize(blockMain.vtx.size());
+                for (const CTransaction& tx : blockMain.vtx)
+                {
+                    uint256 hashTx = tx.GetHash();
+                    CDiskTxPos posThisTx(1, pindex->nBlockPos, nTxPos2);
+                    txdb.UpdateTxIndex(hashTx, CTxIndex(posThisTx, tx.vout.size()));
+                    nTxPos2 += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
+
+                    nBlockValueOut += tx.GetValueOut();
+                    if (!tx.IsCoinBase())
+                    {
+                        for (const CTxIn& txin : tx.vin)
+                        {
+                            CUtxoEntry uprev;
+                            if (txdb.ReadUtxo(txin.prevout.hash, txin.prevout.n, uprev))
+                                nBlockValueIn += uprev.nValue;
+                            txdb.EraseUtxo(txin.prevout.hash, txin.prevout.n);
+                        }
+                    }
+                    for (unsigned int k = 0; k < tx.vout.size(); k++)
+                    {
+                        if (tx.vout[k].IsEmpty())
+                            continue;
+                        CUtxoEntry utxo;
+                        utxo.nValue = tx.vout[k].nValue;
+                        utxo.nHeight = pindex->nHeight;
+                        utxo.scriptPubKey = tx.vout[k].scriptPubKey;
+                        utxo.fCoinBase = tx.IsCoinBase();
+                        utxo.fCoinStake = tx.IsCoinStake();
+                        utxo.nTxTime = tx.nTime;
+                        txdb.WriteUtxo(hashTx, k, utxo);
+                    }
+                }
+
+                pindex->nMint = nBlockValueOut - nBlockValueIn;
+                nRunningSupply += (nBlockValueOut - nBlockValueIn);
+                pindex->nMoneySupply = nRunningSupply;
+                txdb.WriteBlockIndex(CDiskBlockIndex(pindex));
+
+                if (++nApplied % 200000 == 0) { txdb.TxnCommit(); txdb.TxnBegin(); }
+                if (nApplied % 5000 == 0)
+                {
+                    int pct2 = (int)((int64_t)nApplied * 100 / (vMain.empty() ? 1 : vMain.size()));
+                    printf("FastImport UTXO apply: %d/%d main-chain blocks (%d%%)\n", nApplied, (int)vMain.size(), pct2);
+                    uiInterface.InitMessage(strprintf(_("Building UTXO set... %d%%"), pct2));
+                }
+            }
+        }
+
+        // Final commit
+        if (pindexBest)
+        {
+            txdb.WriteHashBestChain(hashBestChain);
+
+            // Write sync checkpoint
+            Checkpoints::WriteSyncCheckpoint(hashBestChain);
+        }
+        txdb.TxnCommit();
+    }
+
+    nTransactionsUpdated++;
+    printf("FastImportBlockFile: indexed %d blocks in %" PRId64 "ms\n", nLoaded, GetTimeMillis() - nStart);
     return nLoaded > 0;
 }
 

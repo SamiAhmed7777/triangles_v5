@@ -21,16 +21,16 @@ BOOST_AUTO_TEST_CASE(max_drift_pre_v5_4)
 
 BOOST_AUTO_TEST_CASE(max_drift_at_v5_4_fork)
 {
-    // At exactly FORK_HEIGHT_V5_4: 3-minute drift (tighter)
-    BOOST_CHECK_EQUAL(GetMaxTimeDrift(FORK_HEIGHT_V5_4), 3 * 60);
+    // At exactly FORK_HEIGHT_V5_4: 90-second drift (tighter than pre-fork 600s)
+    BOOST_CHECK_EQUAL(GetMaxTimeDrift(FORK_HEIGHT_V5_4), 90);
 }
 
 BOOST_AUTO_TEST_CASE(max_drift_post_v5_4)
 {
-    // After V5.4 fork: 3-minute drift
-    BOOST_CHECK_EQUAL(GetMaxTimeDrift(FORK_HEIGHT_V5_4 + 1), 3 * 60);
-    BOOST_CHECK_EQUAL(GetMaxTimeDrift(FORK_HEIGHT_V5_4 + 100000), 3 * 60);
-    BOOST_CHECK_EQUAL(GetMaxTimeDrift(3000000), 3 * 60);
+    // After V5.4 fork: 90-second drift
+    BOOST_CHECK_EQUAL(GetMaxTimeDrift(FORK_HEIGHT_V5_4 + 1), 90);
+    BOOST_CHECK_EQUAL(GetMaxTimeDrift(FORK_HEIGHT_V5_4 + 100000), 90);
+    BOOST_CHECK_EQUAL(GetMaxTimeDrift(3000000), 90);
 }
 
 // --- PastDrift: time - maxDrift ---
@@ -45,8 +45,8 @@ BOOST_AUTO_TEST_CASE(past_drift_pre_fork)
 BOOST_AUTO_TEST_CASE(past_drift_post_fork)
 {
     int64_t now = 1700000000;
-    BOOST_CHECK_EQUAL(PastDrift(now, FORK_HEIGHT_V5_4), now - 180);
-    BOOST_CHECK_EQUAL(PastDrift(now, FORK_HEIGHT_V5_4 + 1), now - 180);
+    BOOST_CHECK_EQUAL(PastDrift(now, FORK_HEIGHT_V5_4), now - 90);
+    BOOST_CHECK_EQUAL(PastDrift(now, FORK_HEIGHT_V5_4 + 1), now - 90);
 }
 
 // --- FutureDrift: time + maxDrift ---
@@ -61,8 +61,8 @@ BOOST_AUTO_TEST_CASE(future_drift_pre_fork)
 BOOST_AUTO_TEST_CASE(future_drift_post_fork)
 {
     int64_t now = 1700000000;
-    BOOST_CHECK_EQUAL(FutureDrift(now, FORK_HEIGHT_V5_4), now + 180);
-    BOOST_CHECK_EQUAL(FutureDrift(now, FORK_HEIGHT_V5_4 + 1), now + 180);
+    BOOST_CHECK_EQUAL(FutureDrift(now, FORK_HEIGHT_V5_4), now + 90);
+    BOOST_CHECK_EQUAL(FutureDrift(now, FORK_HEIGHT_V5_4 + 1), now + 90);
 }
 
 // --- Symmetry: PastDrift and FutureDrift should be symmetric around the input ---

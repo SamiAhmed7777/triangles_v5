@@ -650,6 +650,54 @@ CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
     }
 }
 
+// Adopt a connected I2P SAM data socket (from the accept loop in i2p.cpp) as an
+// inbound peer. The socket arrives in blocking mode; switch it to non-blocking
+// to match the rest of the socket handler, then register the node.
+void AddI2PInboundNode(SOCKET hSocket, const CAddress& addr)
+{
+    if (hSocket == INVALID_SOCKET)
+        return;
+
+    if (CNode::IsBanned(addr)) {
+        printf("I2P inbound from %s dropped (banned)\n", addr.ToString().c_str());
+        closesocket(hSocket);
+        return;
+    }
+
+    // Honour the inbound connection limit.
+    int nInbound = 0;
+    {
+        LOCK(cs_vNodes);
+        for (CNode* pnode : vNodes)
+            if (pnode->fInbound)
+                nInbound++;
+    }
+    int nMaxInbound = GetArg("-maxconnections", 125) - MAX_OUTBOUND_CONNECTIONS;
+    if (nInbound >= nMaxInbound) {
+        printf("I2P inbound from %s dropped (too many inbound)\n", addr.ToString().c_str());
+        closesocket(hSocket);
+        return;
+    }
+
+#ifdef WIN32
+    u_long nOne = 1;
+    if (ioctlsocket(hSocket, FIONBIO, &nOne) == SOCKET_ERROR)
+        printf("AddI2PInboundNode() : ioctlsocket non-blocking setting failed, error %d\n", WSAGetLastError());
+#else
+    if (fcntl(hSocket, F_SETFL, O_NONBLOCK) == SOCKET_ERROR)
+        printf("AddI2PInboundNode() : fcntl non-blocking setting failed, error %d\n", errno);
+#endif
+
+    printf("accepted I2P connection %s\n", addr.ToString().c_str());
+    CNode* pnode = new CNode(hSocket, addr, "", true);
+    pnode->AddRef();
+    pnode->nTimeConnected = GetTime();
+    {
+        LOCK(cs_vNodes);
+        vNodes.push_back(pnode);
+    }
+}
+
 void CNode::CloseSocketDisconnect()
 {
     fDisconnect = true;

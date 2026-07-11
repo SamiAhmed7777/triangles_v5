@@ -4,13 +4,14 @@
 
 #include <iostream>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
+#include <ctime>
 
 #include "init.h" // for pwalletMain
 #include "trianglesrpc.h"
 #include "ui_interface.h"
 #include "base58.h"
-
-#include <boost/date_time/posix_time/posix_time.hpp>
 
 #define printf OutputDebugStringF
 
@@ -19,40 +20,35 @@ using namespace std;
 
 void EnsureWalletIsUnlocked();
 
-namespace bt = boost::posix_time;
-
-// Extended DecodeDumpTime implementation, see this page for details:
-// http://stackoverflow.com/questions/3786201/parsing-of-date-time-from-string-boost
-const std::locale formats[] = {
-    std::locale(std::locale::classic(),new bt::time_input_facet("%Y-%m-%dT%H:%M:%SZ")),
-    std::locale(std::locale::classic(),new bt::time_input_facet("%Y-%m-%d %H:%M:%S")),
-    std::locale(std::locale::classic(),new bt::time_input_facet("%Y/%m/%d %H:%M:%S")),
-    std::locale(std::locale::classic(),new bt::time_input_facet("%d.%m.%Y %H:%M:%S")),
-    std::locale(std::locale::classic(),new bt::time_input_facet("%Y-%m-%d"))
+// Accepted timestamp formats, tried in order. Replaces the boost::posix_time
+// parser; std::get_time is portable (C++11) and parses against each format.
+static const char* const dumptime_formats[] = {
+    "%Y-%m-%dT%H:%M:%SZ",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y/%m/%d %H:%M:%S",
+    "%d.%m.%Y %H:%M:%S",
+    "%Y-%m-%d",
 };
-
-const size_t formats_n = sizeof(formats)/sizeof(formats[0]);
-
-std::time_t pt_to_time_t(const bt::ptime& pt)
-{
-    bt::ptime timet_start(boost::gregorian::date(1970,1,1));
-    bt::time_duration diff = pt - timet_start;
-    return diff.ticks()/bt::time_duration::rep_type::ticks_per_second;
-}
 
 int64_t DecodeDumpTime(const std::string& s)
 {
-    bt::ptime pt;
-
-    for(size_t i=0; i<formats_n; ++i)
+    for (const char* fmt : dumptime_formats)
     {
+        std::tm tm = {};
         std::istringstream is(s);
-        is.imbue(formats[i]);
-        is >> pt;
-        if(pt != bt::ptime()) break;
+        is >> std::get_time(&tm, fmt);
+        if (is.fail())
+            continue;
+        // Interpret the parsed broken-down time as UTC.
+#ifdef WIN32
+        std::time_t t = _mkgmtime(&tm);
+#else
+        std::time_t t = timegm(&tm);
+#endif
+        if (t != static_cast<std::time_t>(-1))
+            return static_cast<int64_t>(t);
     }
-
-    return pt_to_time_t(pt);
+    return 0;
 }
 
 std::string static EncodeDumpTime(int64_t nTime) {

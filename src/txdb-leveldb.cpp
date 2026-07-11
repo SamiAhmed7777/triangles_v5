@@ -274,8 +274,15 @@ bool CTxDB::ExistsRaw(const std::string& key) const
 
     if (activeBatch) {
         bool deleted = false;
-        if (ScanBatch(key, &unused, &deleted) && !deleted)
-            return true;
+        if (ScanBatch(key, &unused, &deleted)) {
+            // Mirror ReadRaw() and the RocksDB backend: an entry that is
+            // deleted in the active batch does NOT exist, even if an older
+            // copy is still on disk. Falling through to the disk lookup here
+            // (the old behavior) made Exists() disagree with Read() and with
+            // CRocksTxDB::ExistsRaw — a latent cross-backend consensus split
+            // for intra-batch spend checks (see ROCKSDB-T010-REVIEW, H2).
+            return !deleted;
+        }
     }
 
     leveldb::Status status = pdb->Get(leveldb::ReadOptions(), key, &unused);

@@ -4,6 +4,8 @@
 // Hardcoded onion seed nodes for initial peer discovery.
 // Also fetched dynamically via https://seeds.cryptographic-triangles.org/seeds.txt
 static const char *strMainNetOnionSeed[][1] = {
+    // SAMI-PC - authoritative wallet node (main PC)
+    {"6ygpphp2qsucwvhwefv6h6ehvk6zjf7b7zdp4ggkzjjwe76cg6jwm7id.onion"},
     // DNS2 - primary bootstrap server (194.233.88.206)
     {"gxvrhv3qitnc6kobrhsrse46bmcfitnybapor3or3oczzuxn6hfzxyid.onion"},
     // DNS3 - canonical chain reference (74.208.167.19)

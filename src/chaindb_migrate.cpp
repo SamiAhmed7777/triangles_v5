@@ -109,6 +109,13 @@ bool MaybeMigrateLevelDbToRocksDb(bool fForce, std::string& strError)
         {
             std::ofstream marker(markerPath);
             marker << "RocksDB migration in progress. Safe to delete this directory and retry.\n";
+            marker.flush();
+            if (!marker.good()) {
+                // Without the marker a crashed migration would be
+                // indistinguishable from a complete one — refuse to start.
+                strError = "could not write migration marker " + markerPath.string();
+                return false;
+            }
         }
 
         CTxDB source("r");
@@ -129,34 +136,48 @@ bool MaybeMigrateLevelDbToRocksDb(bool fForce, std::string& strError)
         }
 
         int64_t nCopied = 0;
-        auto it = source.NewIterator();
-        for (it->Seek(std::string()); it->Valid(); it->Next())
+        bool fCopyOK = true;
         {
-            if (!destination.WriteRawRecordForMigration(it->KeyStr(), it->ValueStr())) {
-                destination.TxnAbort();
-                strError = "failed to write migrated record to RocksDB";
-                source.Close();
-                destination.Close();
-                return false;
-            }
-
-            if (++nCopied % 100000 == 0)
+            // W2 root cause: this iterator MUST be destroyed before
+            // source.Close(). Live LevelDB iterators hold a reference to the
+            // current Version; deleting the DB with one outstanding trips
+            // `dummy_versions_.next_ == &dummy_versions_` in
+            // leveldb::VersionSet::~VersionSet (version_set.cc:755) and
+            // aborts the daemon AFTER verification but BEFORE the marker is
+            // removed — which is what produced the original H4 symptom.
+            // Scoping the iterator here guarantees every Close() below runs
+            // with it already dead, on the success AND error paths.
+            auto it = source.NewIterator();
+            for (it->Seek(std::string()); it->Valid(); it->Next())
             {
-                if (!destination.TxnCommit()) {
-                    strError = "failed to commit RocksDB migration batch";
-                    source.Close();
-                    destination.Close();
-                    return false;
+                if (!destination.WriteRawRecordForMigration(it->KeyStr(), it->ValueStr())) {
+                    strError = "failed to write migrated record to RocksDB";
+                    fCopyOK = false;
+                    break;
                 }
-                printf("ChainDB migration: copied %lld / %lld records\n",
-                       (long long)nCopied, (long long)srcStats.nRecords);
-                if (!destination.TxnBegin()) {
-                    strError = "failed to begin RocksDB migration batch";
-                    source.Close();
-                    destination.Close();
-                    return false;
+
+                if (++nCopied % 100000 == 0)
+                {
+                    if (!destination.TxnCommit()) {
+                        strError = "failed to commit RocksDB migration batch";
+                        fCopyOK = false;
+                        break;
+                    }
+                    printf("ChainDB migration: copied %lld / %lld records\n",
+                           (long long)nCopied, (long long)srcStats.nRecords);
+                    if (!destination.TxnBegin()) {
+                        strError = "failed to begin RocksDB migration batch";
+                        fCopyOK = false;
+                        break;
+                    }
                 }
             }
+        } // iterator destroyed here — before any Close()
+        if (!fCopyOK) {
+            destination.TxnAbort(); // safe no-op if the batch was already consumed
+            source.Close();
+            destination.Close();
+            return false;
         }
 
         if (!destination.TxnCommit()) {
@@ -185,7 +206,49 @@ bool MaybeMigrateLevelDbToRocksDb(bool fForce, std::string& strError)
 
         source.Close();
         destination.Close();
-        fs::remove(markerPath);
+
+        // H4: Marker removal must be verified, not assumed. The previous
+        // implementation called fs::remove() and ignored the return code, which
+        // silently left the marker on disk after a successful migration. On
+        // the next startup init.cpp's fCrashedMigration check would then
+        // trigger a re-migration of the (already-good) RocksDB on every
+        // restart, eventually destroying the chain state.
+        //
+        // Three defenses:
+        //   1. Use the non-throwing error_code overload so a permission
+        //      error doesn't propagate as an uncaught exception.
+        //   2. After remove(), confirm the file is actually gone. fs::remove
+        //      returns true if the file didn't exist, which is also success
+        //      but worth distinguishing.
+        //   3. Retry once with a short delay. On Windows, antivirus and
+        //      indexer handles can transiently hold the marker file open
+        //      even after our process closed it; a single retry usually
+        //      wins. If the second attempt also leaves the file, treat the
+        //      migration as FAILED — surface the error to the operator
+        //      instead of letting init.cpp's fCrashedMigration logic
+        //      destroy working data on the next startup.
+        {
+            std::error_code ec;
+            fs::remove(markerPath, ec);
+            if (ec) {
+                strError = "could not remove migration marker " + markerPath.string() +
+                           ": " + ec.message();
+                return false;
+            }
+            if (fs::exists(markerPath)) {
+                // Retry once — handles Windows AV/indexer transient locks.
+                MilliSleep(100);
+                std::error_code ec2;
+                fs::remove(markerPath, ec2);
+                if (ec2 || fs::exists(markerPath)) {
+                    strError = "migration marker " + markerPath.string() +
+                               " could not be removed after retry; refusing to leave it on disk " +
+                               "(would trigger re-migration on next startup). " +
+                               std::string(ec2 ? ec2.message().c_str() : "");
+                    return false;
+                }
+            }
+        }
     }
     catch (std::exception& e) {
         strError = e.what();

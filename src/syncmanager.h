@@ -19,7 +19,13 @@ class CSyncManager
 public:
     struct HeaderNode;
 
-    static constexpr unsigned int HEADER_DOWNLOAD_WINDOW = 1024;
+    // HEADER_DOWNLOAD_WINDOW: max concurrent block requests in flight per sync
+    // tick. Bumped from 1024 → 4096 in v6.1.2 because 4+ peers are now reliably
+    // available and Tor's 1KB/s RTT × 4096 blocks = manageable inflight without
+    // stalling the orphan pool. With 1 reliable peer, drops back to ~1024 effective
+    // due to nPerPeerCap. The factor-4 jump is safe because orphan pool handles
+    // out-of-order delivery and CSyncManager's Tick() drains in 5s intervals.
+    static constexpr unsigned int HEADER_DOWNLOAD_WINDOW = 4096;
     static constexpr unsigned int HEADER_SYNC_LOW_WATER = HEADER_DOWNLOAD_WINDOW / 4;
     static constexpr unsigned int HEADER_SYNC_TARGET_INFLIGHT = HEADER_DOWNLOAD_WINDOW / 2;
     static constexpr int64_t HEADER_SYNC_REFILL_MIN_INTERVAL_SECONDS = 5;

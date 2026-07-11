@@ -37,6 +37,41 @@ if(ENABLE_UNITY_BUILD)
     set(CMAKE_UNITY_BUILD_BATCH_SIZE 8)
 endif()
 
+# ── Reproducible-build support ─────────────────────────────────────────────
+# REPRODUCIBLE_BUILD=ON strips absolute source paths from the final binary
+# via -ffile-prefix-map. Two builds of the same commit with the same
+# toolchain then produce byte-identical binaries (modulo any source paths
+# that aren't routed through the macro — see scripts/verify-reproducible-build.sh
+# for the full verification protocol).
+#
+# Default ON: this is a security property we want by default. Disable if
+# you need stack traces with absolute paths (e.g. debugging a post-mortem).
+option(REPRODUCIBLE_BUILD "Strip absolute source paths from binaries for reproducibility" ON)
+if(REPRODUCIBLE_BUILD)
+    add_compile_options(
+        "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
+        "-ffile-prefix-map=${CMAKE_BINARY_DIR}=."
+    )
+    # SOURCE_DATE_EPOCH is the canonical reproducible-build env var
+    # (https://reproducible-builds.org/docs/source-date-epoch/). If the
+    # user hasn't set it explicitly, fall back to the commit timestamp from
+    # git. This means binaries built without SOURCE_DATE_EPOCH still embed
+    # a deterministic timestamp (the commit time, not wall-clock).
+    if(NOT DEFINED ENV{SOURCE_DATE_EPOCH})
+        execute_process(
+            COMMAND git log -n 1 --format=%ct
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            OUTPUT_VARIABLE SOURCE_DATE_EPOCH
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(NOT SOURCE_DATE_EPOCH)
+            set(SOURCE_DATE_EPOCH "1700000000")  # 2023-11-14 fallback
+        endif()
+    endif()
+    message(STATUS "Reproducible build: ON (SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH})")
+endif()
+
 # ── Output directories ──
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -154,6 +189,9 @@ if(NOT TARGET RocksDB::rocksdb AND NOT TARGET PkgConfig::RocksDB)
     message(STATUS "Found RocksDB (manual probe): ${ROCKSDB_LIBRARY}")
 endif()
 
+# Modernization: SQLite3 for the new wallet DB backend.
+find_package(SQLite3 REQUIRED)
+
 # Triangles uses RocksDB features that only exist in 7.4+ (XXH3 per-block
 # checksum, type 4). Building against an older RocksDB produces a binary
 # whose smsgDB Open() fails on any SST file written by RocksDB 7.4+ —
@@ -248,7 +286,7 @@ set(SECP256K1_ENABLE_MODULE_ELLSWIFT    OFF CACHE INTERNAL "")
 add_subdirectory(src/secp256k1 EXCLUDE_FROM_ALL)
 
 if(BUILD_QT)
-    find_package(Qt5 5.9 REQUIRED COMPONENTS Core Gui Widgets)
+    find_package(Qt5 5.9 REQUIRED COMPONENTS Core Gui Widgets Network)
     find_package(Qt5 COMPONENTS LinguistTools QUIET)
     if(USE_DBUS AND UNIX AND NOT APPLE)
         find_package(Qt5 COMPONENTS DBus QUIET)
@@ -266,6 +304,17 @@ include(BuildLevelDB)
 
 # ── Generate build.h from git describe ──
 include(GenerateBuildInfo)
+
+# ── Enable CTest at the TOP level ──
+# add_test() is called in src/CMakeLists.txt, but without enable_testing()
+# here the top-level build/CTestTestfile.cmake is never generated, so
+# `ctest` run from the build root discovers ZERO tests. CI does exactly
+# `cd build && ctest`, which means the unit suites were silently not run.
+# Calling enable_testing() at the root generates the top-level test file
+# that recurses into src/ and registers all four test executables.
+if(BUILD_TESTS)
+    enable_testing()
+endif()
 
 # ── Descend into source tree ──
 add_subdirectory(src)
