@@ -165,12 +165,18 @@ jobs:
 
       - name: Install clang + dependencies
         # libFuzzer ships with clang since v6; clang-15 is on the runner.
+        # libgflags-dev: fuzz link line references -lgflags (RocksDB builds
+        # expect gflags as a transitive dep). Without it the link step fails
+        # with "cannot find -lgflags". CI's ubuntu-22.04 runner does NOT ship
+        # it by default; DNS2 has it as an automatic dep of build-essential,
+        # which is why local dry-runs didn't catch this.
         run: |
           sudo apt-get update
           sudo apt-get install -y clang-15 cmake ninja-build \
             libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
             libevent-dev libminiupnpc-dev zlib1g-dev \
-            libsnappy-dev liblz4-dev libzstd-dev
+            libsnappy-dev liblz4-dev libzstd-dev \
+            libgflags-dev
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 100
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 100
 
