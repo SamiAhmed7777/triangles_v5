@@ -970,9 +970,13 @@ exec \"\$PROG\" \"\${OBJS[@]}\" \"\$@\"
         # system .a filename if the target is unknown / static.
         "$<IF:$<TARGET_EXISTS:RocksDB::rocksdb>,-lrocksdb,${ROCKSDB_LIBRARY}>"
         "-lz" "-lgflags" "-lsnappy" "-lbz2" "-llz4" "-lzstd"
-        "${CMAKE_CURRENT_SOURCE_DIR}/i2p/i2pd-src/libi2pdclient.a"
-        "${CMAKE_CURRENT_SOURCE_DIR}/i2p/i2pd-src/libi2pd.a"
-        "${CMAKE_CURRENT_SOURCE_DIR}/i2p/i2pd-src/libi2pdlang.a"
+        # i2p is inlined into triangles_common as i2p_embedded.cpp.o and is a
+        # NO-OP when USE_I2P_EMBEDDED=OFF (which is the CI default; the
+        # workflow only builds libtor, not libi2pd). Do NOT link any
+        # src/i2p/i2pd-src/lib*.a here — those files are produced by a
+        # separate `make` step in src/i2p/build-libi2pd.sh that the fuzz
+        # job does NOT run, and clang aborts the link with
+        # "no such file or directory" when they're absent.
         "${CMAKE_CURRENT_SOURCE_DIR}/tor/tor-src/libtor.a"
         "-lpthread" "-llzma" "-lubsan"
     )
