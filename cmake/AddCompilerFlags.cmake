@@ -7,6 +7,15 @@ add_compile_options(
     -Wformat -Wformat-security -Wno-unused-parameter
 )
 
+# Bitcoin-derived source uses C99-style adjacent string-literal concatenation
+# for printf format macros: `"%"PRId64`. gcc tolerates this without a space;
+# clang promotes `-Wreserved-user-defined-literal` to an error in C++20 mode
+# and trips on hundreds of sites in util.cpp, kernel.cpp, etc. Suppress only
+# under clang so gcc builds keep the original diagnostic behavior.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    add_compile_options(-Wno-reserved-user-defined-literal)
+endif()
+
 # ── Common defines ──
 add_compile_definitions(
     BOOST_SPIRIT_THREADSAFE

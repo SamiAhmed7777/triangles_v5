@@ -375,8 +375,18 @@ static const unsigned short yoff_b_f[] = {
 	236, 192, 108,  86
 };
 
+// Compute the FFT "step" combining low and high halves of two q[]
+// values with a multiplier. Casts to u32 happen BEFORE the left shift
+// to avoid signed-overflow UB when (h)*(mm) is negative — UBSan flags
+// signed-shift of negative values even though the intent is modular
+// arithmetic. The u32 cast then <<16 is well-defined in C++20.
+//
+// Why (h)*(mm) can be negative: FFT values are signed; alpha_tab entries
+// are signed too. The product can overflow into negative s32 territory
+// before the modular reduction step. We compute the multiplication in
+// signed, cast to u32 to recover the bit pattern, then shift.
 #define INNER(l, h, mm)   (((u32)((l) * (mm)) & 0xFFFFU) \
-                          + ((u32)((h) * (mm)) << 16))
+                           + ((u32)((u32)((h) * (mm)) << 16)))
 
 #define W_SMALL(sb, o1, o2, mm) \
 	(INNER(q[8 * (sb) + 2 * 0 + o1], q[8 * (sb) + 2 * 0 + o2], mm), \
