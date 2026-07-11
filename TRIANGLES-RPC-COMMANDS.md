@@ -31,6 +31,9 @@ Triangles is a Tor-only PoS cryptocurrency. PoW ended at block 9000; from block 
 | `getrawmempool` | | Returns all transaction IDs currently in the mempool. |
 | `getcheckpoint` | | Returns info about the current synchronized checkpoint. |
 | `getchaintips` | | Returns info about all known chain tips (forks). |
+| `settrustedv2snapshotpublisher` | `<address>` | Atomically replaces the trusted snapshot publisher. The previous publisher is dropped immediately (no grace period). The new publisher is persisted to `<datadir>/snapshot-publisher.json`. Returns `{ previous, current }`. See `docs/snapshot-publisher.md`. |
+| `gettrustedv2snapshotpublisher` | | Returns the currently active trusted snapshot publisher and whether a runtime override is in effect. Returns `{ active, has_runtime_override }`. |
+| `unsettrustedv2snapshotpublisher` | | Clears the runtime trusted snapshot publisher override. Reverts to the built-in fallback list (compiled in). Removes `<datadir>/snapshot-publisher.json`. |
 | `invalidateblock` | `<hash>` | Permanently marks a block as invalid and rewinds the chain past it. |
 | `reconsiderblock` | `<hash>` | Removes the invalid mark from a previously invalidated block. |
 | `recalculatesupply` | | Recalculates money supply by summing all UTXOs. Updates the stored value at the chain tip and persists to disk. Returns old/new supply and difference. |

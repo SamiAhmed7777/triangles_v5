@@ -775,16 +775,128 @@ namespace {
 // Trusted signer addresses for snapshot manifests. A snapshot is accepted
 // iff its manifest's signing_address matches one of these AND its signature
 // verifies under Triangles' compact-message protocol.
-static const char* TRUSTED_SNAPSHOT_SIGNERS[] = {
-    "TG8f76yktTxDrT7JJymY3wVAusXiD3fVvX",  // Sami's snapshot publisher key
+//
+// Design A: single-slot runtime override via RPC. The previous publisher
+// is dropped atomically on every set. The built-in fallback below is
+// always consulted if no runtime override is set, so a fresh daemon still
+// verifies old snapshots without operator intervention.
+
+// Built-in fallback (read-only, compiled in).
+static const char* BUILTIN_TRUSTED_SNAPSHOT_SIGNERS[] = {
+    "TG8f76yktTxDrT7JJymY3wVAusXiD3fVvX",  // Sami's legacy snapshot publisher key
 };
-static const size_t NUM_TRUSTED_SNAPSHOT_SIGNERS =
-    sizeof(TRUSTED_SNAPSHOT_SIGNERS) / sizeof(TRUSTED_SNAPSHOT_SIGNERS[0]);
+static const size_t NUM_BUILTIN_TRUSTED_SNAPSHOT_SIGNERS =
+    sizeof(BUILTIN_TRUSTED_SNAPSHOT_SIGNERS) / sizeof(BUILTIN_TRUSTED_SNAPSHOT_SIGNERS[0]);
+
+// Runtime override. Empty string = no override, use built-in fallback.
+static std::string g_activeTrustedSnapshotPublisher;
+static std::mutex g_trustedPublisherMutex;
+static const char* SNAPSHOT_PUBLISHER_FILE = "snapshot-publisher.json";
+
+std::string GetActiveTrustedSnapshotPublisher()
+{
+    std::lock_guard<std::mutex> lock(g_trustedPublisherMutex);
+    return g_activeTrustedSnapshotPublisher;
+}
+
+static void SetActiveTrustedSnapshotPublisherUnlocked(const std::string& addr)
+{
+    g_activeTrustedSnapshotPublisher = addr;
+}
+
+// Load runtime override from <datadir>/snapshot-publisher.json.
+// Called once at startup from init.cpp.
+void LoadTrustedSnapshotPublisher()
+{
+    fs::path filePath = GetDataDir(true) / SNAPSHOT_PUBLISHER_FILE;
+    if (!fs::exists(filePath))
+        return;
+
+    std::ifstream f(filePath.string().c_str());
+    if (!f) return;
+
+    std::stringstream ss; ss << f.rdbuf();
+    std::string json = ss.str();
+
+    // Minimal JSON parse: "address":"<addr>"
+    size_t keyPos = json.find("\"address\"");
+    if (keyPos == std::string::npos) return;
+    size_t colonPos = json.find(':', keyPos);
+    if (colonPos == std::string::npos) return;
+    size_t q1 = json.find('"', colonPos);
+    if (q1 == std::string::npos) return;
+    size_t q2 = json.find('"', q1 + 1);
+    if (q2 == std::string::npos) return;
+
+    std::string addr = json.substr(q1 + 1, q2 - q1 - 1);
+    if (addr.size() != 34 || addr[0] != 'T') {
+        printf("Bootstrap: snapshot-publisher.json contains invalid address '%s', ignoring\n",
+               addr.c_str());
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_trustedPublisherMutex);
+        SetActiveTrustedSnapshotPublisherUnlocked(addr);
+    }
+    printf("Bootstrap: loaded trusted snapshot publisher override: %s\n", addr.c_str());
+}
+
+static bool PersistTrustedSnapshotPublisher(const std::string& addr)
+{
+    fs::path filePath = GetDataDir(true) / SNAPSHOT_PUBLISHER_FILE;
+    std::ofstream f(filePath.string().c_str(), std::ios::trunc);
+    if (!f) return false;
+    f << "{\n"
+      << "  \"address\": \"" << addr << "\",\n"
+      << "  \"set_at\": " << GetTime() << ",\n"
+      << "  \"note\": \"Set via triangles-cli settrustedv2snapshotpublisher. "
+      << "Replace atomically; previous publisher is dropped.\"\n"
+      << "}\n";
+    return f.good();
+}
+
+bool SetTrustedSnapshotPublisher(const std::string& addr, std::string& strError)
+{
+    if (addr.size() != 34 || addr[0] != 'T') {
+        strError = "settrustedv2snapshotpublisher: invalid address format (expected 34-char T-address)";
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_trustedPublisherMutex);
+        SetActiveTrustedSnapshotPublisherUnlocked(addr);
+    }
+    if (!PersistTrustedSnapshotPublisher(addr)) {
+        strError = "settrustedv2snapshotpublisher: warning, could not persist to "
+                   "snapshot-publisher.json (in-memory change is live for this session)";
+        return true;
+    }
+    return true;
+}
+
+bool UnsetTrustedSnapshotPublisher(std::string& strError)
+{
+    {
+        std::lock_guard<std::mutex> lock(g_trustedPublisherMutex);
+        SetActiveTrustedSnapshotPublisherUnlocked(std::string());
+    }
+    fs::path filePath = GetDataDir(true) / SNAPSHOT_PUBLISHER_FILE;
+    fs::remove(filePath);
+    return true;
+}
 
 bool IsTrustedSnapshotSigner(const std::string& addr)
 {
-    for (size_t i = 0; i < NUM_TRUSTED_SNAPSHOT_SIGNERS; ++i)
-        if (addr == TRUSTED_SNAPSHOT_SIGNERS[i])
+    // 1. Runtime override (set via RPC).
+    {
+        std::lock_guard<std::mutex> lock(g_trustedPublisherMutex);
+        if (!g_activeTrustedSnapshotPublisher.empty() &&
+            addr == g_activeTrustedSnapshotPublisher)
+            return true;
+    }
+    // 2. Built-in fallback (compiled in, read-only).
+    for (size_t i = 0; i < NUM_BUILTIN_TRUSTED_SNAPSHOT_SIGNERS; ++i)
+        if (addr == BUILTIN_TRUSTED_SNAPSHOT_SIGNERS[i])
             return true;
     return false;
 }
