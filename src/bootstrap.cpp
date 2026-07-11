@@ -793,6 +793,14 @@ static std::string g_activeTrustedSnapshotPublisher;
 static std::mutex g_trustedPublisherMutex;
 static const char* SNAPSHOT_PUBLISHER_FILE = "snapshot-publisher.json";
 
+} // anonymous namespace (helpers above are file-private)
+
+// PUBLIC API — declared in bootstrap.h inside namespace Bootstrap.
+// These MUST NOT be inside an anonymous namespace or the linker can't
+// resolve Bootstrap::GetActiveTrustedSnapshotPublisher calls from
+// rpcblockchain.cpp / init.cpp. (PR #26 bug: left the anon-namespace
+// open across these definitions.)
+
 std::string GetActiveTrustedSnapshotPublisher()
 {
     std::lock_guard<std::mutex> lock(g_trustedPublisherMutex);
@@ -884,6 +892,12 @@ bool UnsetTrustedSnapshotPublisher(std::string& strError)
     fs::remove(filePath);
     return true;
 }
+
+// Re-enter anonymous namespace for the remaining file-private helpers.
+// (IsTrustedSnapshotSigner / VerifySignedMessage / ExtractJsonString are
+// not declared in bootstrap.h, so they don't need Bootstrap:: linkage.)
+
+namespace {
 
 bool IsTrustedSnapshotSigner(const std::string& addr)
 {
