@@ -183,6 +183,11 @@ jobs:
         # and trips "multiple definition of `main`". The script_fuzz target
         # adds -fsanitize=fuzzer per-target via target_link_options in
         # src/CMakeLists.txt (see BUILD_FUZZ block).
+        # SECP256K1_ASM=OFF: clang-15+ register allocator is sometimes stricter
+        # than clang-14 about the x86_64 inline asm in scalar_4x64_impl.h and
+        # fails with "inline assembly requires more registers than available"
+        # on some runner images. The fuzz target only exercises script.cpp —
+        # ECC ops use the C fallback (slower, still correct).
         run: |
           cmake -B build-fuzz -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
@@ -195,7 +200,8 @@ jobs:
             -DBUILD_DAEMON=ON \
             -DBUILD_TESTS=ON \
             -DBUILD_FUZZ=ON \
-            -DUSE_UPNP=OFF
+            -DUSE_UPNP=OFF \
+            -DSECP256K1_ASM=OFF
 
       - name: Build fuzz_script
         # CMake target is named `fuzz_script` (matches FUZZ_BIN_DIR/fuzz_script
