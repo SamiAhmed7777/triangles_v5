@@ -153,7 +153,7 @@ jobs:
     # must block the PR.
     # See src/test/fuzz/README.md for harness details.
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       ASAN_OPTIONS: "detect_leaks=0:halt_on_error=1:abort_on_error=1:print_stacktrace=1"
       UBSAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
@@ -180,9 +180,9 @@ jobs:
       - name: Configure with fuzzing + sanitizers
         # NB: do NOT pass -fsanitize=fuzzer in CMAKE_EXE_LINKER_FLAGS — that
         # pulls libFuzzer's main() into CMake's compiler-probe linker test
-        # and trips "multiple definition of `main`". The script_fuzz target
-        # adds -fsanitize=fuzzer per-target via target_link_options in
-        # src/CMakeLists.txt (see BUILD_FUZZ block).
+        # and trips "multiple definition of `main`". The fuzz_script target's
+        # custom clang++ link step adds -fsanitize=fuzzer in src/CMakeLists.txt
+        # (see BUILD_FUZZ block).
         # SECP256K1_ASM=OFF: clang-15+ register allocator is sometimes stricter
         # than clang-14 about the x86_64 inline asm in scalar_4x64_impl.h and
         # fails with "inline assembly requires more registers than available"
@@ -202,6 +202,17 @@ jobs:
             -DBUILD_FUZZ=ON \
             -DUSE_UPNP=OFF \
             -DSECP256K1_ASM=OFF
+
+      - name: Build libtor (embedded Tor static lib)
+        # BUILD_FUZZ depends on trianglesd/triangles_common objects so the
+        # regular daemon target is built as part of fuzz_script. The daemon
+        # links embedded Tor (-ltor), but libtor.a is produced by the Tor
+        # submodule script, not CMake. Mirror the unit/sanitizer jobs here
+        # before invoking the fuzz target.
+        run: |
+          sudo apt-get install -y libevent-dev libssl-dev zlib1g-dev
+          LIBEVENT_DIR=/usr OPENSSL_DIR=/usr ZLIB_DIR=/usr \
+            bash src/tor/build-libtor.sh
 
       - name: Build fuzz_script
         # CMake target is named `fuzz_script` (matches FUZZ_BIN_DIR/fuzz_script

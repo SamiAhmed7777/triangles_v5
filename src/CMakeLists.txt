@@ -726,13 +726,11 @@ if(BUILD_FUZZ)
     file(MAKE_DIRECTORY "${FUZZ_OBJ_DIR}")
     set(FUZZ_OBJ_SCRIPT_FUZZ "${FUZZ_OBJ_DIR}/script_fuzz.cpp.o")
     set(FUZZ_OBJ_SCRIPT      "${FUZZ_OBJ_DIR}/script.cpp.o")
-    set(FUZZ_BIN_DIR         "${CMAKE_CURRENT_BINARY_DIR}/bin")
+    set(FUZZ_BIN_DIR         "${CMAKE_BINARY_DIR}/bin")
     file(MAKE_DIRECTORY "${FUZZ_BIN_DIR}")
     set(FUZZ_BIN             "${FUZZ_BIN_DIR}/fuzz_script")
     set(FUZZ_SRC_FUZZ        "${CMAKE_CURRENT_SOURCE_DIR}/test/fuzz/script_fuzz.cpp")
     set(FUZZ_SRC_SCRIPT      "${CMAKE_CURRENT_SOURCE_DIR}/script.cpp")
-    set(FUZZ_STUBS_SRC       "${CMAKE_CURRENT_BINARY_DIR}/fuzz_objs/fuzz_stubs.cpp")
-    set(FUZZ_OBJ_STUBS       "${CMAKE_CURRENT_BINARY_DIR}/fuzz_objs/fuzz_stubs.cpp.o")
 
     # Compile flags shared by both .cpp files. Pull in script.h, secp256k1,
     # leveldb. Same flags gcc uses for triangles_common (the project defines
@@ -776,130 +774,15 @@ if(BUILD_FUZZ)
         VERBATIM
     )
 
-    # Compile fuzz_stubs.cpp — stubs for daemon-only globals (pwalletMain,
-    # uiInterface, fUseFastIndex) and CWallet methods that script.cpp's
-    # type system references but EvalScript never actually calls.
-    add_custom_command(
-        OUTPUT "${FUZZ_OBJ_STUBS}"
-        COMMAND ${CLANGXX} ${FUZZ_COMMON_FLAGS}
-                -c ${FUZZ_STUBS_SRC}
-                -o ${FUZZ_OBJ_STUBS}
-        DEPENDS ${FUZZ_STUBS_SRC} ${FUZZ_SRC_SCRIPT}
-        COMMENT "[fuzz] clang++ fuzz_stubs.cpp"
-        VERBATIM
-    )
-
     # Link using the same library set as trianglesd, but:
     #   - exclude script.cpp.o (we provide our own clang-instrumented one)
     #   - swap gcc for clang++ with -fsanitize=fuzzer,address,undefined
     #   - drop -Wl,-z,relro -Wl,-z,now (incompatible with sanitizer link)
-    # We grab all triangles_common .o files except script.cpp.o via a
-    # shell glob with a filter. This avoids enumerating 60+ files in CMake.
-    # Enumerate all triangles_common .o files EXCEPT script.cpp.o (we have
-    # our own clang-instrumented copy). file(GLOB) at configure time gives
-    # us a CMake list — no shell expansion needed, no ninja $ escape.
     # The triangles_common / trianglesd .o file lists are discovered at link
     # time via the FUZZ_LINK_WRAPPER shell script (defined below). We do NOT
     # use file(GLOB) here — it runs at configure time when no .o files exist
     # on a fresh build dir, so the resulting list would always be empty.
     # The wrapper script does the find at link time and exec's clang++.
-
-    # Define stubs for the few globals/methods that script.cpp references
-    # (e.g. pwalletMain, uiInterface, CWallet methods) but that live in
-    # daemon-only .cpp files (init.cpp / wallet.cpp / noui.cpp). We
-    # intentionally do NOT link those daemon objects — they drag in init,
-    # Tor/I2P startup, RPC, etc., which has nothing to do with the script
-    # interpreter. The fuzz target only cares about EvalScript semantics.
-    # (FUZZ_STUBS_SRC + FUZZ_OBJ_STUBS are defined earlier so the
-    # add_custom_command below resolves them at configure time.)
-    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fuzz_objs")
-    write_file(${FUZZ_STUBS_SRC} "
-#include <vector>
-#include <string>
-#include <set>
-#include \"script.h\"
-#include \"key.h\"
-#include \"keystore.h\"
-#include \"wallet.h\"    // BDB has been refactored out of this header into
-                       // walletdb-recover.cpp, so including it is safe
-                       // for the fuzz target.
-
-// Forward declare the classes whose methods we need to stub, without
-// pulling in the full wallet.h / walletdb.h (those drag in BDB).
-class CBlockIndex;
-
-// ─── Daemon globals referenced by script.cpp's call graph ───────────────
-// These are defined in init.cpp / wallet.cpp / noui.cpp but never called
-// from EvalScript paths. The fuzzer only exercises the script interpreter;
-// the stubs satisfy the linker and short-circuit any accidental reach.
-
-// pwalletMain — defined in init.cpp, declared in wallet.h
-class CWallet;
-CWallet* pwalletMain = nullptr;
-
-// uiInterface — defined in init.cpp, declared in ui_interface.h
-// (Type is CClientUIInterface, transitively included via wallet.h.)
-CClientUIInterface uiInterface;
-
-// fUseFastIndex — defined in main.cpp/h
-bool fUseFastIndex = false;
-
-// fConfChange — defined in wallet.cpp
-bool fConfChange = false;
-
-// StartShutdown — defined in init.cpp
-void StartShutdown() {}
-
-// ─── CWallet methods referenced by script.cpp's type system ─────────────
-// script.cpp only takes pointers/references to CKeyStore; the actual
-// CWallet methods (LoadCryptedKey, TopUpKeyPool, ScanForWalletTransactions,
-// etc.) are pulled in because triangles_common's rpcwallet.cpp and
-// walletdb.cpp are in the link. EvalScript never reaches any of them.
-//
-// CKeyMetadata lives in walletdb.h (drags in BDB headers we don't want),
-// so LoadKeyMetadata's parameter type can't be spelled here. The linker
-// resolves CWallet::LoadKeyMetadata via the vtable at runtime; if it's
-// ever invoked from a fuzz path, the process crashes — exactly what we
-// want to know.
-// CWalletStub is a complete CKeyStore implementation. EvalScript only
-// holds CKeyStore*, so this is enough for the type system.
-namespace wallet_stubs {
-class CWalletStub : public CKeyStore {
-public:
-    bool GetPubKey(const CKeyID&, CPubKey&) const override { return false; }
-    bool GetKey(const CKeyID&, CKey&) const override { return false; }
-    bool HaveKey(const CKeyID&) const override { return false; }
-    void GetKeys(std::set<CKeyID>& setAddress) const override { setAddress.clear(); }
-    bool AddKey(const CKey&) override { return false; }
-    bool AddCScript(const CScript&) override { return false; }
-    bool HaveCScript(const CScriptID&) const override { return false; }
-    bool GetCScript(const CScriptID&, CScript&) const override { return false; }
-};
-static CWalletStub g_wallet_stub;
-} // namespace wallet_stubs
-
-// CWallet method definitions. We don't define a full CWallet — just the
-// methods that triangles_common's rpcwallet.cpp / walletdb.cpp reference
-// via their emitted object code. Signatures match wallet.h exactly.
-// All bodies return safely (never called from the fuzz path).
-// CWallet vtable is emitted from wallet.cpp.o (the daemon build already
-// produces a complete CWallet implementation). We don't need stubs for
-// individual CWallet methods here — wallet.cpp.o handles them. What we
-// DO need is to satisfy the linker's external references for the few
-// globals that wallet.cpp / init.cpp / noui.cpp don't define but that
-// triangles_common's rpcwallet.cpp / walletdb.cpp reference:
-//
-//   pwalletMain    → declared in wallet.h, defined in init.cpp
-//   uiInterface    → declared in ui_interface.h, defined in init.cpp
-//   fUseFastIndex  → declared in main.h, defined in main.cpp
-//   fConfChange    → declared in wallet.h, defined in wallet.cpp
-//   fWalletUnlockStakingOnly → declared in wallet.h, defined in init.cpp
-//   StartShutdown  → declared in init.h, defined in init.cpp
-//
-// All are defined above. wallet.cpp.o + init.cpp.o + noui.cpp.o link in
-// normally and provide everything else CWallet-related.
-// ──────────────────────────────────────────────────────────────────────
-")
 
     # Build the link command. The triangles_common and trianglesd .o files
     # are discovered at link time via shell `find` because file(GLOB) only
@@ -957,7 +840,6 @@ exec \"\$PROG\" \"\${OBJS[@]}\" \"\$@\"
         "-o" "${FUZZ_BIN}"
         "-Wl,--allow-multiple-definition"
         "${FUZZ_OBJ_SCRIPT}"
-        "${FUZZ_OBJ_STUBS}"
         "${CMAKE_BINARY_DIR}/lib/libhash9_crypto.a"
         "${CMAKE_BINARY_DIR}/lib/libleveldb_memenv.a"
         "${CMAKE_BINARY_DIR}/lib/libleveldb_lib.a"
@@ -999,7 +881,6 @@ exec \"\$PROG\" \"\${OBJS[@]}\" \"\$@\"
         DEPENDS
             "${FUZZ_OBJ_SCRIPT_FUZZ}"
             "${FUZZ_OBJ_SCRIPT}"
-            "${FUZZ_OBJ_STUBS}"
             "${FUZZ_LINK_WRAPPER}"
             # Static libs the link line references at ${CMAKE_BINARY_DIR}/lib/.
             # Without these deps, fuzz_script's link step races and fails with
