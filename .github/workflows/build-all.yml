@@ -146,6 +146,94 @@ jobs:
       - name: Run unit tests under sanitizers
         run: cd build-san && ctest --output-on-failure
 
+  test-fuzz-smoke:
+    # libFuzzer smoke test for src/script.cpp (script_fuzz harness).
+    # Builds with ASan+UBSan+libFuzzer and runs for 5 minutes. Any crash
+    # is uploaded as an artifact and the job fails — fuzz regressions
+    # must block the PR.
+    # See src/test/fuzz/README.md for harness details.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      ASAN_OPTIONS: "detect_leaks=0:halt_on_error=1:abort_on_error=1:print_stacktrace=1"
+      UBSAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
+      SAN_FLAGS: "-fsanitize=address,undefined,fuzzer-no-link -fno-omit-frame-pointer -fno-sanitize-recover=undefined -fno-sanitize=alignment,signed-integer-overflow,vptr"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install clang + dependencies
+        # libFuzzer ships with clang since v6; clang-15 is on the runner.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-15 cmake ninja-build \
+            libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
+            libevent-dev libminiupnpc-dev zlib1g-dev \
+            libsnappy-dev liblz4-dev libzstd-dev
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 100
+
+      - name: Build RocksDB from source
+        run: sudo bash scripts/ci/build-rocksdb.sh
+
+      - name: Configure with fuzzing + sanitizers
+        run: |
+          cmake -B build-fuzz -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_FLAGS="$SAN_FLAGS" \
+            -DCMAKE_CXX_FLAGS="$SAN_FLAGS" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=fuzzer $SAN_FLAGS" \
+            -DBUILD_QT=OFF \
+            -DBUILD_DAEMON=ON \
+            -DBUILD_TESTS=ON \
+            -DBUILD_FUZZ=ON \
+            -DUSE_UPNP=OFF
+
+      - name: Build script_fuzz
+        run: cmake --build build-fuzz --target script_fuzz -j$(nproc)
+
+      - name: Generate seed corpus from JSON fixtures
+        # Uses src/test/data/script_{valid,invalid}.json so the fuzzer
+        # starts from real Bitcoin-style scripts instead of empty input.
+        run: |
+          mkdir -p build-fuzz/fuzz_corpus
+          python3 src/test/fuzz/seed_corpus.py \
+            src/test/data/script_valid.json \
+            build-fuzz/fuzz_corpus valid
+          python3 src/test/fuzz/seed_corpus.py \
+            src/test/data/script_invalid.json \
+            build-fuzz/fuzz_corpus invalid
+
+      - name: Run fuzzer for 5 minutes
+        # -max_total_time=300 hard-caps runtime. Crashes go to artifact
+        # prefix; we upload any artifacts and fail the job if any exist.
+        run: |
+          mkdir -p build-fuzz/fuzz_artifacts
+          set +e
+          ./build-fuzz/bin/script_fuzz \
+            -max_total_time=300 \
+            -max_len=4096 \
+            -artifact_prefix=build-fuzz/fuzz_artifacts/ \
+            build-fuzz/fuzz_corpus/ \
+            2>&1 | tee build-fuzz/fuzz_log.txt
+          FUZZ_EXIT=${PIPESTATUS[0]}
+          set -e
+          if [ -n "$(ls -A build-fuzz/fuzz_artifacts/ 2>/dev/null | grep -v '\.tmp$')" ]; then
+            echo "::error::Fuzzer produced crash/leak artifacts"
+            exit 1
+          fi
+          exit 0
+
+      - name: Upload fuzzer artifacts on success
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: build-fuzz/fuzz_artifacts/
+
   build-windows-qt:
     runs-on: windows-latest
     defaults:

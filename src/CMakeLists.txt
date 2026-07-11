@@ -697,3 +697,279 @@ if(BUILD_TESTS)
     add_test(NAME chaindb_runtime_tests
              COMMAND test_chaindb_runtime --log_level=test_suite)
 endif()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. Fuzz harness (script interpreter) — opt-in via -DBUILD_FUZZ=ON
+# ═══════════════════════════════════════════════════════════════════════════════
+# LibFuzzer is built into clang since version 6; gcc doesn't support
+# -fsanitize=fuzzer. We compile script_fuzz.cpp + script.cpp with clang++
+# (so the interpreter itself is ASan/UBSan-instrumented) and link against
+# the full triangles_common OBJECT library + the same library set trianglesd
+# uses. Default build (gcc, no sanitizer) is unaffected.
+#
+# Build:
+#   cmake -G Ninja -DBUILD_TESTS=ON -DBUILD_FUZZ=ON -DBUILD_DAEMON=ON ..
+#   ninja fuzz_script
+#
+# Run:
+#   ./bin/fuzz_script -max_total_time=300 corpus/
+#
+# See src/test/fuzz/README.md for corpus seeding and what it covers.
+option(BUILD_FUZZ "Build libFuzzer harness for the script interpreter" OFF)
+if(BUILD_FUZZ)
+    find_program(CLANGXX clang++)
+    if(NOT CLANGXX)
+        message(FATAL_ERROR "BUILD_FUZZ=ON requires clang++; not found in PATH")
+    endif()
+
+    set(FUZZ_OBJ_DIR "${CMAKE_CURRENT_BINARY_DIR}/fuzz_objs")
+    file(MAKE_DIRECTORY "${FUZZ_OBJ_DIR}")
+    set(FUZZ_OBJ_SCRIPT_FUZZ "${FUZZ_OBJ_DIR}/script_fuzz.cpp.o")
+    set(FUZZ_OBJ_SCRIPT      "${FUZZ_OBJ_DIR}/script.cpp.o")
+    set(FUZZ_BIN_DIR         "${CMAKE_CURRENT_BINARY_DIR}/bin")
+    file(MAKE_DIRECTORY "${FUZZ_BIN_DIR}")
+    set(FUZZ_BIN             "${FUZZ_BIN_DIR}/fuzz_script")
+    set(FUZZ_SRC_FUZZ        "${CMAKE_CURRENT_SOURCE_DIR}/test/fuzz/script_fuzz.cpp")
+    set(FUZZ_SRC_SCRIPT      "${CMAKE_CURRENT_SOURCE_DIR}/script.cpp")
+    set(FUZZ_STUBS_SRC       "${CMAKE_CURRENT_BINARY_DIR}/fuzz_objs/fuzz_stubs.cpp")
+    set(FUZZ_OBJ_STUBS       "${CMAKE_CURRENT_BINARY_DIR}/fuzz_objs/fuzz_stubs.cpp.o")
+
+    # Compile flags shared by both .cpp files. Pull in script.h, secp256k1,
+    # leveldb. Same flags gcc uses for triangles_common (the project defines
+    # HAVE_BUILD_INFO, LINUX, BOOST_THREAD_USE_LIB, etc.) so we don't hit
+    # redefinition errors when linking against the rest of triangles_common.
+    set(FUZZ_COMMON_FLAGS
+        -std=c++20 -g -O1
+        -fsanitize=fuzzer,address,undefined
+        -DHAVE_CONFIG_H
+        -DHAVE_BUILD_INFO
+        -DLINUX
+        -DUSE_IPV6=1
+        -DBOOST_SPIRIT_THREADSAFE
+        -DBOOST_THREAD_PROVIDES_GENERIC_SHARED_MUTEX_ON_WIN
+        -DBOOST_THREAD_USE_LIB
+        -DENABLE_TOR_EMBEDDED
+        -DENABLE_I2P_EMBEDDED
+        -DMINIUPNP_STATICLIB
+        -DSTATICLIB
+        -I${CMAKE_CURRENT_SOURCE_DIR}
+        -I${CMAKE_CURRENT_SOURCE_DIR}/secp256k1/include
+        -I${CMAKE_CURRENT_SOURCE_DIR}/leveldb/include
+        -Wno-unused-parameter
+        -Wno-deprecated-declarations
+    )
+
+    add_custom_command(
+        OUTPUT "${FUZZ_OBJ_SCRIPT_FUZZ}"
+        COMMAND ${CLANGXX} ${FUZZ_COMMON_FLAGS}
+                -c ${FUZZ_SRC_FUZZ} -o ${FUZZ_OBJ_SCRIPT_FUZZ}
+        DEPENDS ${FUZZ_SRC_FUZZ}
+        COMMENT "[fuzz] clang++ script_fuzz.cpp"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${FUZZ_OBJ_SCRIPT}"
+        COMMAND ${CLANGXX} ${FUZZ_COMMON_FLAGS}
+                -c ${FUZZ_SRC_SCRIPT} -o ${FUZZ_OBJ_SCRIPT}
+        DEPENDS ${FUZZ_SRC_SCRIPT}
+        COMMENT "[fuzz] clang++ script.cpp"
+        VERBATIM
+    )
+
+    # Compile fuzz_stubs.cpp — stubs for daemon-only globals (pwalletMain,
+    # uiInterface, fUseFastIndex) and CWallet methods that script.cpp's
+    # type system references but EvalScript never actually calls.
+    add_custom_command(
+        OUTPUT "${FUZZ_OBJ_STUBS}"
+        COMMAND ${CLANGXX} ${FUZZ_COMMON_FLAGS}
+                -c ${FUZZ_STUBS_SRC}
+                -o ${FUZZ_OBJ_STUBS}
+        DEPENDS ${FUZZ_STUBS_SRC} ${FUZZ_SRC_SCRIPT}
+        COMMENT "[fuzz] clang++ fuzz_stubs.cpp"
+        VERBATIM
+    )
+
+    # Link using the same library set as trianglesd, but:
+    #   - exclude script.cpp.o (we provide our own clang-instrumented one)
+    #   - swap gcc for clang++ with -fsanitize=fuzzer,address,undefined
+    #   - drop -Wl,-z,relro -Wl,-z,now (incompatible with sanitizer link)
+    # We grab all triangles_common .o files except script.cpp.o via a
+    # shell glob with a filter. This avoids enumerating 60+ files in CMake.
+    # Enumerate all triangles_common .o files EXCEPT script.cpp.o (we have
+    # our own clang-instrumented copy). file(GLOB) at configure time gives
+    # us a CMake list — no shell expansion needed, no ninja $ escape.
+    # NOTE: file(GLOB) does NOT recurse by default; we need to enumerate
+    # triangles_common.dir + its subdirectories (tor/, i2p/, lz4/) explicitly.
+    file(GLOB TRIANGLES_COMMON_OBJS
+        "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/triangles_common.dir/*.o"
+        "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/triangles_common.dir/*/*.o"
+    )
+    list(FILTER TRIANGLES_COMMON_OBJS EXCLUDE REGEX "/script\\.cpp\\.o$")
+
+    # Define stubs for the few globals/methods that script.cpp references
+    # (e.g. pwalletMain, uiInterface, CWallet methods) but that live in
+    # daemon-only .cpp files (init.cpp / wallet.cpp / noui.cpp). We
+    # intentionally do NOT link those daemon objects — they drag in init,
+    # Tor/I2P startup, RPC, etc., which has nothing to do with the script
+    # interpreter. The fuzz target only cares about EvalScript semantics.
+    # (FUZZ_STUBS_SRC + FUZZ_OBJ_STUBS are defined earlier so the
+    # add_custom_command below resolves them at configure time.)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fuzz_objs")
+    write_file(${FUZZ_STUBS_SRC} "
+#include <vector>
+#include <string>
+#include <set>
+#include \"script.h\"
+#include \"key.h\"
+#include \"keystore.h\"
+#include \"wallet.h\"    // BDB has been refactored out of this header into
+                       // walletdb-recover.cpp, so including it is safe
+                       // for the fuzz target.
+
+// Forward declare the classes whose methods we need to stub, without
+// pulling in the full wallet.h / walletdb.h (those drag in BDB).
+class CBlockIndex;
+
+// ─── Daemon globals referenced by script.cpp's call graph ───────────────
+// These are defined in init.cpp / wallet.cpp / noui.cpp but never called
+// from EvalScript paths. The fuzzer only exercises the script interpreter;
+// the stubs satisfy the linker and short-circuit any accidental reach.
+
+// pwalletMain — defined in init.cpp, declared in wallet.h
+class CWallet;
+CWallet* pwalletMain = nullptr;
+
+// uiInterface — defined in init.cpp, declared in ui_interface.h
+// (Type is CClientUIInterface, transitively included via wallet.h.)
+CClientUIInterface uiInterface;
+
+// fUseFastIndex — defined in main.cpp/h
+bool fUseFastIndex = false;
+
+// fConfChange — defined in wallet.cpp
+bool fConfChange = false;
+
+// StartShutdown — defined in init.cpp
+void StartShutdown() {}
+
+// ─── CWallet methods referenced by script.cpp's type system ─────────────
+// script.cpp only takes pointers/references to CKeyStore; the actual
+// CWallet methods (LoadCryptedKey, TopUpKeyPool, ScanForWalletTransactions,
+// etc.) are pulled in because triangles_common's rpcwallet.cpp and
+// walletdb.cpp are in the link. EvalScript never reaches any of them.
+//
+// CKeyMetadata lives in walletdb.h (drags in BDB headers we don't want),
+// so LoadKeyMetadata's parameter type can't be spelled here. The linker
+// resolves CWallet::LoadKeyMetadata via the vtable at runtime; if it's
+// ever invoked from a fuzz path, the process crashes — exactly what we
+// want to know.
+// CWalletStub is a complete CKeyStore implementation. EvalScript only
+// holds CKeyStore*, so this is enough for the type system.
+namespace wallet_stubs {
+class CWalletStub : public CKeyStore {
+public:
+    bool GetPubKey(const CKeyID&, CPubKey&) const override { return false; }
+    bool GetKey(const CKeyID&, CKey&) const override { return false; }
+    bool HaveKey(const CKeyID&) const override { return false; }
+    void GetKeys(std::set<CKeyID>& setAddress) const override { setAddress.clear(); }
+    bool AddKey(const CKey&) override { return false; }
+    bool AddCScript(const CScript&) override { return false; }
+    bool HaveCScript(const CScriptID&) const override { return false; }
+    bool GetCScript(const CScriptID&, CScript&) const override { return false; }
+};
+static CWalletStub g_wallet_stub;
+} // namespace wallet_stubs
+
+// CWallet method definitions. We don't define a full CWallet — just the
+// methods that triangles_common's rpcwallet.cpp / walletdb.cpp reference
+// via their emitted object code. Signatures match wallet.h exactly.
+// All bodies return safely (never called from the fuzz path).
+// CWallet vtable is emitted from wallet.cpp.o (the daemon build already
+// produces a complete CWallet implementation). We don't need stubs for
+// individual CWallet methods here — wallet.cpp.o handles them. What we
+// DO need is to satisfy the linker's external references for the few
+// globals that wallet.cpp / init.cpp / noui.cpp don't define but that
+// triangles_common's rpcwallet.cpp / walletdb.cpp reference:
+//
+//   pwalletMain    → declared in wallet.h, defined in init.cpp
+//   uiInterface    → declared in ui_interface.h, defined in init.cpp
+//   fUseFastIndex  → declared in main.h, defined in main.cpp
+//   fConfChange    → declared in wallet.h, defined in wallet.cpp
+//   fWalletUnlockStakingOnly → declared in wallet.h, defined in init.cpp
+//   StartShutdown  → declared in init.h, defined in init.cpp
+//
+// All are defined above. wallet.cpp.o + init.cpp.o + noui.cpp.o link in
+// normally and provide everything else CWallet-related.
+// ──────────────────────────────────────────────────────────────────────
+")
+
+    set(FUZZ_LINK_CMD
+        "${CLANGXX}"
+        "-fsanitize=fuzzer,address,undefined"
+        "${FUZZ_OBJ_SCRIPT_FUZZ}"
+        "${FUZZ_OBJ_SCRIPT}"
+    )
+    foreach(obj ${TRIANGLES_COMMON_OBJS})
+        list(APPEND FUZZ_LINK_CMD "${obj}")
+    endforeach()
+
+    # We DO need the daemon-only .o files (init / wallet / noui) because
+    # they provide the CWallet vtable + most of its non-virtual methods.
+    # Their Tor/I2P references resolve against the Tor/I2P .o files
+    # already in TRIANGLES_COMMON_OBJS above (tor_embedded.cpp.o,
+    # i2p_embedded.cpp.o, etc.). Earlier failures were because we had
+    # --Wl,--allow-multiple-definition missing or walletdb-recover.cpp
+    # colliding with our stub CWallet vtable; both fixed.
+    file(GLOB TRIANGLESD_OBJS
+        "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/trianglesd.dir/*.o"
+    )
+    foreach(obj ${TRIANGLESD_OBJS})
+        list(APPEND FUZZ_LINK_CMD "${obj}")
+    endforeach()
+    list(APPEND FUZZ_LINK_CMD
+        "-o" "${FUZZ_BIN}"
+        "-Wl,--allow-multiple-definition"
+        "${CMAKE_BINARY_DIR}/lib/libhash9_crypto.a"
+        "${CMAKE_BINARY_DIR}/lib/libleveldb_memenv.a"
+        "${CMAKE_BINARY_DIR}/lib/libleveldb_lib.a"
+        "/usr/lib/x86_64-linux-gnu/libssl.so"
+        "/usr/lib/x86_64-linux-gnu/libcrypto.so"
+        "/usr/lib/x86_64-linux-gnu/libdb_cxx.so"
+        "/usr/lib/x86_64-linux-gnu/libevent.so"
+        "/usr/lib/x86_64-linux-gnu/libsqlite3.so"
+        "/usr/lib/x86_64-linux-gnu/libminiupnpc.so"
+        "${CMAKE_BINARY_DIR}/lib/libsecp256k1.a"
+        "/usr/lib/x86_64-linux-gnu/librocksdb.a"
+        "/usr/lib/x86_64-linux-gnu/libz.so"
+        "/usr/lib/x86_64-linux-gnu/libgflags.so.2.2.2"
+        "/usr/lib/x86_64-linux-gnu/libsnappy.so.1.1.10"
+        "/usr/lib/x86_64-linux-gnu/libbz2.so"
+        "/usr/lib/x86_64-linux-gnu/liblz4.so"
+        "/usr/lib/x86_64-linux-gnu/libzstd.so"
+        "${CMAKE_CURRENT_SOURCE_DIR}/i2p/i2pd-src/libi2pdclient.a"
+        "${CMAKE_CURRENT_SOURCE_DIR}/i2p/i2pd-src/libi2pd.a"
+        "${CMAKE_CURRENT_SOURCE_DIR}/i2p/i2pd-src/libi2pdlang.a"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tor/tor-src/libtor.a"
+        "/usr/lib/x86_64-linux-gnu/libboost_program_options.so.1.83.0"
+        "/usr/lib/x86_64-linux-gnu/libboost_thread.so.1.83.0"
+        "/usr/lib/x86_64-linux-gnu/libboost_chrono.so.1.83.0"
+        "/usr/lib/x86_64-linux-gnu/libboost_filesystem.so.1.83.0"
+        "/usr/lib/x86_64-linux-gnu/libboost_atomic.so.1.83.0"
+        "/usr/lib/x86_64-linux-gnu/libboost_system.so.1.83.0"
+        "-lpthread"
+        "-llzma"
+    )
+    # Join into a single shell-escaped string. Use sh -c with the joined
+    # command. We split on semicolons first to get one arg per element,
+    # which keeps the args straight even if paths contain spaces.
+    string(REPLACE ";" " " FUZZ_LINK_CMD_STR "${FUZZ_LINK_CMD}")
+    add_custom_command(
+        OUTPUT "${FUZZ_BIN}"
+        COMMAND sh -c "${FUZZ_LINK_CMD_STR}"
+        DEPENDS "${FUZZ_OBJ_SCRIPT_FUZZ}" "${FUZZ_OBJ_SCRIPT}" "${FUZZ_OBJ_STUBS}"
+        COMMENT "[fuzz] clang++ link fuzz_script"
+    )
+    add_custom_target(fuzz_script ALL DEPENDS "${FUZZ_BIN}")
+
+    message(STATUS "Fuzz target enabled: ${FUZZ_BIN}")
+endif()
