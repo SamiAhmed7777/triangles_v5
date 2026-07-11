@@ -147,7 +147,7 @@ jobs:
         run: cd build-san && ctest --output-on-failure
 
   test-fuzz-smoke:
-    # libFuzzer smoke test for src/script.cpp (script_fuzz harness).
+    # libFuzzer smoke test for src/script.cpp (fuzz_script harness).
     # Builds with ASan+UBSan+libFuzzer and runs for 5 minutes. Any crash
     # is uploaded as an artifact and the job fails — fuzz regressions
     # must block the PR.
@@ -178,6 +178,11 @@ jobs:
         run: sudo bash scripts/ci/build-rocksdb.sh
 
       - name: Configure with fuzzing + sanitizers
+        # NB: do NOT pass -fsanitize=fuzzer in CMAKE_EXE_LINKER_FLAGS — that
+        # pulls libFuzzer's main() into CMake's compiler-probe linker test
+        # and trips "multiple definition of `main`". The script_fuzz target
+        # adds -fsanitize=fuzzer per-target via target_link_options in
+        # src/CMakeLists.txt (see BUILD_FUZZ block).
         run: |
           cmake -B build-fuzz -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
@@ -185,15 +190,17 @@ jobs:
             -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_C_FLAGS="$SAN_FLAGS" \
             -DCMAKE_CXX_FLAGS="$SAN_FLAGS" \
-            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=fuzzer $SAN_FLAGS" \
+            -DCMAKE_EXE_LINKER_FLAGS="$SAN_FLAGS" \
             -DBUILD_QT=OFF \
             -DBUILD_DAEMON=ON \
             -DBUILD_TESTS=ON \
             -DBUILD_FUZZ=ON \
             -DUSE_UPNP=OFF
 
-      - name: Build script_fuzz
-        run: cmake --build build-fuzz --target script_fuzz -j$(nproc)
+      - name: Build fuzz_script
+        # CMake target is named `fuzz_script` (matches FUZZ_BIN_DIR/fuzz_script
+        # in src/CMakeLists.txt — see add_custom_target(fuzz_script ...)).
+        run: cmake --build build-fuzz --target fuzz_script -j$(nproc)
 
       - name: Generate seed corpus from JSON fixtures
         # Uses src/test/data/script_{valid,invalid}.json so the fuzzer
@@ -213,7 +220,7 @@ jobs:
         run: |
           mkdir -p build-fuzz/fuzz_artifacts
           set +e
-          ./build-fuzz/bin/script_fuzz \
+          ./build-fuzz/bin/fuzz_script \
             -max_total_time=300 \
             -max_len=4096 \
             -artifact_prefix=build-fuzz/fuzz_artifacts/ \

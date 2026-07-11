@@ -966,7 +966,17 @@ static CWalletStub g_wallet_stub;
     add_custom_command(
         OUTPUT "${FUZZ_BIN}"
         COMMAND sh -c "${FUZZ_LINK_CMD_STR}"
-        DEPENDS "${FUZZ_OBJ_SCRIPT_FUZZ}" "${FUZZ_OBJ_SCRIPT}" "${FUZZ_OBJ_STUBS}"
+        DEPENDS
+            "${FUZZ_OBJ_SCRIPT_FUZZ}"
+            "${FUZZ_OBJ_SCRIPT}"
+            "${FUZZ_OBJ_STUBS}"
+            # Static libs the link line references at ${CMAKE_BINARY_DIR}/lib/.
+            # Without these deps, fuzz_script's link step races and fails with
+            # "no such file" errors on first clean build.
+            hash9_crypto
+            leveldb_lib
+            leveldb_memenv
+            secp256k1
         COMMENT "[fuzz] clang++ link fuzz_script"
     )
     add_custom_target(fuzz_script ALL DEPENDS "${FUZZ_BIN}")
