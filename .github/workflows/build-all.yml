@@ -204,11 +204,10 @@ jobs:
             -DSECP256K1_ASM=OFF
 
       - name: Build libtor (embedded Tor static lib)
-        # BUILD_FUZZ depends on trianglesd/triangles_common objects so the
-        # regular daemon target is built as part of fuzz_script. The daemon
-        # links embedded Tor (-ltor), but libtor.a is produced by the Tor
-        # submodule script, not CMake. Mirror the unit/sanitizer jobs here
-        # before invoking the fuzz target.
+        # BUILD_FUZZ pulls in triangles_common + trianglesd_objects (OBJECT lib)
+        # via the fuzz target's CMake deps. The link line references libtor.a,
+        # which the Tor submodule script produces — CMake doesn't build it.
+        # Mirror the unit/sanitizer jobs here before invoking the fuzz target.
         run: |
           sudo apt-get install -y libevent-dev libssl-dev zlib1g-dev
           LIBEVENT_DIR=/usr OPENSSL_DIR=/usr ZLIB_DIR=/usr \

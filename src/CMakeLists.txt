@@ -119,6 +119,23 @@ list(APPEND CORE_SOURCES
 
 add_library(triangles_common OBJECT ${CORE_SOURCES})
 
+# When BUILD_FUZZ=ON, the fuzz target links these .o files directly into
+# bin/fuzz_script. The link line enables -fsanitize=fuzzer,address,undefined
+# so EVERY .o referenced from the fuzz binary must also be compiled with the
+# matching -fsanitize=address,undefined,fuzzer-no-link. Without this, gcc-
+# built triangles_common objects reference libstdc++-injected ubsan runtime
+# symbols (e.g. __ubsan_handle_function_type_mismatch_v1_abort) that clang's
+# libubsan_standalone runtime doesn't provide, and the link fails with
+# "undefined reference to __ubsan_handle_function_type_mismatch_v1_abort".
+if(BUILD_FUZZ)
+    target_compile_options(triangles_common PRIVATE
+        -fsanitize=address,undefined,fuzzer-no-link
+        -fno-omit-frame-pointer
+        -fno-sanitize-recover=undefined
+        -fno-sanitize=alignment,signed-integer-overflow,vptr
+    )
+endif()
+
 target_include_directories(triangles_common PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/json"
@@ -344,12 +361,36 @@ target_precompile_headers(triangles_common PRIVATE
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4. Headless daemon (trianglesd)
 # ═══════════════════════════════════════════════════════════════════════════════
-if(BUILD_DAEMON)
-    add_executable(trianglesd
-        noui.cpp
-        init.cpp
-        wallet.cpp
+# `trianglesd` is normally an add_executable, but the libFuzzer build only
+# needs the daemon's object files (init/wallet/noui). Building the executable
+# under clang-15 with -fsanitize=fuzzer+address+undefined pulls in
+# undefined references to the libstdc++ runtime built by gcc, which fails
+# the link step. So we expose the daemon's sources as an OBJECT library and
+# only attach them to trianglesd when we're not in a fuzz build.
+set(DAEMON_SOURCES
+    noui.cpp
+    init.cpp
+    wallet.cpp
+)
+if(BUILD_FUZZ)
+    add_library(trianglesd_objects OBJECT ${DAEMON_SOURCES})
+    target_link_libraries(trianglesd_objects PRIVATE triangles_common)
+    target_precompile_headers(trianglesd_objects REUSE_FROM triangles_common)
+    # Match triangles_common's sanitizer instrumentation so noui.cpp / init.cpp
+    # / wallet.cpp .o files don't reference the gcc libstdc++ ubsan runtime
+    # when linked into the fuzz binary (see triangles_common compile-options
+    # comment above for the full rationale).
+    target_compile_options(trianglesd_objects PRIVATE
+        -fsanitize=address,undefined,fuzzer-no-link
+        -fno-omit-frame-pointer
+        -fno-sanitize-recover=undefined
+        -fno-sanitize=alignment,signed-integer-overflow,vptr
     )
+    if(WIN32)
+        set_target_properties(trianglesd_objects PROPERTIES SUFFIX ".obj")
+    endif()
+elseif(BUILD_DAEMON)
+    add_executable(trianglesd ${DAEMON_SOURCES})
     # No QT_GUI define — daemon gets the #if !defined(QT_GUI) code paths
     target_link_libraries(trianglesd PRIVATE triangles_common)
     target_precompile_headers(trianglesd REUSE_FROM triangles_common)
@@ -726,6 +767,8 @@ if(BUILD_FUZZ)
     file(MAKE_DIRECTORY "${FUZZ_OBJ_DIR}")
     set(FUZZ_OBJ_SCRIPT_FUZZ "${FUZZ_OBJ_DIR}/script_fuzz.cpp.o")
     set(FUZZ_OBJ_SCRIPT      "${FUZZ_OBJ_DIR}/script.cpp.o")
+    set(FUZZ_OBJ_FUZZ_STUBS  "${FUZZ_OBJ_DIR}/fuzz_stubs.cpp.o")
+    set(FUZZ_FUZZ_STUBS_SRC  "${FUZZ_OBJ_DIR}/fuzz_stubs.cpp")
     set(FUZZ_BIN_DIR         "${CMAKE_BINARY_DIR}/bin")
     file(MAKE_DIRECTORY "${FUZZ_BIN_DIR}")
     set(FUZZ_BIN             "${FUZZ_BIN_DIR}/fuzz_script")
@@ -774,6 +817,71 @@ if(BUILD_FUZZ)
         VERBATIM
     )
 
+    # fuzz_stubs.cpp — satisfies the daemon-side globals that triangles_common
+    # and trianglesd_objects reference (pwalletMain, uiInterface, etc.) but
+    # that the fuzzer never actually touches. Keeping these as null/no-ops is
+    # the standard fuzzer pattern — see src/test/test_triangles.cpp and
+    # src/test/snapshotnet_tests.cpp for the same approach.
+    file(MAKE_DIRECTORY "${FUZZ_OBJ_DIR}")
+    file(WRITE "${FUZZ_FUZZ_STUBS_SRC}"
+"#include <memory>
+#include <set>
+#include <string>
+#include <vector>
+
+#include \"checkpoints.h\"
+#include \"key.h\"
+#include \"keystore.h\"
+#include \"script.h\"
+#include \"ui_interface.h\"
+#include \"wallet.h\"
+
+class CBlockIndex;
+
+bool fUseFastIndex = false;
+unsigned int nDerivationMethodIndex = 0;
+bool fEnforceCanonical = true;
+bool fConfChange = false;
+bool fWalletUnlockStakingOnly = false;
+bool fUsePrivateSend = false;
+bool fMasterNode = false;
+
+class CWalletStub : public CKeyStore
+{
+public:
+    bool GetPubKey(const CKeyID&, CPubKey&) const override { return false; }
+    bool GetKey(const CKeyID&, CKey&) const override { return false; }
+    bool HaveKey(const CKeyID&) const override { return false; }
+    void GetKeys(std::set<CKeyID>& setAddress) const override { setAddress.clear(); }
+    bool AddKey(const CKey&) override { return false; }
+    bool AddCScript(const CScript&) override { return false; }
+    bool HaveCScript(const CScriptID&) const override { return false; }
+    bool GetCScript(const CScriptID&, CScript&) const override { return false; }
+};
+static CWalletStub g_wallet_stub;
+CWallet* pwalletMain = nullptr;
+
+CClientUIInterface uiInterface;
+
+// Checkpoints::CPMode defined in checkpoints.h; default to ADVISORY so the
+// fuzz target never complains about the missing init.cpp value.
+enum Checkpoints::CPMode CheckpointsMode = Checkpoints::ADVISORY;
+
+// Defined in init.cpp; reasonable default so the fuzz link succeeds.
+unsigned int nNodeLifespan = 7;
+
+void StartShutdown() {}
+")
+
+    add_custom_command(
+        OUTPUT "${FUZZ_OBJ_FUZZ_STUBS}"
+        COMMAND ${CLANGXX} ${FUZZ_COMMON_FLAGS}
+                -c ${FUZZ_FUZZ_STUBS_SRC} -o ${FUZZ_OBJ_FUZZ_STUBS}
+        DEPENDS ${FUZZ_FUZZ_STUBS_SRC}
+        COMMENT "[fuzz] clang++ fuzz_stubs.cpp"
+        VERBATIM
+    )
+
     # Link using the same library set as trianglesd, but:
     #   - exclude script.cpp.o (we provide our own clang-instrumented one)
     #   - swap gcc for clang++ with -fsanitize=fuzzer,address,undefined
@@ -810,7 +918,7 @@ set -euo pipefail
 PROG=\"\$1\"
 shift
 TRIANGLES_COMMON_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/triangles_common.dir\"
-TRIANGLESD_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/trianglesd.dir\"
+TRIANGLESD_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/trianglesd_objects.dir\"
 # Discover .o files into a bash array. Exclude script.cpp.o (we have our
 # own clang-instrumented copy in fuzz_objs/ that we want to keep separate
 # from the main build's copy).
@@ -822,10 +930,20 @@ for f in \"\$TRIANGLES_COMMON_DIR\"/*.o \"\$TRIANGLES_COMMON_DIR\"/*/*.o; do
     esac
     OBJS+=(\"\$f\")
 done
-for f in \"\$TRIANGLESD_DIR\"/*.o; do
-    [ -f \"\$f\" ] || continue
-    OBJS+=(\"\$f\")
-done
+if [ -d "\$TRIANGLESD_DIR" ]; then
+    for f in "\$TRIANGLESD_DIR"/*.o; do
+        [ -f "\$f" ] || continue
+        # init.cpp defines the daemon's main(); the fuzz harness has its own
+        # (libFuzzer's). wallet.cpp, noui.cpp etc. are safe — they don't
+        # define main and their external references (pwalletMain,
+        # uiInterface, nDerivationMethodIndex) are satisfied by the stub
+        # object file we add at the end of the link line.
+        case "\$f" in
+            */init.cpp.o) continue ;;
+        esac
+        OBJS+=("\$f")
+    done
+fi
 # Final arg list: PROG, then all .o files, then all original link args.
 exec \"\$PROG\" \"\${OBJS[@]}\" \"\$@\"
 ")
@@ -840,36 +958,39 @@ exec \"\$PROG\" \"\${OBJS[@]}\" \"\$@\"
         "-o" "${FUZZ_BIN}"
         "-Wl,--allow-multiple-definition"
         "${FUZZ_OBJ_SCRIPT}"
+        "${FUZZ_OBJ_FUZZ_STUBS}"
         "${CMAKE_BINARY_DIR}/lib/libhash9_crypto.a"
         "${CMAKE_BINARY_DIR}/lib/libleveldb_memenv.a"
         "${CMAKE_BINARY_DIR}/lib/libleveldb_lib.a"
-        "/usr/lib/x86_64-linux-gnu/libssl.so"
-        "/usr/lib/x86_64-linux-gnu/libcrypto.so"
-        "/usr/lib/x86_64-linux-gnu/libdb_cxx.so"
-        "/usr/lib/x86_64-linux-gnu/libevent.so"
-        "/usr/lib/x86_64-linux-gnu/libsqlite3.so"
-        "/usr/lib/x86_64-linux-gnu/libminiupnpc.so"
+        "-lssl" "-lcrypto" "-ldb_cxx" "-levent" "-lsqlite3" "-lminiupnpc"
         "${CMAKE_BINARY_DIR}/lib/libsecp256k1.a"
-        "/usr/lib/x86_64-linux-gnu/librocksdb.a"
-        "/usr/lib/x86_64-linux-gnu/libz.so"
-        "/usr/lib/x86_64-linux-gnu/libgflags.so.2.2.2"
-        "/usr/lib/x86_64-linux-gnu/libsnappy.so.1.1.10"
-        "/usr/lib/x86_64-linux-gnu/libbz2.so"
-        "/usr/lib/x86_64-linux-gnu/liblz4.so"
-        "/usr/lib/x86_64-linux-gnu/libzstd.so"
+        # RocksDB: prefer the linked target if it's a shared library (CI build
+        # via scripts/ci/build-rocksdb.sh installs librocksdb.so.8.9.1 to
+        # /usr/local and exposes RocksDB::rocksdb). Fall back to the
+        # system .a filename if the target is unknown / static.
+        "$<IF:$<TARGET_EXISTS:RocksDB::rocksdb>,-lrocksdb,${ROCKSDB_LIBRARY}>"
+        "-lz" "-lgflags" "-lsnappy" "-lbz2" "-llz4" "-lzstd"
         "${CMAKE_CURRENT_SOURCE_DIR}/i2p/i2pd-src/libi2pdclient.a"
         "${CMAKE_CURRENT_SOURCE_DIR}/i2p/i2pd-src/libi2pd.a"
         "${CMAKE_CURRENT_SOURCE_DIR}/i2p/i2pd-src/libi2pdlang.a"
         "${CMAKE_CURRENT_SOURCE_DIR}/tor/tor-src/libtor.a"
-        "/usr/lib/x86_64-linux-gnu/libboost_program_options.so.1.83.0"
-        "/usr/lib/x86_64-linux-gnu/libboost_thread.so.1.83.0"
-        "/usr/lib/x86_64-linux-gnu/libboost_chrono.so.1.83.0"
-        "/usr/lib/x86_64-linux-gnu/libboost_filesystem.so.1.83.0"
-        "/usr/lib/x86_64-linux-gnu/libboost_atomic.so.1.83.0"
-        "/usr/lib/x86_64-linux-gnu/libboost_system.so.1.83.0"
-        "-lpthread"
-        "-llzma"
+        "-lpthread" "-llzma" "-lubsan"
     )
+    # Boost target names need real paths on the link line; generator
+    # expressions don't get evaluated by the bash wrapper, so resolve
+    # the imported-target paths at configure time and append them.
+    foreach(_target Boost::program_options Boost::thread Boost::chrono
+                     Boost::atomic Boost::filesystem Boost::system)
+        if(TARGET "${_target}")
+            get_target_property(_path "${_target}" IMPORTED_LOCATION_RELEASE)
+            if(NOT _path)
+                get_target_property(_path "${_target}" IMPORTED_LOCATION)
+            endif()
+            if(_path AND EXISTS "${_path}")
+                list(APPEND FUZZ_LINK_CMD "${_path}")
+            endif()
+        endif()
+    endforeach()
     # Invoke the link wrapper script, passing the actual link line as
     # args. The wrapper script discovers .o files at link time via find
     # (file(GLOB) would evaluate empty at configure time when no .o files
@@ -881,6 +1002,7 @@ exec \"\$PROG\" \"\${OBJS[@]}\" \"\$@\"
         DEPENDS
             "${FUZZ_OBJ_SCRIPT_FUZZ}"
             "${FUZZ_OBJ_SCRIPT}"
+            "${FUZZ_OBJ_FUZZ_STUBS}"
             "${FUZZ_LINK_WRAPPER}"
             # Static libs the link line references at ${CMAKE_BINARY_DIR}/lib/.
             # Without these deps, fuzz_script's link step races and fails with
@@ -889,10 +1011,12 @@ exec \"\$PROG\" \"\${OBJS[@]}\" \"\$@\"
             leveldb_lib
             leveldb_memenv
             secp256k1
-            # trianglesd/triangles_common emit the .o files the link wrapper
-            # discovers via find. Without these deps the wrapper finds no .o
-            # files on first build → undefined references like CKey::GetPubKey.
-            trianglesd
+            # trianglesd_objects emits the daemon .o files (noui/init/wallet)
+            # that the link wrapper discovers via find. triangles_common emits
+            # the rest of the .o files we need. Without these deps the wrapper
+            # finds no .o files on first build → undefined references like
+            # CKey::GetPubKey.
+            trianglesd_objects
             triangles_common
         COMMENT "[fuzz] clang++ link fuzz_script"
     )
