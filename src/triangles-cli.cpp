@@ -191,6 +191,16 @@ static fs::path GetConfigFilePath()
 // Command-line parsing
 // ─────────────────────────────────────────────────────────────────────────────
 
+static string NormalizeSwitch(const string& value)
+{
+    if (value.empty() || value.front() != '-')
+        return value;
+    const size_t keyStart = value.find_first_not_of('-');
+    if (keyStart == string::npos)
+        return "-";
+    return "-" + value.substr(keyStart);
+}
+
 static void ParseCommandLine(int argc, char* const argv[])
 {
     mapArgs.clear();
@@ -201,13 +211,17 @@ static void ParseCommandLine(int argc, char* const argv[])
             mapMultiArgs["-"].push_back("-");
             continue;
         }
+        str = NormalizeSwitch(str);
+        if (str.empty())
+            continue;
         string strKey, strVal;
         size_t idx = str.find('=');
         if (idx == string::npos) {
-            strKey = "-" + str;
+            strKey = str.front() == '-' ? str : "-" + str;
             strVal = "1";
         } else {
-            strKey = "-" + str.substr(0, idx);
+            strKey = str.front() == '-' ? str.substr(0, idx)
+                                        : "-" + str.substr(0, idx);
             strVal = str.substr(idx + 1);
         }
         mapArgs[strKey] = strVal;
@@ -281,7 +295,8 @@ static void ParseCommandLineRPCParams(int argc, char* const argv[],
     while (i < argc) {
         string arg(argv[i]);
         if (arg == "-" || arg.size() < 2 || arg[0] != '-') break;
-        if (valFlags.count(arg) && i + 1 < argc &&
+        const string optionName = NormalizeSwitch(arg.substr(0, arg.find('=')));
+        if (valFlags.count(optionName) && arg.find('=') == string::npos && i + 1 < argc &&
             string(argv[i+1]).substr(0,1) != "-") {
             i += 2;
         } else {
@@ -595,11 +610,11 @@ int main(int argc, char* argv[])
     ParseCommandLine(argc, argv);
 
     if (argc < 2 || GetArg("-?", "") == "1" || GetArg("-h", "") == "1" ||
-        GetArg("--help", "") == "1") {
+        GetArg("-help", "") == "1") {
         CommandLineHelp(cerr);
         return argc < 2 ? 1 : 0;
     }
-    if (!GetArg("-version", "").empty() || !GetArg("--version", "").empty()) {
+    if (!GetArg("-version", "").empty()) {
         CommandLineVersion();
         return 0;
     }
