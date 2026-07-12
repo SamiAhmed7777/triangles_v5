@@ -250,6 +250,8 @@ Value getblockhash(const Array& params, bool fHelp)
         throw runtime_error("Block number out of range.");
 
     CBlockIndex* pblockindex = FindBlockByHeight(nHeight);
+    if (!pblockindex || !pblockindex->phashBlock)
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block height not available in local block index");
     return pblockindex->phashBlock->GetHex();
 }
 
@@ -286,14 +288,11 @@ Value getblockbynumber(const Array& params, bool fHelp)
     if (nHeight < 0 || nHeight > nBestHeight)
         throw runtime_error("Block number out of range.");
 
+    CBlockIndex* pblockindex = FindBlockByHeight(nHeight);
+    if (!pblockindex || !pblockindex->phashBlock)
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block height not available in local block index");
+
     CBlock block;
-    CBlockIndex* pblockindex = mapBlockIndex[hashBestChain];
-    while (pblockindex->nHeight > nHeight)
-        pblockindex = pblockindex->pprev;
-
-    uint256 hash = *pblockindex->phashBlock;
-
-    pblockindex = mapBlockIndex[hash];
     block.ReadFromDisk(pblockindex, true);
 
     return blockToJSON(block, pblockindex, params.size() > 1 ? params[1].get_bool() : false);
