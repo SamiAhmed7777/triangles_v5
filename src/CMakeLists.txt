@@ -871,6 +871,7 @@ enum Checkpoints::CPMode CheckpointsMode = Checkpoints::ADVISORY;
 unsigned int nNodeLifespan = 7;
 
 void StartShutdown() {}
+void MarkShutdownFailure() {}
 ")
 
     add_custom_command(
