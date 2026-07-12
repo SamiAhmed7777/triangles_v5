@@ -3724,9 +3724,14 @@ bool CBlock::CheckBlockSignature() const
     if (IsProofOfWork())
         return vchBlockSig.empty();
 
+    // Every proof-of-stake block must carry a non-empty block signature.
+    if (vchBlockSig.empty())
+        return false;
+
     vector<valtype> vSolutions;
     TxnOutType whichType;
 
+    // The coinstake kernel output (vtx[1].vout[1]) identifies the staker.
     const CTxOut& txout = vtx[1].vout[1];
 
     if (!Solver(txout.scriptPubKey, whichType, vSolutions))
@@ -3734,15 +3739,48 @@ bool CBlock::CheckBlockSignature() const
 
     if (whichType == TxnOutType::PubKey)
     {
-        valtype& vchPubKey = vSolutions[0];
+        // Raw-pay-to-pubkey: the public key is embedded in scriptPubKey.
         CKey key;
-        if (!key.SetPubKey(vchPubKey))
-            return false;
-        if (vchBlockSig.empty())
+        if (!key.SetPubKey(vSolutions[0]))
             return false;
         return key.Verify(GetHash(), vchBlockSig);
     }
 
+    if (whichType == TxnOutType::PubKeyHash)
+    {
+        // Pay-to-pubkey-hash: the public key is NOT in the scriptPubKey.
+        // Extract it from the coinstake input's scriptSig, which for a
+        // standard P2PKH spend has the form:  <DER-sig> <pubkey>.
+        // The last data-push of valid pubkey size (33 or 65 bytes) is the key.
+        const CScript& scriptSig = vtx[1].vin[0].scriptSig;
+
+        std::vector<unsigned char> vchPubKey;
+        opcodetype opcode;
+        std::vector<unsigned char> vchPush;
+        CScript::const_iterator pc = scriptSig.begin();
+        while (scriptSig.GetOp(pc, opcode, vchPush))
+        {
+            if (vchPush.size() == 33 || vchPush.size() == 65)
+                vchPubKey = vchPush;
+        }
+
+        CPubKey pubkey(vchPubKey);
+        if (!pubkey.IsValid())
+            return false;
+
+        // Fail-closed: the extracted key must hash to the address encoded
+        // in the coinstake scriptPubKey.
+        if (pubkey.GetID() != CKeyID(uint160(vSolutions[0])))
+            return false;
+
+        CKey key;
+        if (!key.SetPubKey(pubkey))
+            return false;
+        return key.Verify(GetHash(), vchBlockSig);
+    }
+
+    // Other script types (multisig, scripthash, nonstandard): we cannot
+    // reliably extract a single verification key, so fail-closed.
     return false;
 }
 
