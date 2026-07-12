@@ -1384,12 +1384,16 @@ CBlockIndex* FindBlockByHeight(int nHeight)
         pblockindex = pindexGenesisBlock;
     else
         pblockindex = pindexBest;
+    if (!pblockindex)
+        return nullptr;
     if (pblockindexFBBHLast && abs(nHeight - pblockindex->nHeight) > abs(nHeight - pblockindexFBBHLast->nHeight))
         pblockindex = pblockindexFBBHLast;
-    while (pblockindex->nHeight > nHeight)
+    while (pblockindex && pblockindex->nHeight > nHeight)
         pblockindex = pblockindex->pprev;
-    while (pblockindex->nHeight < nHeight)
+    while (pblockindex && pblockindex->nHeight < nHeight)
         pblockindex = pblockindex->pnext;
+    if (!pblockindex || pblockindex->nHeight != nHeight)
+        return nullptr;
     pblockindexFBBHLast = pblockindex;
     return pblockindex;
 }
