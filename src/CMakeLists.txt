@@ -817,10 +817,10 @@ if(BUILD_FUZZ)
         VERBATIM
     )
 
-    # fuzz_stubs.cpp — satisfies the daemon-side globals that triangles_common
-    # and trianglesd_objects reference (pwalletMain, uiInterface, etc.) but
-    # that the fuzzer never actually touches. Keeping these as null/no-ops is
-    # the standard fuzzer pattern — see src/test/test_triangles.cpp and
+    # fuzz_stubs.cpp — satisfies globals owned by the excluded init.cpp that
+    # triangles_common and trianglesd_objects reference (pwalletMain,
+    # uiInterface, etc.). Keeping these as null/no-ops is the standard fuzzer
+    # pattern — see src/test/test_triangles.cpp and
     # src/test/snapshotnet_tests.cpp for the same approach.
     file(MAKE_DIRECTORY "${FUZZ_OBJ_DIR}")
     file(WRITE "${FUZZ_FUZZ_STUBS_SRC}"
@@ -842,9 +842,6 @@ bool fUseFastIndex = false;
 unsigned int nDerivationMethodIndex = 0;
 bool fEnforceCanonical = true;
 bool fConfChange = false;
-bool fWalletUnlockStakingOnly = false;
-bool fUsePrivateSend = false;
-bool fMasterNode = false;
 
 class CWalletStub : public CKeyStore
 {
@@ -959,7 +956,6 @@ exec "$PROG" "${OBJS[@]}" "$@"
         "-fsanitize=fuzzer,address,undefined"
         "${FUZZ_OBJ_SCRIPT_FUZZ}"
         "-o" "${FUZZ_BIN}"
-        "-Wl,--allow-multiple-definition"
         "${FUZZ_OBJ_SCRIPT}"
         "${FUZZ_OBJ_FUZZ_STUBS}"
         "${CMAKE_BINARY_DIR}/lib/libhash9_crypto.a"
