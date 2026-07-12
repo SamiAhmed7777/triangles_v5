@@ -202,6 +202,16 @@ static fs::path GetConfigFilePath()
 // Command-line parsing
 // ─────────────────────────────────────────────────────────────────────────────
 
+static string NormalizeSwitch(const string& value)
+{
+    if (value.empty() || value.front() != '-')
+        return value;
+    const size_t keyStart = value.find_first_not_of('-');
+    if (keyStart == string::npos)
+        return "-";
+    return "-" + value.substr(keyStart);
+}
+
 static void ParseCommandLine(int argc, char* const argv[])
 {
     mapArgs.clear();
@@ -212,17 +222,15 @@ static void ParseCommandLine(int argc, char* const argv[])
             mapMultiArgs["-"].push_back("-");
             continue;
         }
-        // Historical behavior: every arg is parsed as a potential flag.
-        // A non-flag positional arg like "getinfo" gets stored as
-        // mapArgs["-getinfo"] = "1" (the leading dash comes from the arg
-        // itself, NOT from us prepending one). It doesn't collide with
-        // any real flag because no flag has a name that looks like a
-        // typical RPC method.
-        //
         // Bug fix: previous code was doing strKey = "-" + str, which
         // produced "--conf" (two dashes) when the arg was "-conf=...",
         // so GetArg("-conf") lookups never matched. The arg already
-        // starts with a dash, so we use it verbatim.
+        // starts with a dash, so we use it verbatim. NormalizeSwitch
+        // collapses any leading dashes (1, 2, or more) into a single
+        // dash so callers can use either form.
+        str = NormalizeSwitch(str);
+        if (str.empty())
+            continue;
         string strKey, strVal;
         size_t idx = str.find('=');
         if (idx == string::npos) {
@@ -335,7 +343,8 @@ static void ParseCommandLineRPCParams(int argc, char* const argv[],
     while (i < argc) {
         string arg(argv[i]);
         if (arg == "-" || arg.size() < 2 || arg[0] != '-') break;
-        if (valFlags.count(arg) && i + 1 < argc &&
+        const string optionName = NormalizeSwitch(arg.substr(0, arg.find('=')));
+        if (valFlags.count(optionName) && arg.find('=') == string::npos && i + 1 < argc &&
             string(argv[i+1]).substr(0,1) != "-") {
             i += 2;
         } else {
@@ -649,11 +658,11 @@ int main(int argc, char* argv[])
     ParseCommandLine(argc, argv);
 
     if (argc < 2 || GetArg("-?", "") == "1" || GetArg("-h", "") == "1" ||
-        GetArg("--help", "") == "1") {
+        GetArg("-help", "") == "1") {
         CommandLineHelp(cerr);
         return argc < 2 ? 1 : 0;
     }
-    if (!GetArg("-version", "").empty() || !GetArg("--version", "").empty()) {
+    if (!GetArg("-version", "").empty()) {
         CommandLineVersion();
         return 0;
     }
