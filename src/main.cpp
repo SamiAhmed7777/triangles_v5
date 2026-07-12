@@ -4544,7 +4544,14 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         bool fIBD = IsInitialBlockDownload();
         // During IBD: ask every non-client peer unconditionally to maximise
         // download sources. Post-IBD: use traditional height-check logic.
-        bool fShouldAsk = !pfrom->fClient && !pfrom->fOneShot &&
+        // During IBD we need to ask EVERY peer for blocks, including OneShot peers
+        // (those added via -addnode= and the hardcoded onion/i2p seed list). The previous
+        // `!pfrom->fOneShot` clause prevents getblocks/getheaders from being sent to these
+        // peers, which is exactly what fresh-from-genesis wallets need. Without this, a
+        // clean datadir syncs the first ~2000-4000 headers from one peer via the
+        // control-loop getheaders planner, then stalls because no version-handler
+        // getblocks was ever issued to fan out block requests.
+        bool fShouldAsk = !pfrom->fClient &&
             (fIBD ||
              pfrom->nStartingHeight > (nBestHeight - 144) ||
              pfrom->nStartingHeight > nBestHeight) &&
