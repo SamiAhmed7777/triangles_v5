@@ -803,6 +803,22 @@ void CSyncManager::Tick(CNode* pto, int nHighestInvWalk, const uint256& hashHigh
     if (nNowSec - pto->nLastIbdHeaderRequest >= nMinInterval)
         RequestRefill(pto, hashBestHeader, nMinInterval, "heartbeat");
 
+    // Compatibility escape hatch for pre-headers peers. The headers planner
+    // deliberately remains authoritative whenever it has queued or in-flight
+    // work; only an entirely empty planner periodically retries getblocks/inv.
+    // Reset PushGetBlocks' duplicate filter because a legacy peer may have
+    // ignored or lost the initial request sent during version processing.
+    if (ShouldRequestLegacyBlocks(
+            nPlannerDepth, nInFlight,
+            nNowSec - pto->nLastIbdBlockRequest))
+    {
+        pto->pindexLastGetBlocksBegin = nullptr;
+        pto->PushGetBlocks(pindexBest, uint256(0));
+        pto->nLastIbdBlockRequest = nNowSec;
+        printf("IBD-DIAG: empty headers planner; sent bounded legacy getblocks fallback to peer=%s height=%d\n",
+            pto->addr.ToString().c_str(), nBestHeight);
+    }
+
     // Bridge repair: we have a best header, but the download path can't reach
     // the connected chain — a linking header was lost (TTL/eviction/hole). Ask
     // this peer for headers with a locator anchored at the REAL chain tip so it
