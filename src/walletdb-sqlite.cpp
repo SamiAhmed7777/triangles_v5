@@ -71,6 +71,9 @@ bool SQLiteDatabase::Open(std::string& strError)
     // Durability + integrity pragmas. FULL fsync on commit — a wallet must not
     // lose a freshly-written key on power loss.
     if (!ExecOrError("PRAGMA synchronous = FULL;", strError)) return false;
+    if (!ExecOrError("PRAGMA journal_mode = DELETE;", strError)) return false;
+    if (!ExecOrError("PRAGMA secure_delete = ON;", strError)) return false;
+    if (!ExecOrError("PRAGMA temp_store = MEMORY;", strError)) return false;
     if (!ExecOrError("PRAGMA foreign_keys = ON;", strError)) return false;
     // Fail loudly instead of silently truncating an over-long blob.
     if (!ExecOrError("PRAGMA cell_size_check = ON;", strError)) return false;
@@ -156,6 +159,20 @@ bool SQLiteDatabase::Backup(const std::string& strDest) const
         if (pDest) sqlite3_close(pDest);
         return false;
     }
+#ifndef WIN32
+    {
+        std::error_code ec;
+        fs::permissions(strDest,
+                        fs::perms::owner_read | fs::perms::owner_write,
+                        fs::perm_options::replace, ec);
+        if (ec) {
+            printf("SQLiteDatabase::Backup cannot restrict destination permissions: %s\n",
+                   ec.message().c_str());
+            sqlite3_close(pDest);
+            return false;
+        }
+    }
+#endif
 
     sqlite3_backup* bk = sqlite3_backup_init(pDest, "main", m_db, "main");
     bool ok = false;

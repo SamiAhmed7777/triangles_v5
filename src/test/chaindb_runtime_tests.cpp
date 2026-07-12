@@ -125,6 +125,7 @@ bool fUseFastIndex = false;
 enum Checkpoints::CPMode CheckpointsMode = Checkpoints::STRICT;
 
 void StartShutdown() { /* no-op */ }
+void MarkShutdownFailure() { /* no-op for tests */ }
 
 namespace {
 

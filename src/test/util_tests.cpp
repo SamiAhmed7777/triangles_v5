@@ -168,6 +168,15 @@ BOOST_AUTO_TEST_CASE(util_WildcardMatch)
     BOOST_CHECK(WildcardMatch("abcdef", "a*f"));
     BOOST_CHECK(!WildcardMatch("abcdef", "a*x"));
     BOOST_CHECK(WildcardMatch("", "*"));
+
+    const std::string address = "192.0.2.44";
+    const std::string allow = "192.0.2.*";
+    BOOST_CHECK(WildcardMatch(std::string_view(address), std::string_view(allow)));
+
+    // A long non-match must not recurse once per wildcard/input combination.
+    const std::string longInput(4096, 'a');
+    const std::string longMask = "*a*a*a*a*a*a*a*a*a*a*b";
+    BOOST_CHECK(!WildcardMatch(std::string_view(longInput), std::string_view(longMask)));
 }
 
 BOOST_AUTO_TEST_CASE(util_FormatMoney)

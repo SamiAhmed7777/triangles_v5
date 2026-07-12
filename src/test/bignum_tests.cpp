@@ -1,125 +1,74 @@
 #include <boost/test/unit_test.hpp>
 #include <limits>
+#include <string>
 
 #include "bignum.h"
 #include "util.h"
 
 BOOST_AUTO_TEST_SUITE(bignum_tests)
 
-// Unfortunately there's no standard way of preventing a function from being
-// inlined, so we define a macro for it.
-//
-// You should use it like this:
-//   NOINLINE void function() {...}
 #if defined(__GNUC__)
-// This also works and will be defined for any compiler implementing GCC
-// extensions, such as Clang and ICC.
 #define NOINLINE __attribute__((noinline))
 #elif defined(_MSC_VER)
 #define NOINLINE __declspec(noinline)
 #else
-// We give out a warning because it impacts the correctness of one bignum test.
-#warning You should define NOINLINE for your compiler.
 #define NOINLINE
 #endif
 
-// For the following test case, it is useful to use additional tools.
-//
-// The simplest one to use is the compiler flag -ftrapv, which detects integer
-// overflows and similar errors. However, due to optimizations and compilers
-// taking advantage of undefined behavior sometimes it may not actually detect
-// anything.
-//
-// You can also use compiler-based stack protection to possibly detect possible
-// stack buffer overruns.
-//
-// For more accurate diagnostics, you can use an undefined arithmetic operation
-// detector such as the clang-based tool:
-//
-// "IOC: An Integer Overflow Checker for C/C++"
-//
-// Available at: http://embed.cs.utah.edu/ioc/
-//
-// It might also be useful to use Google's AddressSanitizer to detect
-// stack buffer overruns, which valgrind can't currently detect.
-
-// Let's force this code not to be inlined, in order to actually
-// test a generic version of the function. This increases the chance
-// that -ftrapv will detect overflows.
 NOINLINE void mysetint64(CBigNum& num, int64_t n)
 {
     num.setint64(n);
 }
 
-// For each number, we do 2 tests: one with inline code, then we reset the
-// value to 0, then the second one with a non-inlined function.
 BOOST_AUTO_TEST_CASE(bignum_setint64)
 {
-    int64_t n;
+    const int64_t values[] = {
+        0,
+        1,
+        -1,
+        5,
+        -5,
+        std::numeric_limits<int64_t>::min(),
+        std::numeric_limits<int64_t>::max(),
+    };
 
-    {
-        n = 0;
-        CBigNum num(n);
-        BOOST_CHECK(num.ToString() == "0");
+    for (int64_t value : values) {
+        CBigNum num(value);
+        BOOST_CHECK_EQUAL(num.ToString(), std::to_string(value));
         num.setulong(0);
-        BOOST_CHECK(num.ToString() == "0");
-        mysetint64(num, n);
-        BOOST_CHECK(num.ToString() == "0");
+        BOOST_CHECK_EQUAL(num.ToString(), "0");
+        mysetint64(num, value);
+        BOOST_CHECK_EQUAL(num.ToString(), std::to_string(value));
     }
-    {
-        n = 1;
-        CBigNum num(n);
-        BOOST_CHECK(num.ToString() == "1");
-        num.setulong(0);
-        BOOST_CHECK(num.ToString() == "0");
-        mysetint64(num, n);
-        BOOST_CHECK(num.ToString() == "1");
+}
+
+BOOST_AUTO_TEST_CASE(bignum_uint64_roundtrip_boundaries)
+{
+    const uint64_t values[] = {
+        0,
+        1,
+        0x7f,
+        0x80,
+        uint64_t{1} << 32,
+        uint64_t{1} << 63,
+        std::numeric_limits<uint64_t>::max(),
+    };
+
+    for (uint64_t value : values) {
+        CBigNum num(value);
+        BOOST_CHECK_EQUAL(num.getuint64(), value);
     }
-    {
-        n = -1;
-        CBigNum num(n);
-        BOOST_CHECK(num.ToString() == "-1");
-        num.setulong(0);
-        BOOST_CHECK(num.ToString() == "0");
-        mysetint64(num, n);
-        BOOST_CHECK(num.ToString() == "-1");
-    }
-    {
-        n = 5;
-        CBigNum num(n);
-        BOOST_CHECK(num.ToString() == "5");
-        num.setulong(0);
-        BOOST_CHECK(num.ToString() == "0");
-        mysetint64(num, n);
-        BOOST_CHECK(num.ToString() == "5");
-    }
-    {
-        n = -5;
-        CBigNum num(n);
-        BOOST_CHECK(num.ToString() == "-5");
-        num.setulong(0);
-        BOOST_CHECK(num.ToString() == "0");
-        mysetint64(num, n);
-        BOOST_CHECK(num.ToString() == "-5");
-    }
-    {
-        n = std::numeric_limits<int64_t>::min();
-        CBigNum num(n);
-        BOOST_CHECK(num.ToString() == "-9223372036854775808");
-        num.setulong(0);
-        BOOST_CHECK(num.ToString() == "0");
-        mysetint64(num, n);
-        BOOST_CHECK(num.ToString() == "-9223372036854775808");
-    }
-    {
-        n = std::numeric_limits<int64_t>::max();
-        CBigNum num(n);
-        BOOST_CHECK(num.ToString() == "9223372036854775807");
-        num.setulong(0);
-        BOOST_CHECK(num.ToString() == "0");
-        mysetint64(num, n);
-        BOOST_CHECK(num.ToString() == "9223372036854775807");
-    }
+
+    CBigNum negative(-1);
+    BOOST_CHECK_EQUAL(negative.getuint64(), uint64_t{1});
+}
+
+BOOST_AUTO_TEST_CASE(bignum_rejects_invalid_output_base)
+{
+    CBigNum value(42);
+    BOOST_CHECK_THROW(value.ToString(0), bignum_error);
+    BOOST_CHECK_THROW(value.ToString(1), bignum_error);
+    BOOST_CHECK_THROW(value.ToString(17), bignum_error);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

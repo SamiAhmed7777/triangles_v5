@@ -8,13 +8,14 @@
 #include <vector>
 #include <functional>
 #include <filesystem>
+#include <cstdint>
 
 namespace Bootstrap {
 
     // Bootstrap server configuration
-    static const char* DEFAULT_HOST = "bootstrap.cryptographic-triangles.org";
-    static const char* BASE_PATH = "/";
-    static const int PORT = 80;
+    inline constexpr const char* DEFAULT_HOST = "bootstrap.cryptographic-triangles.org";
+    inline constexpr const char* BASE_PATH = "/";
+    inline constexpr int PORT = 443;
 
     // Progress callback: (bytesDownloaded, totalBytes)
     typedef std::function<void(int64_t, int64_t)> ProgressCallback;
@@ -31,7 +32,8 @@ namespace Bootstrap {
                       ProgressCallback progressFn,
                       std::string& strError,
                       bool noProxy = false,
-                      int portOverride = -1);
+                      int portOverride = -1,
+                      int64_t maxDownloadBytes = 4LL * 1024 * 1024 * 1024);
 
     // Fetch the file manifest (list of relative paths to download)
     bool FetchFileList(const std::string& host,
@@ -45,6 +47,23 @@ namespace Bootstrap {
                            const std::filesystem::path& dataDir,
                            ProgressCallback progressFn,
                            std::string& strError);
+
+    // Advertised identity of a snapshot listed by manifest.json.
+    // The advertised SHA256 is accepted only when it matches the hash compiled
+    // into checkpoints.cpp for the same height.
+    struct RemoteSnapshot {
+        std::string filename;
+        std::string sha256;
+        int height;
+        std::string blockHash;
+    };
+
+    // Parse and validate the small, untrusted bootstrap manifest. This routine
+    // performs no network I/O and is exposed so malformed-input behavior can be
+    // covered by unit tests.
+    bool ParseRemoteSnapshotManifest(const std::string& manifestText,
+                                     RemoteSnapshot& snapshot,
+                                     std::string& strError);
 
     // Snapshot manifest (parsed from snapshot.manifest in bootstrap archive)
     struct SnapshotManifest {
@@ -72,27 +91,6 @@ namespace Bootstrap {
                               const std::filesystem::path& dataDir,
                               ProgressCallback progressFn,
                               std::string& strError);
-
-    // ===================================================================
-    // Trusted snapshot publisher — RPC-driven single-slot rotation
-    // ===================================================================
-    // Returns the currently active trusted publisher, or empty string if
-    // only the built-in fallback is in effect.
-    std::string GetActiveTrustedSnapshotPublisher();
-
-    // Atomically replaces the active publisher. The previous one is dropped
-    // immediately (Design A: single-slot, no grace period). Persists to
-    // <datadir>/snapshot-publisher.json so the choice survives restarts.
-    bool SetTrustedSnapshotPublisher(const std::string& addr,
-                                     std::string& strError);
-
-    // Clears the runtime override and reverts to the built-in fallback
-    // list. Also removes snapshot-publisher.json from disk.
-    bool UnsetTrustedSnapshotPublisher(std::string& strError);
-
-    // Called once at daemon startup (from init.cpp) to load any persisted
-    // runtime override.
-    void LoadTrustedSnapshotPublisher();
 
 } // namespace Bootstrap
 

@@ -42,6 +42,20 @@ namespace fs = std::filesystem;
 static uint64_t nAccountingEntryNumber = 0;
 extern bool fWalletUnlockStakingOnly;
 
+static bool RestrictWalletFilePermissions(const fs::path& path)
+{
+#ifdef WIN32
+    (void)path;
+    return true;
+#else
+    std::error_code ec;
+    fs::permissions(path,
+                    fs::perms::owner_read | fs::perms::owner_write,
+                    fs::perm_options::replace, ec);
+    return !ec;
+#endif
+}
+
 //
 // Auto-backup wallet before flush/rewrite operations.
 // Copies wallet.dat to wallet.dat.auto.bak if the backup is older than the wallet.
@@ -61,10 +75,17 @@ bool AutoBackupWallet(const fs::path& walletPath)
         }
         if (fs::exists(backupPath)) {
             uintmax_t backupSize = fs::file_size(backupPath);
-            if (backupSize == walletSize)
+            if (backupSize == walletSize) {
+                if (!RestrictWalletFilePermissions(backupPath))
+                    return false;
                 return true;
+            }
         }
         fs::copy_file(walletPath, backupPath, fs::copy_options::overwrite_existing);
+        if (!RestrictWalletFilePermissions(backupPath)) {
+            printf("AutoBackupWallet: could not restrict backup file permissions\n");
+            return false;
+        }
         printf("AutoBackupWallet: backed up wallet.dat (%llu bytes) to wallet.dat.auto.bak\n",
                (unsigned long long)walletSize);
         return true;
@@ -257,6 +278,10 @@ public:
     unsigned int nKeyMeta;
     bool fIsEncrypted;
     bool fAnyUnordered;
+    bool fHDPlainMnemonic;
+    bool fHDCryptedMnemonic;
+    bool fHDPlainPassphrase;
+    bool fHDCryptedPassphrase;
     int nFileVersion;
     std::vector<uint256> vWalletUpgrade;
 
@@ -264,6 +289,10 @@ public:
         nKeys = nCKeys = nKeyMeta = 0;
         fIsEncrypted = false;
         fAnyUnordered = false;
+        fHDPlainMnemonic = false;
+        fHDCryptedMnemonic = false;
+        fHDPlainPassphrase = false;
+        fHDCryptedPassphrase = false;
         nFileVersion = 0;
     }
 };
@@ -380,6 +409,7 @@ static bool ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssVa
                 return false;
             }
             pwallet->mapMasterKeys[nID] = kMasterKey;
+            wss.fIsEncrypted = true;
             if (pwallet->nMasterKeyMaxID < nID)
                 pwallet->nMasterKeyMaxID = nID;
         } else if (strType == "ckey") {
@@ -417,18 +447,22 @@ static bool ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssVa
         } else if (strType == "hdmnemonic") {
             std::string m;
             ssValue >> m;
+            wss.fHDPlainMnemonic = true;
             pwallet->LoadHDMnemonic(m);
         } else if (strType == "hdcmnemonic") {
             std::pair<uint256, std::vector<unsigned char>> cm;
             ssValue >> cm;
+            wss.fHDCryptedMnemonic = true;
             pwallet->LoadCryptedHDMnemonic(cm.first, cm.second);
         } else if (strType == "hdpassphrase") {
             std::string p;
             ssValue >> p;
+            wss.fHDPlainPassphrase = true;
             pwallet->LoadHDPassphrase(p);
         } else if (strType == "hdcpassphrase") {
             std::pair<uint256, std::vector<unsigned char>> cp;
             ssValue >> cp;
+            wss.fHDCryptedPassphrase = true;
             pwallet->LoadCryptedHDPassphrase(cp.first, cp.second);
         } else if (strType == "hdchain") {
             int64_t n;
@@ -512,6 +546,35 @@ DBErrors CWalletDB::LoadWallet(CWallet* pwallet)
 
     if (fNoncriticalErrors && result == DB_LOAD_OK)
         result = DB_NONCRITICAL_ERROR;
+
+    if (result != DB_LOAD_OK && result != DB_NONCRITICAL_ERROR)
+        return result;
+
+    const bool conflictingMnemonicRecords =
+        wss.fHDPlainMnemonic && wss.fHDCryptedMnemonic;
+    const bool conflictingPassphraseRecords =
+        wss.fHDPlainPassphrase && wss.fHDCryptedPassphrase;
+    const bool missingMnemonic =
+        (wss.fHDPlainPassphrase || wss.fHDCryptedPassphrase) &&
+        !(wss.fHDPlainMnemonic || wss.fHDCryptedMnemonic);
+    const bool mixedHDProtection =
+        (wss.fHDPlainMnemonic && wss.fHDCryptedPassphrase) ||
+        (wss.fHDCryptedMnemonic && wss.fHDPlainPassphrase);
+    const bool plaintextInEncryptedWallet =
+        wss.fIsEncrypted &&
+        (wss.nKeys != 0 || wss.fHDPlainMnemonic || wss.fHDPlainPassphrase);
+    const bool encryptedHDInPlainWallet =
+        !wss.fIsEncrypted &&
+        (wss.fHDCryptedMnemonic || wss.fHDCryptedPassphrase);
+    const bool encryptedKeysWithoutMasterKey =
+        wss.nCKeys != 0 && pwallet->mapMasterKeys.empty();
+
+    if (conflictingMnemonicRecords || conflictingPassphraseRecords ||
+        missingMnemonic || mixedHDProtection || plaintextInEncryptedWallet ||
+        encryptedHDInPlainWallet || encryptedKeysWithoutMasterKey) {
+        printf("Error reading wallet database: inconsistent encryption or HD seed records\n");
+        return DB_CORRUPT;
+    }
 
     if (result != DB_LOAD_OK)
         return result;
@@ -617,18 +680,55 @@ bool BackupWallet(const CWallet& wallet, const std::string& strDest)
     if (!wallet.fFileBacked)
         return false;
 
-    // For the SQLite backend, the database is a single file — copy directly
-    // (after a checkpoint flush to fold any -wal into the main file).
+    // SQLite's online backup API takes a consistent snapshot while the daemon
+    // is running; copying the live database file directly can produce a torn
+    // backup if a transaction commits during the copy.
     if (ResolveWalletDbKind() == WalletDbKind::SQLite) {
         fs::path pathSrc = GetDataDir() / wallet.strWalletFile;
         fs::path pathDest(strDest);
         if (fs::is_directory(pathDest))
             pathDest /= wallet.strWalletFile;
+
         std::error_code ec;
-        fs::copy_file(pathSrc, pathDest, fs::copy_options::overwrite_existing, ec);
+        if (fs::exists(pathDest, ec) && fs::equivalent(pathSrc, pathDest, ec)) {
+            printf("refusing to back up wallet.dat onto itself\n");
+            return false;
+        }
+        ec.clear();
+
+        const fs::path pathTemp = pathDest.string() +
+            strprintf(".tmp.%" PRId64, GetTimeMillis());
+        try {
+            CWalletDB walletdb(wallet.strWalletFile);
+            if (!walletdb.BackupDatabase(pathTemp.string())) {
+                fs::remove(pathTemp, ec);
+                return false;
+            }
+        } catch (const std::exception& e) {
+            printf("error backing up wallet.dat to %s - %s\n",
+                   pathDest.string().c_str(), e.what());
+            fs::remove(pathTemp, ec);
+            return false;
+        }
+        if (!RestrictWalletFilePermissions(pathTemp)) {
+            printf("error restricting wallet backup permissions: %s\n",
+                   pathDest.string().c_str());
+            fs::remove(pathTemp, ec);
+            return false;
+        }
+        fs::rename(pathTemp, pathDest, ec);
+#ifdef WIN32
         if (ec) {
-            printf("error copying wallet.dat to %s - %s\n",
+            ec.clear();
+            fs::remove(pathDest, ec);
+            ec.clear();
+            fs::rename(pathTemp, pathDest, ec);
+        }
+#endif
+        if (ec) {
+            printf("error finalizing wallet backup %s - %s\n",
                    pathDest.string().c_str(), ec.message().c_str());
+            fs::remove(pathTemp, ec);
             return false;
         }
         printf("copied wallet.dat to %s\n", pathDest.string().c_str());
@@ -653,6 +753,11 @@ bool BackupWallet(const CWallet& wallet, const std::string& strDest)
 
                 try {
                     fs::copy_file(pathSrc, pathDest, fs::copy_options::overwrite_existing);
+                    if (!RestrictWalletFilePermissions(pathDest)) {
+                        printf("error restricting wallet backup permissions: %s\n",
+                               pathDest.string().c_str());
+                        return false;
+                    }
                     printf("copied wallet.dat to %s\n", pathDest.string().c_str());
                     return true;
                 } catch (const fs::filesystem_error& e) {

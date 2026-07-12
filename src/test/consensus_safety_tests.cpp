@@ -339,6 +339,23 @@ BOOST_AUTO_TEST_CASE(pos_validation_skip_is_only_historical_fast_path)
     nAssumeValidThreshold = oldAssumeValid;
 }
 
+BOOST_AUTO_TEST_CASE(pos_block_signature_is_required_above_hardened_checkpoint)
+{
+    const int oldAssumeValid = nAssumeValidThreshold;
+    const int checkpointHeight = Checkpoints::GetTotalBlocksEstimate();
+
+    BOOST_CHECK(!IsBlockSignatureRequiredAtHeight(checkpointHeight));
+    BOOST_CHECK(IsBlockSignatureRequiredAtHeight(checkpointHeight + 1));
+
+    // A rolling performance threshold must never authorize unsigned live
+    // blocks, including when stale-tip state makes the node report IBD.
+    nAssumeValidThreshold = checkpointHeight + 100;
+    BOOST_CHECK(IsConsensusAssumeValidHeight(checkpointHeight + 50));
+    BOOST_CHECK(IsBlockSignatureRequiredAtHeight(checkpointHeight + 50));
+
+    nAssumeValidThreshold = oldAssumeValid;
+}
+
 // ─── Orphan block cap (P1 — DoS) ──────────────────────────────────────────
 // The cap on stored orphan blocks prevents an attacker from filling
 // memory with garbage. If too low, legitimate orphans are dropped. If

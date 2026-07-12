@@ -340,53 +340,14 @@ namespace Checkpoints
 
     bool SetCheckpointPrivKey(std::string strPrivKey)
     {
-        // Test signing a sync-checkpoint with genesis block
-        CSyncCheckpoint checkpoint;
-        checkpoint.hashCheckpoint = !fTestNet ? hashGenesisBlockOfficial : hashGenesisBlockTestNet;
-        CDataStream sMsg(SER_NETWORK, PROTOCOL_VERSION);
-        sMsg << (CUnsignedSyncCheckpoint)checkpoint;
-        checkpoint.vchMsg = std::vector<unsigned char>(sMsg.begin(), sMsg.end());
-
-        std::vector<unsigned char> vchPrivKey = ParseHex(strPrivKey);
-        CKey key;
-        key.SetPrivKey(CPrivKey(vchPrivKey.begin(), vchPrivKey.end())); // if key is not correct openssl may crash
-        if (!key.Sign(Hash(checkpoint.vchMsg.begin(), checkpoint.vchMsg.end()), checkpoint.vchSig))
-            return false;
-
-        // Test signing successful, proceed
-        CSyncCheckpoint::strMasterPrivKey = strPrivKey;
-        return true;
+        (void)strPrivKey;
+        return error("SetCheckpointPrivKey: synchronized checkpoints are disabled");
     }
 
     bool SendSyncCheckpoint(uint256 hashCheckpoint)
     {
-        CSyncCheckpoint checkpoint;
-        checkpoint.hashCheckpoint = hashCheckpoint;
-        CDataStream sMsg(SER_NETWORK, PROTOCOL_VERSION);
-        sMsg << (CUnsignedSyncCheckpoint)checkpoint;
-        checkpoint.vchMsg = std::vector<unsigned char>(sMsg.begin(), sMsg.end());
-
-        if (CSyncCheckpoint::strMasterPrivKey.empty())
-            return error("SendSyncCheckpoint: Checkpoint master key unavailable.");
-        std::vector<unsigned char> vchPrivKey = ParseHex(CSyncCheckpoint::strMasterPrivKey);
-        CKey key;
-        key.SetPrivKey(CPrivKey(vchPrivKey.begin(), vchPrivKey.end())); // if key is not correct openssl may crash
-        if (!key.Sign(Hash(checkpoint.vchMsg.begin(), checkpoint.vchMsg.end()), checkpoint.vchSig))
-            return error("SendSyncCheckpoint: Unable to sign checkpoint, check private key?");
-
-        if(!checkpoint.ProcessSyncCheckpoint(nullptr))
-        {
-            printf("WARNING: SendSyncCheckpoint: Failed to process checkpoint.\n");
-            return false;
-        }
-
-        // Relay checkpoint
-        {
-            LOCK(cs_vNodes);
-            for (CNode* pnode : vNodes)
-                checkpoint.RelayTo(pnode);
-        }
-        return true;
+        (void)hashCheckpoint;
+        return error("SendSyncCheckpoint: synchronized checkpoints are disabled");
     }
 
     // Is the sync-checkpoint outside maturity window?
@@ -407,13 +368,11 @@ const std::string CSyncCheckpoint::strMasterPubKey = "";
 std::string CSyncCheckpoint::strMasterPrivKey = "";
 
 // triangles: verify signature of sync-checkpoint message
-// Master key system disabled - checkpoint signatures are no longer required
+// The master-key system is disabled. Reject these legacy messages instead of
+// treating unsigned data as authenticated if a dispatcher is added later.
 bool CSyncCheckpoint::CheckSignature()
 {
-    // Deserialize the checkpoint data without signature verification
-    CDataStream sMsg(vchMsg, SER_NETWORK, PROTOCOL_VERSION);
-    sMsg >> *(CUnsignedSyncCheckpoint*)this;
-    return true;
+    return error("CSyncCheckpoint::CheckSignature: synchronized checkpoints are disabled");
 }
 
 // triangles: process synchronized checkpoint

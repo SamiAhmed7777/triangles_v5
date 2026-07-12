@@ -228,9 +228,6 @@ extern json_spirit::Value getblockbynumber(const json_spirit::Array& params, boo
 extern json_spirit::Value getcheckpoint(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value gencheckpoints(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value publishcheckpoint(const json_spirit::Array& params, bool fHelp);
-extern json_spirit::Value settrustedv2snapshotpublisher(const json_spirit::Array& params, bool fHelp);
-extern json_spirit::Value gettrustedv2snapshotpublisher(const json_spirit::Array& params, bool fHelp);
-extern json_spirit::Value unsettrustedv2snapshotpublisher(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value getchaintips(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value invalidateblock(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value reconsiderblock(const json_spirit::Array& params, bool fHelp);
@@ -258,5 +255,4 @@ extern json_spirit::Value smsgbuckets(const json_spirit::Array& params, bool fHe
 extern json_spirit::Value smsgbroadcast(const json_spirit::Array& params, bool fHelp);
 
 #endif
-
 

@@ -120,26 +120,18 @@ static bool VerifyDestFileHash(std::string& strErr)
         return false;
     }
     fflush(g_fetch.fpDest);
-    fseek(g_fetch.fpDest, 0, SEEK_SET);
 
-    SHA256_CTX ctx;
-    SHA256_Init(&ctx);
-
-    std::vector<unsigned char> buf(64 * 1024);
-    int64_t total = 0;
-    while (true) {
-        size_t n = fread(buf.data(), 1, buf.size(), g_fetch.fpDest);
-        if (n == 0) break;
-        SHA256_Update(&ctx, buf.data(), n);
-        total += (int64_t)n;
-    }
-    if (total != g_fetch.totalSize) {
-        strErr = strprintf("size mismatch: have %" PRId64 " want %" PRId64, total, g_fetch.totalSize);
+    std::error_code ec;
+    const int64_t total = static_cast<int64_t>(fs::file_size(g_fetch.destPath, ec));
+    if (ec || total != g_fetch.totalSize) {
+        strErr = strprintf("size mismatch: have %" PRId64 " want %" PRId64,
+                           ec ? -1 : total, g_fetch.totalSize);
         return false;
     }
 
     uint256 actual;
-    SHA256_Final((unsigned char*)&actual, &ctx);
+    if (!ComputeSnapshotFileHash(g_fetch.destPath, actual, strErr))
+        return false;
     if (actual != g_fetch.expectedFileHash) {
         strErr = "snapshot file hash mismatch";
         return false;
@@ -242,6 +234,46 @@ static void ReissueStalledChunks(int64_t timeoutMicros)
 }
 
 } // namespace
+
+bool ComputeSnapshotFileHash(const fs::path& path,
+                             uint256& fileHash,
+                             std::string& strError)
+{
+    FILE* file = fopen(path.string().c_str(), "rb");
+    if (!file) {
+        strError = "cannot open snapshot for hashing: " + path.string();
+        return false;
+    }
+
+    SHA256_CTX ctx;
+    SHA256_Init(&ctx);
+    std::vector<unsigned char> buffer(64 * 1024);
+    while (true) {
+        const size_t count = fread(buffer.data(), 1, buffer.size(), file);
+        if (count > 0)
+            SHA256_Update(&ctx, buffer.data(), count);
+        if (count < buffer.size()) {
+            if (ferror(file)) {
+                fclose(file);
+                strError = "failed reading snapshot while hashing";
+                return false;
+            }
+            break;
+        }
+    }
+    fclose(file);
+
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    SHA256_Final(digest, &ctx);
+    static const char hex[] = "0123456789abcdef";
+    std::string digestHex(SHA256_DIGEST_LENGTH * 2, '0');
+    for (size_t i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
+        digestHex[2 * i] = hex[(digest[i] >> 4) & 0x0f];
+        digestHex[2 * i + 1] = hex[digest[i] & 0x0f];
+    }
+    fileHash.SetHex(digestHex);
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // Public: TryFetchSnapshot
@@ -424,24 +456,12 @@ static bool ScanLocalSnapshot()
     int64_t sz = (int64_t)fs::file_size(g_localPath, ec);
     if (ec) return false;
 
-    // Hash the file once on first scan to confirm it matches the compiled-in
-    // snapshot hash. A node won't advertise NODE_SNAPSHOT if the local file is
-    // corrupt or for a different height.
-    FILE* f = fopen(g_localPath.string().c_str(), "rb");
-    if (!f) return false;
-
-    SHA256_CTX ctx;
-    SHA256_Init(&ctx);
-    std::vector<unsigned char> buf(64 * 1024);
-    while (true) {
-        size_t n = fread(buf.data(), 1, buf.size(), f);
-        if (n == 0) break;
-        SHA256_Update(&ctx, buf.data(), n);
-    }
-    fclose(f);
-
     uint256 actual;
-    SHA256_Final((unsigned char*)&actual, &ctx);
+    std::string hashError;
+    if (!ComputeSnapshotFileHash(g_localPath, actual, hashError)) {
+        printf("SnapshotNet: cannot hash local snapshot: %s\n", hashError.c_str());
+        return false;
+    }
     if (actual != expectedHash) {
         printf("SnapshotNet: local utxo-snapshot.bin hash mismatch — not advertising\n");
         return false;

@@ -151,6 +151,7 @@ int GetNumBlocksOfPeers();
 // assume-valid validation. This intentionally excludes operational IBD states
 // such as a stale tip; stale-tip IBD must not disable live PoS checks.
 [[nodiscard]] bool IsConsensusAssumeValidHeight(int nHeight);
+[[nodiscard]] bool IsBlockSignatureRequiredAtHeight(int nHeight);
 std::string GetWarnings(std::string strFor);
 bool GetTransaction(const uint256 &hash, CTransaction &tx, uint256 &hashBlock);
 uint256 WantedByOrphan(const CBlock* pblockOrphan);
