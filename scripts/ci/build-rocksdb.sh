@@ -21,6 +21,7 @@ set -euo pipefail
 
 ROCKSDB_VERSION="${ROCKSDB_VERSION:-8.9.1}"
 ROCKSDB_TAG="v${ROCKSDB_VERSION}"
+ROCKSDB_COMMIT="${ROCKSDB_COMMIT:-49ce8a1064dd1ad89117899839bf136365e49e79}"
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local}"
 JOBS="${JOBS:-$(nproc)}"
 
@@ -33,6 +34,12 @@ git clone --depth 1 --branch "${ROCKSDB_TAG}" \
     https://github.com/facebook/rocksdb.git "${WORKDIR}/rocksdb"
 
 cd "${WORKDIR}/rocksdb"
+
+ACTUAL_COMMIT="$(git rev-parse HEAD)"
+if [ "${ACTUAL_COMMIT}" != "${ROCKSDB_COMMIT}" ]; then
+    echo "!!! RocksDB ${ROCKSDB_TAG} resolved to ${ACTUAL_COMMIT}, expected ${ROCKSDB_COMMIT}" >&2
+    exit 1
+fi
 
 # Shared library only — Triangles links dynamically. Statically linking
 # rocksdb.a would also work but balloons the daemon binary by ~50 MB.
