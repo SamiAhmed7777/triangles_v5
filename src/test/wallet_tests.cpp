@@ -294,6 +294,57 @@ BOOST_AUTO_TEST_CASE(coin_selection_tests)
 
 BOOST_AUTO_TEST_SUITE_END()
 
+BOOST_AUTO_TEST_SUITE(wallet_security_tests)
+
+BOOST_AUTO_TEST_CASE(hd_key_generation_fails_when_seed_is_unavailable)
+{
+    CWallet wallet;
+    wallet.fHDEnabled = true;
+
+    BOOST_CHECK_THROW(wallet.GenerateNewKey(), std::runtime_error);
+    BOOST_CHECK_EQUAL(wallet.nHDChainIndex, 0);
+}
+
+BOOST_AUTO_TEST_CASE(memory_wallet_encryption_roundtrip_preserves_keys)
+{
+    CWallet wallet;
+    CKey original;
+    original.MakeNewKey(true);
+    BOOST_REQUIRE(wallet.AddKey(original));
+
+    SecureString passphrase;
+    passphrase.reserve(100);
+    passphrase = "correct horse battery staple";
+
+    const auto keypoolIt = mapArgs.find("-keypool");
+    const bool hadKeypoolArg = keypoolIt != mapArgs.end();
+    const std::string oldKeypoolArg = hadKeypoolArg ? keypoolIt->second : std::string();
+    mapArgs["-keypool"] = "0";
+    const bool encrypted = wallet.EncryptWallet(passphrase);
+    if (hadKeypoolArg)
+        mapArgs["-keypool"] = oldKeypoolArg;
+    else
+        mapArgs.erase("-keypool");
+
+    BOOST_REQUIRE(encrypted);
+    BOOST_CHECK(wallet.IsCrypted());
+    BOOST_CHECK(wallet.IsLocked());
+
+    SecureString wrongPassphrase;
+    wrongPassphrase.reserve(100);
+    wrongPassphrase = "wrong passphrase";
+    BOOST_CHECK(!wallet.Unlock(wrongPassphrase));
+    BOOST_CHECK(wallet.IsLocked());
+
+    BOOST_REQUIRE(wallet.Unlock(passphrase));
+    CKey recovered;
+    BOOST_REQUIRE(wallet.GetKey(original.GetPubKey().GetID(), recovered));
+    BOOST_CHECK(recovered.GetPubKey() == original.GetPubKey());
+    BOOST_CHECK(wallet.Lock());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
 // ----------------------------------------------------------------------------
 // AbandonTransaction tests
 //

@@ -141,12 +141,27 @@ inline SOCKET ConnectRPCSocket(const std::string& host, int port)
     return hSocket;
 }
 
-// Create listening sockets for the RPC server. When loopbackOnly is true the
-// server binds the loopback interface(s) only; otherwise it binds the wildcard
-// address(es). IPv4 and IPv6 are bound on separate sockets (IPV6_V6ONLY) so the
-// two never conflict. Returns the bound, listening sockets; empty + strError on
-// total failure (partial success — e.g. only IPv4 — is returned as success).
-inline std::vector<SOCKET> BindRPCSockets(int port, bool loopbackOnly, std::string& strError)
+inline bool SetRPCSocketTimeouts(SOCKET socket, int timeoutSeconds)
+{
+#ifdef WIN32
+    DWORD timeout = static_cast<DWORD>(timeoutSeconds * 1000);
+#else
+    struct timeval timeout;
+    timeout.tv_sec = timeoutSeconds;
+    timeout.tv_usec = 0;
+#endif
+    const char* value = reinterpret_cast<const char*>(&timeout);
+    const socklen_t valueSize = sizeof(timeout);
+    return ::setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, value, valueSize) == 0 &&
+           ::setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, value, valueSize) == 0;
+}
+
+// Create listening sockets for the RPC server. An empty bindAddress binds only
+// localhost. A non-empty value binds exactly that address; "*" explicitly
+// requests wildcard addresses. IPv4 and IPv6 use separate sockets when the
+// selected name resolves to both families.
+inline std::vector<SOCKET> BindRPCSockets(int port, const std::string& bindAddress,
+                                           std::string& strError)
 {
     std::vector<SOCKET> vListen;
 
@@ -154,13 +169,15 @@ inline std::vector<SOCKET> BindRPCSockets(int port, bool loopbackOnly, std::stri
     std::memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE;  // wildcard when node == nullptr
+
+    const bool wildcard = bindAddress == "*";
+    if (wildcard)
+        hints.ai_flags = AI_PASSIVE;
 
     struct addrinfo* res = nullptr;
     const std::string portStr = std::to_string(port);
-    // "localhost" resolves to the loopback addresses (127.0.0.1 and ::1);
-    // nullptr + AI_PASSIVE yields the wildcard addresses.
-    const char* node = loopbackOnly ? "localhost" : nullptr;
+    const char* node = wildcard ? nullptr :
+        (bindAddress.empty() ? "localhost" : bindAddress.c_str());
     int gai = ::getaddrinfo(node, portStr.c_str(), &hints, &res);
     if (gai != 0) {
         strError = std::string("RPC bind: getaddrinfo failed: ") + gai_strerror(gai);

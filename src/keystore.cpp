@@ -190,28 +190,49 @@ bool CCryptoKeyStore::GetPubKey(const CKeyID &address, CPubKey& vchPubKeyOut) co
     return false;
 }
 
+bool CCryptoKeyStore::PrepareKeyEncryption(CKeyingMaterial& vMasterKeyIn,
+                                           CryptedKeyMap& cryptedKeysOut) const
+{
+    LOCK(cs_KeyStore);
+    if (!mapCryptedKeys.empty() || IsCrypted())
+        return false;
+
+    cryptedKeysOut.clear();
+    for (const KeyMap::value_type& mKey : mapKeys)
+    {
+        CKey key;
+        if (!key.SetSecret(mKey.second.first, mKey.second.second))
+            return false;
+        const CPubKey vchPubKey = key.GetPubKey();
+        std::vector<unsigned char> vchCryptedSecret;
+        bool fCompressed;
+        if (!EncryptSecret(vMasterKeyIn, key.GetSecret(fCompressed),
+                           vchPubKey.GetHash(), vchCryptedSecret))
+            return false;
+        if (!cryptedKeysOut.emplace(vchPubKey.GetID(),
+                                    std::make_pair(vchPubKey,
+                                                   std::move(vchCryptedSecret))).second)
+            return false;
+    }
+    return cryptedKeysOut.size() == mapKeys.size();
+}
+
+bool CCryptoKeyStore::CommitKeyEncryption(CryptedKeyMap&& cryptedKeys)
+{
+    LOCK(cs_KeyStore);
+    if (!mapCryptedKeys.empty() || IsCrypted() || cryptedKeys.size() != mapKeys.size())
+        return false;
+
+    mapCryptedKeys = std::move(cryptedKeys);
+    mapKeys.clear();
+    fUseCrypto = true;
+    return true;
+}
+
 bool CCryptoKeyStore::EncryptKeys(CKeyingMaterial& vMasterKeyIn)
 {
-    {
-        LOCK(cs_KeyStore);
-        if (!mapCryptedKeys.empty() || IsCrypted())
-            return false;
-
-        fUseCrypto = true;
-        for (KeyMap::value_type& mKey : mapKeys)
-        {
-            CKey key;
-            if (!key.SetSecret(mKey.second.first, mKey.second.second))
-                return false;
-            const CPubKey vchPubKey = key.GetPubKey();
-            std::vector<unsigned char> vchCryptedSecret;
-            bool fCompressed;
-            if (!EncryptSecret(vMasterKeyIn, key.GetSecret(fCompressed), vchPubKey.GetHash(), vchCryptedSecret))
-                return false;
-            if (!AddCryptedKey(vchPubKey, vchCryptedSecret))
-                return false;
-        }
-        mapKeys.clear();
-    }
-    return true;
+    CryptedKeyMap cryptedKeys;
+    if (!PrepareKeyEncryption(vMasterKeyIn, cryptedKeys))
+        return false;
+    return CommitKeyEncryption(std::move(cryptedKeys));
 }

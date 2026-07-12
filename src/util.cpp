@@ -33,6 +33,8 @@
 
 #ifndef WIN32
 #include <execinfo.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 #include "util.h"
@@ -174,9 +176,10 @@ uint64_t GetRand(uint64_t nMax)
     // to give every possible output value an equal possibility
     uint64_t nRange = (std::numeric_limits<uint64_t>::max() / nMax) * nMax;
     uint64_t nRand = 0;
-    do
-        RAND_bytes((unsigned char*)&nRand, sizeof(nRand));
-    while (nRand >= nRange);
+    do {
+        if (RAND_bytes(reinterpret_cast<unsigned char*>(&nRand), sizeof(nRand)) != 1)
+            throw std::runtime_error("OpenSSL CSPRNG failure in GetRand");
+    } while (nRand >= nRange);
     return (nRand % nMax);
 }
 
@@ -188,7 +191,8 @@ int GetRandInt(int nMax)
 uint256 GetRandHash()
 {
     uint256 hash;
-    RAND_bytes((unsigned char*)&hash, sizeof(hash));
+    if (RAND_bytes(reinterpret_cast<unsigned char*>(&hash), sizeof(hash)) != 1)
+        throw std::runtime_error("OpenSSL CSPRNG failure in GetRandHash");
     return hash;
 }
 
@@ -616,7 +620,9 @@ bool SoftSetBoolArg(std::string_view strArg, bool fValue)
 
 bool WildcardMatch(std::string_view str, std::string_view mask)
 {
-    return WildcardMatch(std::string(str), std::string(mask));
+    const std::string strOwned(str);
+    const std::string maskOwned(mask);
+    return WildcardMatch(strOwned.c_str(), maskOwned.c_str());
 }
 
 
@@ -954,31 +960,27 @@ string DecodeBase32(const string& str)
 
 bool WildcardMatch(const char* psz, const char* mask)
 {
-    while (true)
-    {
-        switch (*mask)
-        {
-        case '\0':
-            return (*psz == '\0');
-        case '*':
-            return WildcardMatch(psz, mask+1) || (*psz && WildcardMatch(psz+1, mask));
-        case '?':
-            if (*psz == '\0')
-                return false;
-            break;
-        default:
-            if (*psz != *mask)
-                return false;
-            break;
-        }
-        psz++;
-        mask++;
-    }
-}
+    const char* star = nullptr;
+    const char* retry = nullptr;
 
-bool WildcardMatch(const string& str, const string& mask)
-{
-    return WildcardMatch(str.c_str(), mask.c_str());
+    while (*psz != '\0') {
+        if (*mask == '?' || *mask == *psz) {
+            ++psz;
+            ++mask;
+        } else if (*mask == '*') {
+            star = mask++;
+            retry = psz;
+        } else if (star != nullptr) {
+            mask = star + 1;
+            psz = ++retry;
+        } else {
+            return false;
+        }
+    }
+
+    while (*mask == '*')
+        ++mask;
+    return *mask == '\0';
 }
 
 
@@ -1145,7 +1147,20 @@ void ReadConfigFile(map<string, string>& mapSettingsRet,
     //   - Section headers ([section])
     // If any of those become needed, the actual conf syntax in
     // contrib/triangles.conf.example should be extended first.
-    std::ifstream streamConfig(GetConfigFile());
+    const std::filesystem::path configPath = GetConfigFile();
+#ifndef WIN32
+    struct stat configStat;
+    if (::lstat(configPath.string().c_str(), &configStat) == 0) {
+        if (!S_ISREG(configStat.st_mode) || configStat.st_uid != geteuid() ||
+            (configStat.st_mode & (S_IRWXG | S_IRWXO)) != 0) {
+            throw std::runtime_error(
+                "Refusing to read insecure configuration file " + configPath.string() +
+                "; it must be a regular file owned by the current user with no group or other access");
+        }
+    }
+#endif
+
+    std::ifstream streamConfig(configPath);
     if (!streamConfig.good())
         return; // No triangles.conf file is OK
 

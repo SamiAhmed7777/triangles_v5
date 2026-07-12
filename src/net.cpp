@@ -605,7 +605,8 @@ CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
     }
 
     if (fDebug) {
-         printf("ConnectNode(): pszDest: %s\n", pszDest);
+         printf("ConnectNode(): destination: %s\n",
+                pszDest ? pszDest : addrConnect.ToString().c_str());
     }
 
     /// debug print
@@ -1738,7 +1739,7 @@ void ThreadOnionSeed(void* parg)
 
     // Fetch dynamic seeds with retry — up to 4 attempts with increasing backoff.
     // This is the primary discovery mechanism — seeds.cryptographic-triangles.org
-    {
+    if (!GetBoolArg("-noseedurl", false)) {
         bool ok = false;
         int delays[] = {0, 30, 60, 120};
         for (int attempt = 0; attempt < 4 && !ok && !fShutdown; attempt++) {
@@ -1806,7 +1807,8 @@ void ThreadOnionSeed(void* parg)
             else
                 printf("ThreadOnionSeed: low outbound peers (%d), re-seeding...\n", nOutbound);
 
-            ThreadHTTPSeedFetch2(nullptr);
+            if (!GetBoolArg("-noseedurl", false))
+                ThreadHTTPSeedFetch2(nullptr);
 
             // Re-queue hardcoded seeds for direct connection
             for (unsigned int seed_idx = 0; strOnionSeed[seed_idx][0] != nullptr; seed_idx++) {
@@ -1891,6 +1893,12 @@ bool ThreadHTTPSeedFetch2(void* parg)
         seedPath = seedHost.substr(slashPos);
         seedHost = seedHost.substr(0, slashPos);
     }
+    if (seedHost.empty() || seedHost.find_first_of("\r\n") != std::string::npos ||
+        seedPath.empty() || seedPath[0] != '/' ||
+        seedPath.find_first_of("\r\n") != std::string::npos) {
+        printf("HTTPS seed fetch: invalid -seedurl value\n");
+        return false;
+    }
 
     printf("Fetching seed list from https://%s%s (via Tor)...\n", seedHost.c_str(), seedPath.c_str());
 
@@ -1929,7 +1937,14 @@ bool ThreadHTTPSeedFetch2(void* parg)
         }
 
         // Set SNI hostname (required for Caddy/Let's Encrypt)
-        SSL_set_tlsext_host_name(ssl, seedHost.c_str());
+        if (SSL_set_tlsext_host_name(ssl, seedHost.c_str()) != 1 ||
+            SSL_set1_host(ssl, seedHost.c_str()) != 1) {
+            printf("HTTPS seed fetch: failed to configure TLS hostname verification\n");
+            SSL_free(ssl);
+            SSL_CTX_free(ctx);
+            closesocket(hSocket);
+            return false;
+        }
         SSL_set_fd(ssl, (int)hSocket);
 
         int ret = SSL_connect(ssl);
@@ -1939,6 +1954,15 @@ bool ThreadHTTPSeedFetch2(void* parg)
             char errBuf[256];
             ERR_error_string_n(errCode, errBuf, sizeof(errBuf));
             printf("HTTPS seed fetch: TLS handshake failed (ssl_err=%d): %s\n", sslErr, errBuf);
+            SSL_free(ssl);
+            SSL_CTX_free(ctx);
+            closesocket(hSocket);
+            return false;
+        }
+        if (SSL_get_verify_result(ssl) != X509_V_OK) {
+            printf("HTTPS seed fetch: certificate verification failed for %s\n",
+                   seedHost.c_str());
+            SSL_shutdown(ssl);
             SSL_free(ssl);
             SSL_CTX_free(ctx);
             closesocket(hSocket);
@@ -1973,10 +1997,19 @@ bool ThreadHTTPSeedFetch2(void* parg)
         // Read response over TLS
         std::string response;
         char buf[4096];
+        static constexpr size_t MAX_SEED_RESPONSE_SIZE = 1024 * 1024;
         while (true) {
             int nBytes = SSL_read(ssl, buf, sizeof(buf));
             if (nBytes <= 0)
                 break;
+            if (response.size() + static_cast<size_t>(nBytes) > MAX_SEED_RESPONSE_SIZE) {
+                printf("HTTPS seed fetch: response exceeds 1 MiB limit\n");
+                SSL_shutdown(ssl);
+                SSL_free(ssl);
+                SSL_CTX_free(ctx);
+                closesocket(hSocket);
+                return false;
+            }
             response.append(buf, nBytes);
         }
 
@@ -2002,7 +2035,8 @@ bool ThreadHTTPSeedFetch2(void* parg)
 
         // Check status code
         std::string statusLine = response.substr(0, response.find("\r\n"));
-        if (statusLine.find("200") == std::string::npos) {
+        if (statusLine.size() < 12 || statusLine.compare(0, 7, "HTTP/1.") != 0 ||
+            statusLine.compare(9, 3, "200") != 0) {
             printf("HTTPS seed fetch: %s from %s\n", statusLine.c_str(), seedHost.c_str());
             return false;
         }

@@ -3555,6 +3555,8 @@ int SecureMsgValidate(unsigned char *pHeader, unsigned char *pPayload, uint32_t 
         memcpy(civ+i, &nonse, 4);
     
     HMAC_CTX *ctx = HMAC_CTX_new();
+    if (ctx == nullptr)
+        return 1;
 
     unsigned int nBytes;
     if (!HMAC_Init_ex(ctx, &civ[0], 32, EVP_sha256(), nullptr)
@@ -3571,7 +3573,7 @@ int SecureMsgValidate(unsigned char *pHeader, unsigned char *pPayload, uint32_t 
     {
         if (sha256Hash[31] == 0
             && sha256Hash[30] == 0
-            && (~(sha256Hash[29]) & ((1<<0) || (1<<1) || (1<<2)) ))
+            && (sha256Hash[29] & 1U) == 0)
         {
             if (fDebugSmsg)
                 printf("Hash Valid.\n");
@@ -3614,6 +3616,8 @@ int SecureMsgSetHash(unsigned char *pHeader, unsigned char *pPayload, uint32_t n
     
     bool found = false;
     HMAC_CTX *ctx = HMAC_CTX_new();
+    if (ctx == nullptr)
+        return 1;
 
     uint32_t nonse = 0;
 
@@ -3655,7 +3659,7 @@ int SecureMsgSetHash(unsigned char *pHeader, unsigned char *pPayload, uint32_t n
         
         if (sha256Hash[31] == 0
             && sha256Hash[30] == 0
-            && (~(sha256Hash[29]) & ((1<<0) || (1<<1) || (1<<2)) ))
+            && (sha256Hash[29] & 1U) == 0)
         //    && sha256Hash[29] == 0)
         {
             found = true;
@@ -3794,7 +3798,10 @@ int SecureMsgEncrypt(SecureMessage& smsg, std::string& addressFrom, std::string&
     
     // -- Generate 16 random bytes as IV.
     RandAddSeedPerfmon();
-    RAND_bytes(&smsg.iv[0], 16);
+    if (RAND_bytes(&smsg.iv[0], 16) != 1) {
+        printf("Could not generate a secure message IV.\n");
+        return 1;
+    }
     
     
     // -- Generate a new random EC key pair with private key called r and public key called R.
@@ -3959,14 +3966,16 @@ int SecureMsgEncrypt(SecureMessage& smsg, std::string& addressFrom, std::string&
     unsigned int nBytes = 32;
     HMAC_CTX *ctx = HMAC_CTX_new();
 
-    if (!HMAC_Init_ex(ctx, &key_m[0], 32, EVP_sha256(), nullptr)
+    if (ctx == nullptr
+        || !HMAC_Init_ex(ctx, &key_m[0], 32, EVP_sha256(), nullptr)
         || !HMAC_Update(ctx, (unsigned char*) &smsg.timestamp, sizeof(smsg.timestamp))
         || !HMAC_Update(ctx, &vchCiphertext[0], vchCiphertext.size())
         || !HMAC_Final(ctx, smsg.mac, &nBytes)
         || nBytes != 32)
         fHmacOk = false;
 
-    HMAC_CTX_free(ctx);
+    if (ctx != nullptr)
+        HMAC_CTX_free(ctx);
     
     if (!fHmacOk)
     {
@@ -4269,14 +4278,16 @@ int SecureMsgDecrypt(bool fTestOnly, std::string& address, unsigned char *pHeade
     unsigned int nBytes = 32;
     HMAC_CTX *ctx = HMAC_CTX_new();
 
-    if (!HMAC_Init_ex(ctx, &key_m[0], 32, EVP_sha256(), nullptr)
+    if (ctx == nullptr
+        || !HMAC_Init_ex(ctx, &key_m[0], 32, EVP_sha256(), nullptr)
         || !HMAC_Update(ctx, (unsigned char*) &psmsg->timestamp, sizeof(psmsg->timestamp))
         || !HMAC_Update(ctx, pPayload, nPayload)
         || !HMAC_Final(ctx, MAC, &nBytes)
         || nBytes != 32)
         fHmacOk = false;
 
-    HMAC_CTX_free(ctx);
+    if (ctx != nullptr)
+        HMAC_CTX_free(ctx);
     
     if (!fHmacOk)
     {
@@ -4430,4 +4441,3 @@ int SecureMsgDecrypt(bool fTestOnly, std::string& address, SecureMessage& smsg, 
 {
     return SecureMsgDecrypt(fTestOnly, address, &smsg.hash[0], smsg.pPayload, smsg.nPayload, msg);
 };
-

@@ -123,8 +123,10 @@ public:
             return false;
         if (fEraseUnencryptedKey)
         {
-            Erase(std::make_pair(std::string("key"), vchPubKey.Raw()));
-            Erase(std::make_pair(std::string("wkey"), vchPubKey.Raw()));
+            if (!Erase(std::make_pair(std::string("key"), vchPubKey.Raw())))
+                return false;
+            if (!Erase(std::make_pair(std::string("wkey"), vchPubKey.Raw())))
+                return false;
         }
         return true;
     }
@@ -166,13 +168,13 @@ public:
 
     bool WriteHDMnemonic(const std::string& mnemonic) {
         nWalletDBUpdated++;
-        Erase(std::string("hdcmnemonic"));
-        return Write(std::string("hdmnemonic"), mnemonic);
+        const bool erased = Erase(std::string("hdcmnemonic"));
+        return erased && Write(std::string("hdmnemonic"), mnemonic);
     }
     bool WriteHDCryptedMnemonic(const uint256& iv, const std::vector<unsigned char>& cipher) {
         nWalletDBUpdated++;
-        Erase(std::string("hdmnemonic"));
-        return Write(std::string("hdcmnemonic"), std::make_pair(iv, cipher));
+        const bool erased = Erase(std::string("hdmnemonic"));
+        return erased && Write(std::string("hdcmnemonic"), std::make_pair(iv, cipher));
     }
     bool WriteHDChain(int64_t nIndex) {
         nWalletDBUpdated++;
@@ -183,19 +185,19 @@ public:
     // means no passphrase (legacy wallets and the common case).
     bool WriteHDPassphrase(const std::string& passphrase) {
         nWalletDBUpdated++;
-        Erase(std::string("hdcpassphrase"));
-        return Write(std::string("hdpassphrase"), passphrase);
+        const bool erased = Erase(std::string("hdcpassphrase"));
+        return erased && Write(std::string("hdpassphrase"), passphrase);
     }
     bool WriteHDCryptedPassphrase(const uint256& iv, const std::vector<unsigned char>& cipher) {
         nWalletDBUpdated++;
-        Erase(std::string("hdpassphrase"));
-        return Write(std::string("hdcpassphrase"), std::make_pair(iv, cipher));
+        const bool erased = Erase(std::string("hdpassphrase"));
+        return erased && Write(std::string("hdcpassphrase"), std::make_pair(iv, cipher));
     }
     bool EraseHDPassphrase() {
         nWalletDBUpdated++;
-        Erase(std::string("hdpassphrase"));
-        Erase(std::string("hdcpassphrase"));
-        return true;
+        const bool erasedPlain = Erase(std::string("hdpassphrase"));
+        const bool erasedCrypted = Erase(std::string("hdcpassphrase"));
+        return erasedPlain && erasedCrypted;
     }
 
     bool ReadPool(int64_t nPool, CKeyPool& keypool)
@@ -249,6 +251,16 @@ public:
     {
         nVersion = 0;
         return Read(std::string("version"), nVersion);
+    }
+
+    bool RewriteDatabase(const char* pszSkip = nullptr)
+    {
+        return m_database && m_database->Rewrite(pszSkip);
+    }
+
+    bool BackupDatabase(const std::string& destination) const
+    {
+        return m_database && m_database->Backup(destination);
     }
 
     bool ReadAccount(const std::string& strAccount, CAccount& account);

@@ -14,6 +14,8 @@
 #include <openssl/opensslv.h>
 
 #include <algorithm>
+#include <cctype>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -69,16 +71,10 @@ public:
             throw bignum_error("CBigNum::CBigNum() : BN_new() returned NULL");
     }
 
-    CBigNum(const CBigNum& b)
+    CBigNum(const CBigNum& b) : CBigNum()
     {
-        pbn = BN_new();
-        if (pbn == nullptr)
-            throw bignum_error("CBigNum::CBigNum(const CBigNum&) : BN_new() returned NULL");
         if (!BN_copy(pbn, b.pbn))
-        {
-            BN_clear_free(pbn);
             throw bignum_error("CBigNum::CBigNum(const CBigNum&) : BN_copy failed");
-        }
     }
 
     CBigNum& operator=(const CBigNum& b)
@@ -99,21 +95,20 @@ public:
     const BIGNUM* get() const { return pbn; }
 
     //CBigNum(char n) is not portable.  Use 'signed char' or 'unsigned char'.
-    CBigNum(signed char n)        { pbn = BN_new(); if (n >= 0) setulong(n); else setint64(n); }
-    CBigNum(short n)              { pbn = BN_new(); if (n >= 0) setulong(n); else setint64(n); }
-    CBigNum(int n)                { pbn = BN_new(); if (n >= 0) setulong(n); else setint64(n); }
-    CBigNum(long n)               { pbn = BN_new(); if (n >= 0) setulong(n); else setint64(n); }
-    CBigNum(long long n)          { pbn = BN_new(); setint64(n); }
-    CBigNum(unsigned char n)      { pbn = BN_new(); setulong(n); }
-    CBigNum(unsigned short n)     { pbn = BN_new(); setulong(n); }
-    CBigNum(unsigned int n)       { pbn = BN_new(); setulong(n); }
-    CBigNum(unsigned long n)      { pbn = BN_new(); setulong(n); }
-    CBigNum(unsigned long long n) { pbn = BN_new(); setuint64(n); }
-    explicit CBigNum(uint256 n)   { pbn = BN_new(); setuint256(n); }
+    CBigNum(signed char n)        : CBigNum() { if (n >= 0) setulong(n); else setint64(n); }
+    CBigNum(short n)              : CBigNum() { if (n >= 0) setulong(n); else setint64(n); }
+    CBigNum(int n)                : CBigNum() { if (n >= 0) setulong(n); else setint64(n); }
+    CBigNum(long n)               : CBigNum() { if (n >= 0) setulong(n); else setint64(n); }
+    CBigNum(long long n)          : CBigNum() { setint64(n); }
+    CBigNum(unsigned char n)      : CBigNum() { setulong(n); }
+    CBigNum(unsigned short n)     : CBigNum() { setulong(n); }
+    CBigNum(unsigned int n)       : CBigNum() { setulong(n); }
+    CBigNum(unsigned long n)      : CBigNum() { setulong(n); }
+    CBigNum(unsigned long long n) : CBigNum() { setuint64(n); }
+    explicit CBigNum(uint256 n)   : CBigNum() { setuint256(n); }
 
-    explicit CBigNum(const std::vector<unsigned char>& vch)
+    explicit CBigNum(const std::vector<unsigned char>& vch) : CBigNum()
     {
-        pbn = BN_new();
         setvch(vch);
     }
 
@@ -216,21 +211,23 @@ public:
         pch[1] = (nSize >> 16) & 0xff;
         pch[2] = (nSize >> 8) & 0xff;
         pch[3] = (nSize) & 0xff;
-        BN_mpi2bn(pch, p - pch, pbn);
+        if (BN_mpi2bn(pch, static_cast<int>(p - pch), pbn) == nullptr)
+            throw bignum_error("CBigNum::setint64() : BN_mpi2bn failed");
     }
 
-    uint64_t getuint64()
+    uint64_t getuint64() const
     {
-        unsigned int nSize = BN_bn2mpi(pbn, nullptr);
-        if (nSize < 4)
+        const int nSize = BN_bn2mpi(pbn, nullptr);
+        if (nSize <= 4)
             return 0;
-        std::vector<unsigned char> vch(nSize);
-        BN_bn2mpi(pbn, &vch[0]);
+        std::vector<unsigned char> vch(static_cast<size_t>(nSize));
+        if (BN_bn2mpi(pbn, vch.data()) != nSize)
+            throw bignum_error("CBigNum::getuint64() : BN_bn2mpi failed");
         if (vch.size() > 4)
             vch[4] &= 0x7f;
         uint64_t n = 0;
-        for (unsigned int i = 0, j = vch.size()-1; i < sizeof(n) && j >= 4; i++, j--)
-            ((unsigned char*)&n)[i] = vch[j];
+        for (size_t i = 0; i < sizeof(n) && i + 4 < vch.size(); ++i)
+            n |= static_cast<uint64_t>(vch[vch.size() - 1 - i]) << (8 * i);
         return n;
     }
 
@@ -258,7 +255,8 @@ public:
         pch[1] = (nSize >> 16) & 0xff;
         pch[2] = (nSize >> 8) & 0xff;
         pch[3] = (nSize) & 0xff;
-        BN_mpi2bn(pch, p - pch, pbn);
+        if (BN_mpi2bn(pch, static_cast<int>(p - pch), pbn) == nullptr)
+            throw bignum_error("CBigNum::setuint64() : BN_mpi2bn failed");
     }
 
     void setuint256(uint256 n)
@@ -286,29 +284,33 @@ public:
         pch[1] = (nSize >> 16) & 0xff;
         pch[2] = (nSize >> 8) & 0xff;
         pch[3] = (nSize >> 0) & 0xff;
-        BN_mpi2bn(pch, p - pch, pbn);
+        if (BN_mpi2bn(pch, static_cast<int>(p - pch), pbn) == nullptr)
+            throw bignum_error("CBigNum::setuint256() : BN_mpi2bn failed");
     }
 
     uint256 getuint256() const
     {
-        unsigned int nSize = BN_bn2mpi(pbn, nullptr);
-        if (nSize < 4)
+        const int mpiSize = BN_bn2mpi(pbn, nullptr);
+        if (mpiSize <= 4)
             return 0;
-        std::vector<unsigned char> vch(nSize);
-        BN_bn2mpi(pbn, &vch[0]);
-        if (vch.size() > 4)
-            vch[4] &= 0x7f;
+        std::vector<unsigned char> vch(static_cast<size_t>(mpiSize));
+        if (BN_bn2mpi(pbn, vch.data()) != mpiSize)
+            throw bignum_error("CBigNum::getuint256() : BN_bn2mpi failed");
+        vch[4] &= 0x7f;
         uint256 n = 0;
-        for (unsigned int i = 0, j = vch.size()-1; i < sizeof(n) && j >= 4; i++, j--)
-            ((unsigned char*)&n)[i] = vch[j];
+        for (size_t i = 0; i < sizeof(n) && i + 4 < vch.size(); ++i)
+            reinterpret_cast<unsigned char*>(&n)[i] = vch[vch.size() - 1 - i];
         return n;
     }
 
 
     void setvch(const std::vector<unsigned char>& vch)
     {
+        if (vch.size() > static_cast<size_t>(std::numeric_limits<int>::max() - 4))
+            throw bignum_error("CBigNum::setvch() : input is too large");
+
         std::vector<unsigned char> vch2(vch.size() + 4);
-        unsigned int nSize = vch.size();
+        const uint32_t nSize = static_cast<uint32_t>(vch.size());
         // BIGNUM's byte stream format expects 4 bytes of
         // big endian size data info at the front
         vch2[0] = (nSize >> 24) & 0xff;
@@ -316,20 +318,25 @@ public:
         vch2[2] = (nSize >> 8) & 0xff;
         vch2[3] = (nSize >> 0) & 0xff;
         // swap data to big endian
-        reverse_copy(vch.begin(), vch.end(), vch2.begin() + 4);
-        BN_mpi2bn(&vch2[0], vch2.size(), pbn);
+        for (size_t i = 0; i < vch.size(); ++i)
+            vch2.at(i + 4) = vch.at(vch.size() - 1 - i);
+        if (BN_mpi2bn(vch2.data(), static_cast<int>(vch2.size()), pbn) == nullptr)
+            throw bignum_error("CBigNum::setvch() : BN_mpi2bn failed");
     }
 
     std::vector<unsigned char> getvch() const
     {
-        unsigned int nSize = BN_bn2mpi(pbn, nullptr);
-        if (nSize <= 4)
+        const int mpiSize = BN_bn2mpi(pbn, nullptr);
+        if (mpiSize <= 4)
             return std::vector<unsigned char>();
-        std::vector<unsigned char> vch(nSize);
-        BN_bn2mpi(pbn, &vch[0]);
-        vch.erase(vch.begin(), vch.begin() + 4);
-        reverse(vch.begin(), vch.end());
-        return vch;
+        std::vector<unsigned char> mpi(static_cast<size_t>(mpiSize));
+        if (BN_bn2mpi(pbn, mpi.data()) != mpiSize)
+            throw bignum_error("CBigNum::getvch() : BN_bn2mpi failed");
+
+        std::vector<unsigned char> result(static_cast<size_t>(mpiSize - 4));
+        for (size_t i = 0; i < result.size(); ++i)
+            result.at(i) = mpi.at(mpi.size() - 1 - i);
+        return result;
     }
 
     CBigNum& SetCompact(unsigned int nCompact)
@@ -340,16 +347,20 @@ public:
         if (nSize >= 1) vch[4] = (nCompact >> 16) & 0xff;
         if (nSize >= 2) vch[5] = (nCompact >> 8) & 0xff;
         if (nSize >= 3) vch[6] = (nCompact >> 0) & 0xff;
-        BN_mpi2bn(&vch[0], vch.size(), pbn);
+        if (BN_mpi2bn(vch.data(), static_cast<int>(vch.size()), pbn) == nullptr)
+            throw bignum_error("CBigNum::SetCompact() : BN_mpi2bn failed");
         return *this;
     }
 
     unsigned int GetCompact() const
     {
-        unsigned int nSize = BN_bn2mpi(pbn, nullptr);
-        std::vector<unsigned char> vch(nSize);
-        nSize -= 4;
-        BN_bn2mpi(pbn, &vch[0]);
+        const int mpiSize = BN_bn2mpi(pbn, nullptr);
+        if (mpiSize <= 4)
+            return 0;
+        std::vector<unsigned char> vch(static_cast<size_t>(mpiSize));
+        if (BN_bn2mpi(pbn, vch.data()) != mpiSize)
+            throw bignum_error("CBigNum::GetCompact() : BN_bn2mpi failed");
+        const unsigned int nSize = static_cast<unsigned int>(mpiSize - 4);
         unsigned int nCompact = nSize << 24;
         if (nSize >= 1) nCompact |= (vch[4] << 16);
         if (nSize >= 2) nCompact |= (vch[5] << 8);
@@ -361,7 +372,7 @@ public:
     {
         // skip 0x
         const char* psz = str.c_str();
-        while (isspace(*psz))
+        while (isspace(static_cast<unsigned char>(*psz)))
             psz++;
         bool fNegative = false;
         if (*psz == '-')
@@ -369,15 +380,15 @@ public:
             fNegative = true;
             psz++;
         }
-        if (psz[0] == '0' && tolower(psz[1]) == 'x')
+        if (psz[0] == '0' && tolower(static_cast<unsigned char>(psz[1])) == 'x')
             psz += 2;
-        while (isspace(*psz))
+        while (isspace(static_cast<unsigned char>(*psz)))
             psz++;
 
         // hex string to bignum
         static constexpr signed char phexdigit[256] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,1,2,3,4,5,6,7,8,9,0,0,0,0,0,0, 0,0xa,0xb,0xc,0xd,0xe,0xf,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0xa,0xb,0xc,0xd,0xe,0xf,0,0,0,0,0,0,0,0,0 };
         *this = 0;
-        while (isxdigit(*psz))
+        while (isxdigit(static_cast<unsigned char>(*psz)))
         {
             *this <<= 4;
             int n = phexdigit[(unsigned char)*psz++];
@@ -389,6 +400,8 @@ public:
 
     std::string ToString(int nBase=10) const
     {
+        if (nBase < 2 || nBase > 16)
+            throw bignum_error("CBigNum::ToString() : base must be in [2, 16]");
         CAutoBN_CTX pctx;
         CBigNum bnBase = nBase;
         CBigNum bn0 = 0;

@@ -30,8 +30,11 @@
 #include "addressindex.h"
 #include "chaindb_migrate.h"
 #include <memory>
+#include <atomic>
+#include <cstdlib>
 #include <thread>
 #include <vector>
+#include <cerrno>
 
 // Forward declaration: InitError / InitWarning are defined further down
 // in this file but referenced by AppInit (line ~423) before the definition.
@@ -66,6 +69,8 @@ using namespace std;
 namespace fs = std::filesystem;
 
 namespace {
+std::atomic<int> g_shutdownExitCode{EXIT_SUCCESS};
+
 // Acquire an exclusive, non-blocking advisory lock on the datadir .lock file
 // and hold it for the lifetime of the process. Replaces
 // boost::interprocess::file_lock. The descriptor/handle is intentionally never
@@ -96,7 +101,31 @@ bool LockDataDirectory(const std::filesystem::path& pathLockFile)
     return true; // fd held until process exit
 #endif
 }
+
+#ifndef WIN32
+bool EnsureOwnerOnlyFile(const std::filesystem::path& path, std::string& error)
+{
+    struct stat fileStat;
+    if (::lstat(path.string().c_str(), &fileStat) != 0)
+        return errno == ENOENT;
+    if (!S_ISREG(fileStat.st_mode) || fileStat.st_uid != geteuid()) {
+        error = path.string() + " must be a regular file owned by the daemon user";
+        return false;
+    }
+    if ((fileStat.st_mode & (S_IRWXG | S_IRWXO)) != 0 &&
+        ::chmod(path.string().c_str(), S_IRUSR | S_IWUSR) != 0) {
+        error = "could not restrict permissions on " + path.string();
+        return false;
+    }
+    return true;
+}
+#endif
 } // namespace
+
+void MarkShutdownFailure()
+{
+    g_shutdownExitCode.store(EXIT_FAILURE, std::memory_order_relaxed);
+}
 
 std::unique_ptr<CWallet> pwalletMain;
 CClientUIInterface uiInterface;
@@ -144,7 +173,8 @@ void ExitTimeout(void* parg)
 {
 #ifdef WIN32
     MilliSleep(5000);
-    ExitProcess(0);
+    ExitProcess(static_cast<UINT>(
+        g_shutdownExitCode.load(std::memory_order_relaxed)));
 #endif
 }
 
@@ -421,7 +451,11 @@ void Shutdown(void* parg)
 //        MakeChainDB()->Close();
         bitdb.Flush(false);
         bitdb.Flush(true);
-        fs::remove(GetPidFile());
+        std::error_code pidFileError;
+        fs::remove(GetPidFile(), pidFileError);
+        if (pidFileError)
+            printf("Warning: could not remove PID file: %s\n",
+                   pidFileError.message().c_str());
         UnregisterWallet(pwalletMain.get());
         pwalletMain.reset();
         // DB is flushed and wallet saved - safe to force-exit if something hangs
@@ -431,7 +465,7 @@ void Shutdown(void* parg)
         fExit = true;
 #ifndef QT_GUI
         // ensure non-UI client gets exited here, but let Triangles-Qt reach 'return 0;' in triangles.cpp
-        exit(0);
+        exit(g_shutdownExitCode.load(std::memory_order_relaxed));
 #endif
     }
     else
@@ -528,8 +562,10 @@ bool AppInit(int argc, char* argv[])
     } catch (...) {
         PrintException(nullptr, "AppInit()");
     }
-    if (!fRet)
+    if (!fRet) {
+        MarkShutdownFailure();
         Shutdown(nullptr);
+    }
     return fRet;
 }
 
@@ -610,8 +646,8 @@ std::string HelpMessage()
         //"  -onlynet=<net>         " + _("Only connect to nodes in network <net> (IPv4, IPv6 or Tor)") + "\n" +
         //"  -discover              " + _("Discover own IP address (default: 1 when listening and no -externalip)") + "\n" +
         //"  -irc                   " + _("Find peers using internet relay chat (default: 0)") + "\n" +
-        //"  -listen                " + _("Accept connections from outside (default: 1 if no -proxy or -connect)") + "\n" +
-        //"  -bind=<addr>           " + _("Bind to given address. Use [host]:port notation for IPv6") + "\n" +
+        "  -listen                " + _("Accept inbound peer connections (default: 1 unless -proxy or -connect is set)") + "\n" +
+        "  -bind=<addr>           " + _("Bind inbound peers to this address. Use [host]:port notation for IPv6") + "\n" +
         //  -dnsseed               " + _("Find peers using DNS lookup (default: 1)") + "\n" +
         "  -staking               " + _("Stake your coins to support network and gain reward (default: 1)") + "\n" +
         "  -synctime              " + _("Sync time with other nodes. Disable if time on your system is precise e.g. syncing with NTP (default: 1)") + "\n" +
@@ -652,8 +688,11 @@ std::string HelpMessage()
 #endif
         "  -rpcuser=<user>        " + _("Username for JSON-RPC connections") + "\n" +
         "  -rpcpassword=<pw>      " + _("Password for JSON-RPC connections") + "\n" +
-        "  -rpcport=<port>        " + _("Listen for JSON-RPC connections on <port> (default: 19111 or testnet: 19112)") + "\n" +
-        "  -rpcallowip=<ip>       " + _("Allow JSON-RPC connections from specified IP address") + "\n" +
+        "  -rpcport=<port>        " + _("Listen for JSON-RPC connections on <port> (default: 19112 or testnet: 19111)") + "\n" +
+        "  -rpcbind=<addr>        " + _("Bind JSON-RPC to this address (default: loopback only; use * explicitly for all interfaces)") + "\n" +
+        "  -rpcallowip=<ip>       " + _("Allow JSON-RPC clients matching this address pattern; does not change the bind address") + "\n" +
+        "  -rpcallowmethod=<name> " + _("Allow only this JSON-RPC method (repeat for each method; default: all)") + "\n" +
+        "  -rpcservertimeout=<n>  " + _("RPC socket read/write timeout in seconds (default: 30, range: 1-600)") + "\n" +
         "  -rpcconnect=<ip>       " + _("Send commands to node running on <ip> (default: 127.0.0.1)") + "\n" +
         "  -blocknotify=<cmd>     " + _("Execute command when the best block changes (%s in cmd is replaced by block hash)") + "\n" +
         "  -walletnotify=<cmd>    " + _("Execute command when a wallet transaction changes (%s in cmd is replaced by TxID)") + "\n" +
@@ -1120,24 +1159,19 @@ bool AppInit2()
     fUseUPnP = GetBoolArg("-upnp", USE_UPNP);
 #endif
     bool fBound = false;
-    if (true) {
-        if (true) {
-            do {
-                // W1: Bind to all interfaces so external peers can connect.
-                //
-                // The previous code went through Lookup("0.0.0.0", ...) which
-                // hands the literal string to getaddrinfo(). On Windows that
-                // resolver can fail to map "0.0.0.0" to INADDR_ANY and the
-                // daemon would abort at startup with "Cannot resolve binding
-                // address". Construct the CService directly from INADDR_ANY
-                // instead — this is the canonical "any-address" binding and
-                // works on every platform without consulting the resolver.
+    if (!fNoListen) {
+        if (mapArgs.count("-bind")) {
+            for (const std::string& bindAddress : mapMultiArgs["-bind"]) {
                 CService addrBind;
-                struct in_addr any;
-                any.s_addr = htonl(INADDR_ANY);
-                addrBind = CService(any, GetListenPort());
+                if (!Lookup(bindAddress.c_str(), addrBind, GetListenPort(), false))
+                    return InitError(strprintf(_("Cannot resolve -bind address: '%s'"),
+                                               bindAddress.c_str()));
                 fBound |= Bind(addrBind);
-            } while (false);
+            }
+        } else {
+            struct in_addr any;
+            any.s_addr = htonl(INADDR_ANY);
+            fBound = Bind(CService(any, GetListenPort()));
         }
         if (!fBound)
             return InitError(_("Failed to listen on any port."));
@@ -1167,10 +1201,9 @@ bool AppInit2()
         }
     }
 
-   if (mapArgs.count("-checkpointkey")) // triangles: checkpoint master priv key
+    if (mapArgs.count("-checkpointkey"))
     {
-        if (!Checkpoints::SetCheckpointPrivKey(GetArg(std::string_view{"-checkpointkey"}, std::string_view{""})))
-            InitError(_("Unable to sign checkpoint, wrong checkpointkey?\n"));
+        return InitError(_("Synchronized checkpoint signing is disabled."));
     }
 
     for (string strDest : mapMultiArgs["-seednode"])
@@ -1178,8 +1211,8 @@ bool AppInit2()
     StartupPerfLog("network_init", GetTimeMillis() - nStart, strprintf("listen=%d seednodes=%" PRIszu, !fNoListen, mapMultiArgs["-seednode"].size()));
 
     // ********************************************************* Step 6b: bootstrap download (daemon)
-    // Automatic: if data dir has no blockchain, bootstrap without asking.
-    // Can also be forced with -bootstrap flag, or disabled with -nobootstrap.
+    // Remote HTTP bootstrap is opt-in via -bootstrap. Fresh nodes otherwise
+    // use the compiled-hash P2P snapshot path or sync from genesis.
     //
     // v5.9.5: P2P UTXO snapshot fetch is the default for fresh installs (Step 11.6).
     // The legacy clearnet HTTP bootstrap only runs when the user explicitly requests
@@ -1187,20 +1220,13 @@ bool AppInit2()
 // Bootstrap auto-download works for both GUI and daemon.
     // GUI users get the same automatic bootstrap on fresh installs.
     {
-        bool wantsBootstrap = GetBoolArg("-bootstrap", false);
         bool noBootstrap = GetBoolArg("-nobootstrap", false);
-        bool snapshotMode = GetBoolArg("-snapshot", true);
+        bool wantsBootstrap = GetBoolArg("-bootstrap", false) && !noBootstrap;
         fs::path dataPath = GetDataDir();
-        // Load any runtime trusted snapshot publisher override that was
-        // persisted by a previous settrustedv2snapshotpublisher call.
-        Bootstrap::LoadTrustedSnapshotPublisher();
         bool needsBootstrap = Bootstrap::NeedsBootstrap(dataPath);
 
-        if (needsBootstrap && !noBootstrap) {
-            printf("Bootstrap: no blockchain data found — downloading UTXO snapshot automatically.\n");
-            printf("Bootstrap: (use -nobootstrap to skip)\n");
-            uiInterface.InitMessage(_("Downloading UTXO snapshot..."));
-            wantsBootstrap = true;
+        if (needsBootstrap && !wantsBootstrap) {
+            printf("Bootstrap: no blockchain data found; remote bootstrap is disabled unless -bootstrap is set.\n");
         }
 
     if (wantsBootstrap)
@@ -1208,7 +1234,6 @@ bool AppInit2()
         int64_t nBootstrapStart = GetTimeMillis();
         fs::path dataPath = GetDataDir();
         std::string host = Bootstrap::DEFAULT_HOST;
-        std::string strError;
 
         int64_t lastGuiUpdate = 0;
         auto progressFn = [&lastGuiUpdate](int64_t bytesDownloaded, int64_t totalBytes) {
@@ -1250,19 +1275,10 @@ bool AppInit2()
             triedUtxoSnapshot = true;
         }
 
-        // Fall back to full bootstrap.tar.gz if UTXO snapshot failed
+        // Never consume a server-directed file list. If the authenticated
+        // snapshot is unavailable, normal peer-to-peer sync is the safe fallback.
         if (!success) {
-            uiInterface.InitMessage(_("Downloading blockchain snapshot..."));
-            printf("Bootstrap: contacting %s...\n", host.c_str());
-
-            success = Bootstrap::DownloadBootstrap(host, dataPath, progressFn, strError);
-
-            if (!success) {
-                printf("\nBootstrap: failed: %s\n", strError.c_str());
-                printf("Bootstrap: skipping, will sync from network.\n");
-            } else {
-                printf("\nBootstrap: done.\n");
-            }
+            printf("Bootstrap: no trusted compiled-hash snapshot available; syncing from peers.\n");
         }
 
         StartupPerfLog("bootstrap_download", GetTimeMillis() - nBootstrapStart,
@@ -1282,13 +1298,23 @@ bool AppInit2()
             printf("Found utxo-snapshot.bin — loading UTXO snapshot...\n");
             uiInterface.InitMessage(_("Loading UTXO snapshot..."));
 
-            // Local file load: skip the checkpoint gate. The operator has
-            // filesystem access, so the trust model is already equivalent
-            // to direct chain state modification — a malicious local file
-            // is no worse than a malicious chain DB. P2P-delivered
-            // snapshots (SnapshotNet) keep the checkpoint gate on.
             std::string strError;
-            if (UtxoSnapshot::LoadSnapshot(snapshotFile, dataPath, strError, /*requireCheckpoint=*/false)) {
+            const int snapshotHeight = Checkpoints::GetBestSnapshotHeight();
+            uint256 compiledHash;
+            uint256 actualHash;
+            const bool hasCompiledHash = snapshotHeight > 0 &&
+                Checkpoints::GetSnapshotHash(snapshotHeight, compiledHash);
+            const bool hashVerified = hasCompiledHash &&
+                SnapshotNet::ComputeSnapshotFileHash(snapshotFile, actualHash, strError) &&
+                actualHash == compiledHash;
+
+            if (!hashVerified) {
+                if (strError.empty())
+                    strError = "snapshot SHA256 is not compiled into this release";
+                printf("UTXO snapshot rejected before import: %s\n", strError.c_str());
+                printf("Will proceed with normal sync.\n");
+            } else if (UtxoSnapshot::LoadSnapshot(snapshotFile, dataPath, strError,
+                                                   /*requireCheckpoint=*/true)) {
                 printf("UTXO snapshot loaded successfully.\n");
             } else {
                 printf("UTXO snapshot load failed: %s\n", strError.c_str());
@@ -1501,6 +1527,11 @@ bool AppInit2()
     {
         fs::path walletPath = GetDataDir() / strWalletFileName;
         if (fs::exists(walletPath)) {
+#ifndef WIN32
+            std::string permissionError;
+            if (!EnsureOwnerOnlyFile(walletPath, permissionError))
+                return InitError(permissionError);
+#endif
             uintmax_t wsize = fs::file_size(walletPath);
             printf("Wallet file size: %llu bytes\n", (unsigned long long)wsize);
             if (wsize < 1024) {
@@ -1933,10 +1964,10 @@ bool AppInit2()
     printf("mapAddressBook.size() = %" PRIszu "\n",  pwalletMain->mapAddressBook.size());
 
     if (!NewThread(StartNode, nullptr))
-        InitError(_("Error: could not start node"));
+        return InitError(_("Error: could not start node"));
 
-    if (fServer)
-        NewThread(ThreadRPCServer, nullptr);
+    if (fServer && !NewThread(ThreadRPCServer, nullptr))
+        return InitError(_("Error: could not start the RPC server"));
 
     // ********************************************************* Step 11.6: P2P UTXO snapshot fetch
     // If the chain is empty and snapshot mode is enabled (default), spawn a

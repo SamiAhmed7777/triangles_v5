@@ -76,8 +76,6 @@ private:
     bool SelectCoinsSimple(int64_t nTargetValue, unsigned int nSpendTime, int nMinConf, std::set<std::pair<const CWalletTx*,unsigned int> >& setCoinsRet, int64_t& nValueRet) const;
     bool SelectCoins(int64_t nTargetValue, unsigned int nSpendTime, std::set<std::pair<const CWalletTx*,unsigned int> >& setCoinsRet, int64_t& nValueRet, const CCoinControl *coinControl=nullptr) const;
 
-    CWalletDB *pwalletdbEncryption;
-
     // the current wallet version: clients below this version are not able to load the wallet
     int nWalletVersion;
 
@@ -104,9 +102,9 @@ public:
         nWalletMaxVersion = static_cast<int>(WalletFeature::Base);
         fFileBacked = false;
         nMasterKeyMaxID = 0;
-        pwalletdbEncryption = nullptr;
         fHDEnabled = false;
         nHDChainIndex = 0;
+        nTimeFirstKey = 0;
         nOrderPosNext = 0;
         nCachedStakeWeight = 0;
         nCachedStakeWeightTime = 0;

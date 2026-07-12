@@ -6,7 +6,7 @@ if(POLICY CMP0167)
 endif()
 
 project(Triangles
-    VERSION 6.0.0
+    VERSION 6.1.7
     DESCRIPTION "Cryptographic Triangles Wallet"
     LANGUAGES C CXX
 )
@@ -84,10 +84,10 @@ option(BUILD_QT           "Build triangles-qt (Qt5 GUI wallet)"              ON)
 option(BUILD_DAEMON       "Build trianglesd (headless daemon)"               ON)
 option(BUILD_CLI          "Build triangles-cli (JSON-RPC client)"            ON)
 option(BUILD_TESTS        "Build test_triangles (Boost.Test unit tests)"     ON)
-option(USE_UPNP           "Enable UPnP support via miniupnpc"               ON)
+option(USE_UPNP           "Enable UPnP support via miniupnpc"               OFF)
 option(USE_IPV6           "Enable IPv6 support"                              ON)
 option(USE_QRCODE         "Enable QR code generation via libqrencode"        OFF)
-option(USE_DBUS           "Enable D-Bus notifications (Linux only)"          ON)
+option(USE_DBUS           "Enable D-Bus notifications (Linux only)"          OFF)
 option(USE_ZMQ            "Enable ZMQ publisher support"                     OFF)
 # Triangles is Tor-native.  Tor is REQUIRED — disabling it at build time is
 # not a supported configuration.  The 2026-06-23 DNS2 clearnet-fork incident
@@ -104,7 +104,7 @@ if(DEFINED USE_TOR_EMBEDDED AND NOT USE_TOR_EMBEDDED)
         "instead.")
 endif()
 option(USE_O3             "Use -O3 optimization instead of -O2"              OFF)
-option(ENABLE_PIE         "Build position-independent executables"           OFF)
+option(ENABLE_PIE         "Build position-independent executables"           ON)
 option(ENABLE_STATIC      "Prefer static linking (Linux release builds)"     OFF)
 
 # Embedded I2P (i2pd) — runs an I2P router in-process alongside Tor.
