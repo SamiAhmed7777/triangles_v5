@@ -525,23 +525,20 @@ void EnsureLocalSnapshot()
     // published snapshot height" case automatically.
     bool needGenerate = !fs::exists(destPath);
     if (needGenerate) {
-        if (nBestHeight < snapHeight) return; // not synced to it yet
+        // A snapshot hash commits to one exact chain state. A node already
+        // beyond that height cannot recreate it without rolling back.
+        if (nBestHeight != snapHeight) return;
         printf("SnapshotNet: auto-dumping local snapshot at height %d (tip=%d) -> %s\n",
                snapHeight, nBestHeight, destPath.string().c_str());
 
-        // 288 headers is one day at 5-minute target spacing; covers reorg
-        // protection well past the snapshot point.
         std::string dumpErr;
-        if (!UtxoSnapshot::DumpSnapshot(destPath, 288, dumpErr)) {
+        if (!UtxoSnapshot::DumpSnapshot(destPath, dumpErr)) {
             printf("SnapshotNet: dump failed: %s\n", dumpErr.c_str());
             std::error_code ec;
             fs::remove(destPath, ec);
             return;
         }
         // ScanLocalSnapshot will validate the hash against the checkpoint.
-        // If our tip was past snapHeight the hash will mismatch and we'll
-        // discard the file — that's the correct behavior because such a file
-        // can't be safely served to P2P peers (they expect exact hash match).
     }
 
     {

@@ -1283,11 +1283,11 @@ Value dumputxoset(const Array& params, bool fHelp)
     if (fHelp || params.size() < 1 || params.size() > 2)
         throw runtime_error(
             "dumputxoset <filename> [nheaders]\n"
-            "Dumps the current UTXO set and recent block headers to a binary snapshot file.\n"
+            "Dumps the current UTXO set and complete block index to a binary snapshot file.\n"
             "The snapshot can be used by new nodes to skip initial block download.\n"
             "\nArguments:\n"
             "1. filename   (string, required) Destination file path\n"
-            "2. nheaders   (int, optional, default=2000) Number of block headers to include\n"
+            "2. nheaders   (int, optional, deprecated and ignored)\n"
             "\nResult:\n"
             "{\n"
             "  \"filename\": \"...\",\n"
@@ -1297,17 +1297,15 @@ Value dumputxoset(const Array& params, bool fHelp)
             "}");
 
     string filename = params[0].get_str();
-    unsigned int nHeaders = UTXO_SNAPSHOT_DEFAULT_HEADERS;
+    // Keep accepting the legacy argument for RPC compatibility. Partial block
+    // indexes prevent snapshot-loaded peers from serving fresh nodes.
     if (params.size() > 1)
-        nHeaders = params[1].get_int();
-
-    if (nHeaders < 100)
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "nheaders must be at least 100");
+        (void)params[1].get_int();
 
     std::filesystem::path destPath(filename);
     std::string strError;
 
-    if (!UtxoSnapshot::DumpSnapshot(destPath, nHeaders, strError))
+    if (!UtxoSnapshot::DumpSnapshot(destPath, strError))
         throw runtime_error("dumputxoset failed: " + strError);
 
     // Get file size

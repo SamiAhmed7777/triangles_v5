@@ -1924,7 +1924,7 @@ bool AppInit2()
     // about I2P peers and vice versa. Onion seeds are loaded separately in
     // ThreadOnionSeed (net.cpp), but we add I2P seeds here during init so they
     // are available immediately for the outbound connector.
-    {
+    if (GetBoolArg("-i2p", true)) {
         static const char *(*strI2PSeed)[1] = fTestNet ? strTestNetI2PSeed : strMainNetI2PSeed;
         int nI2PSeeds = 0;
         for (unsigned int si = 0; strI2PSeed[si][0] != nullptr; si++) {

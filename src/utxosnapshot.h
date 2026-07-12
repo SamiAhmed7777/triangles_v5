@@ -21,17 +21,13 @@ static const unsigned int UTXO_SNAPSHOT_MAGIC = 0x53585455; // "UTXS" little-end
 //     LoadBlockIndex only walks 500 blocks back from pindexBest.
 static const unsigned int UTXO_SNAPSHOT_VERSION = 3;
 
-// Number of block index entries to include in snapshot (covers difficulty,
-// median time, stake modifier, and reorg depth requirements)
-static const unsigned int UTXO_SNAPSHOT_DEFAULT_HEADERS = 2000;
-
 namespace UtxoSnapshot {
 
     // Create a UTXO snapshot from the current chain state.
-    // Writes last nHeaders block index entries + all UTXOs to destPath.
+    // Writes the complete block index + all UTXOs to destPath. A complete
+    // index lets snapshot-loaded peers serve fresh nodes from genesis.
     // Returns true on success, sets strError on failure.
     bool DumpSnapshot(const std::filesystem::path& destPath,
-                      unsigned int nHeaders,
                       std::string& strError);
 
     // Load a UTXO snapshot from a file into a fresh LevelDB.

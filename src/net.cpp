@@ -1711,7 +1711,7 @@ void ThreadOnionSeed(void* parg)
     // be discovered. Unlike onion seeds, we don't queue them as OneShot
     // connections here — they're connected via the normal outbound connector
     // through the I2P SOCKS proxy.
-    {
+    if (GetBoolArg("-i2p", true)) {
         static const char *(*strI2PSeed)[1] = fTestNet ? strTestNetI2PSeed : strMainNetI2PSeed;
         int i2pFound = 0;
         for (unsigned int si = 0; strI2PSeed[si][0] != nullptr; si++) {
@@ -1729,6 +1729,8 @@ void ThreadOnionSeed(void* parg)
         }
         if (i2pFound > 0)
             printf("%d addresses from hardcoded .b32.i2p seeds added to addrman\n", i2pFound);
+    } else {
+        printf("I2P seed injection disabled by -i2p=0\n");
     }
 
     // Wait for Tor to establish circuits before attempting HTTPS seed fetch.
@@ -2388,6 +2390,11 @@ void ThreadOpenConnections2(void* parg)
                 break;
 
             if (IsLimited(addr))
+                continue;
+
+            // Existing peers.dat files may contain I2P addresses from an
+            // earlier run. Respect -i2p=0 for those persisted entries too.
+            if (!GetBoolArg("-i2p", true) && addr.GetNetwork() == NET_I2P)
                 continue;
 
             // only consider very recently tried nodes after 30 failed attempts

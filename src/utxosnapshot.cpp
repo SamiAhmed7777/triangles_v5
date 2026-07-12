@@ -27,12 +27,13 @@ namespace fs = std::filesystem;
 
 namespace UtxoSnapshot {
 
+static constexpr unsigned int MAX_SNAPSHOT_STAKE_SEEN = 5000;
+
 // ---------------------------------------------------------------------------
 // DumpSnapshot - create a UTXO snapshot from the current chain state
 // ---------------------------------------------------------------------------
 
 bool DumpSnapshot(const fs::path& destPath,
-                  unsigned int nHeaders,
                   std::string& strError)
 {
     LOCK(cs_main);
@@ -42,10 +43,9 @@ bool DumpSnapshot(const fs::path& destPath,
         return false;
     }
 
-    // v2: collect ALL block index entries (genesis → tip). Required so a
-    // snapshot-loaded node can address every block via mapBlockIndex +
-    // blk0001.dat. The nHeaders argument is honored only when strictly less
-    // than chain height for v1-compat diagnostic snapshots.
+    // Collect every block index entry (genesis -> tip). Snapshot-loaded peers
+    // need the complete index to answer getheaders/getblocks for fresh nodes;
+    // a recent-only index strands those nodes at height zero.
     std::vector<std::pair<uint256, CDiskBlockIndex>> vHeaders;
     {
         CBlockIndex* pindex = pindexBest;
@@ -57,13 +57,6 @@ bool DumpSnapshot(const fs::path& destPath,
         // Reverse to height ascending order (genesis first)
         std::reverse(vHeaders.begin(), vHeaders.end());
 
-        // Legacy v1 fallback: if caller passed a specific count smaller than
-        // the full chain, trim from the front (keep newest nHeaders).
-        if (nHeaders > 0 && nHeaders < (unsigned int)nBestHeight &&
-            vHeaders.size() > nHeaders) {
-            vHeaders.erase(vHeaders.begin(),
-                           vHeaders.begin() + (vHeaders.size() - nHeaders));
-        }
     }
 
     // Open the chain DB once and reuse for both the UTXO count and the
@@ -114,12 +107,11 @@ bool DumpSnapshot(const fs::path& destPath,
     // v3: collect setStakeSeen entries (prevoutStake, nStakeTime) from the
     // last N PoS blocks. Required so a snapshot-loaded node has the recent
     // stake-collision set restored without walking blocks at startup.
-    static const unsigned int STAKE_SEEN_DEPTH = 5000; // 10x LoadBlockIndex default
     std::vector<std::pair<COutPoint, unsigned int> > vStakeSeen;
     {
         CBlockIndex* pindex = pindexBest;
         unsigned int nVisited = 0;
-        while (pindex && nVisited < STAKE_SEEN_DEPTH) {
+        while (pindex && nVisited < MAX_SNAPSHOT_STAKE_SEEN) {
             if (pindex->IsProofOfStake()) {
                 vStakeSeen.push_back(std::make_pair(pindex->prevoutStake, pindex->nStakeTime));
             }
@@ -397,6 +389,32 @@ bool LoadSnapshot(const fs::path& snapshotPath,
         return false;
     }
 
+    if (height < 0 || static_cast<uint64_t>(numHeaders) >
+            static_cast<uint64_t>(height) + 1) {
+        fclose(file);
+        strError = "Snapshot header count is inconsistent with its tip height";
+        return false;
+    }
+
+    if (numStakeSeen > MAX_SNAPSHOT_STAKE_SEEN) {
+        fclose(file);
+        strError = "Snapshot contains too many setStakeSeen entries";
+        return false;
+    }
+
+    std::error_code sizeError;
+    const uint64_t snapshotSize = fs::file_size(snapshotPath, sizeError);
+    const uint64_t minimumSize = 104ULL +
+        static_cast<uint64_t>(numHeaders) * 5ULL +
+        static_cast<uint64_t>(numUtxos) * 5ULL +
+        static_cast<uint64_t>(numStakeSeen) * 5ULL +
+        static_cast<uint64_t>(numBlocks);
+    if (sizeError || minimumSize > snapshotSize) {
+        fclose(file);
+        strError = "Snapshot section counts exceed the file size";
+        return false;
+    }
+
     // Verify snapshot block is a known checkpoint (only for P2P-delivered
     // snapshots — local files are operator-trusted and can be at any height)
     if (requireCheckpoint && !Checkpoints::IsKnownCheckpoint(height, blockHash)) {
@@ -467,6 +485,8 @@ bool LoadSnapshot(const fs::path& snapshotPath,
     printf("UtxoSnapshot: loading %d block headers...\n", numHeaders);
     uiInterface.InitMessage(_("Loading UTXO snapshot (headers)..."));
 
+    const int expectedFirstHeight = height - static_cast<int>(numHeaders) + 1;
+    uint256 previousHeaderHash;
     for (unsigned int i = 0; i < numHeaders; i++) {
         unsigned int entrySize;
         if (fread(&entrySize, sizeof(entrySize), 1, file) != 1 || entrySize > 10000) {
@@ -491,6 +511,47 @@ bool LoadSnapshot(const fs::path& snapshotPath,
         CDiskBlockIndex diskindex;
         ssEntry >> entryHash;
         ssEntry >> diskindex;
+
+        CBlock blockHeader;
+        blockHeader.nVersion = diskindex.nVersion;
+        blockHeader.hashPrevBlock = diskindex.hashPrev;
+        blockHeader.hashMerkleRoot = diskindex.hashMerkleRoot;
+        blockHeader.nTime = diskindex.nTime;
+        blockHeader.nBits = diskindex.nBits;
+        blockHeader.nNonce = diskindex.nNonce;
+        const uint256 calculatedHash = blockHeader.GetHash();
+
+        const int expectedHeight = expectedFirstHeight + static_cast<int>(i);
+        if (diskindex.nHeight != expectedHeight) {
+            success = false;
+            strError = "Non-contiguous snapshot height at header " +
+                       std::to_string(i);
+            break;
+        }
+        if (entryHash != calculatedHash) {
+            success = false;
+            strError = "Snapshot header hash mismatch at height " +
+                       std::to_string(diskindex.nHeight);
+            break;
+        }
+        if (i > 0 && diskindex.hashPrev != previousHeaderHash) {
+            success = false;
+            strError = "Broken snapshot header chain at height " +
+                       std::to_string(diskindex.nHeight);
+            break;
+        }
+        if (!Checkpoints::CheckHardened(diskindex.nHeight, entryHash)) {
+            success = false;
+            strError = "Snapshot conflicts with hardened checkpoint at height " +
+                       std::to_string(diskindex.nHeight);
+            break;
+        }
+        if (i + 1 == numHeaders && entryHash != blockHash) {
+            success = false;
+            strError = "Snapshot tip does not match its final block-index entry";
+            break;
+        }
+        previousHeaderHash = entryHash;
 
         if (!txdb.WriteBlockIndex(diskindex)) {
             success = false;
@@ -698,14 +759,17 @@ bool LoadSnapshot(const fs::path& snapshotPath,
                     }
                     CBlock block;
                     blkdat >> block;
-                    // For each tx in the block, record the disk position.
-                    // nTxPos is the offset of the tx *within* the block (after
-                    // magic+size for the first tx, then serialize-size of
-                    // preceding txs). We use the post-serialize offset of each
-                    // tx as nTxPos, matching the convention in ConnectBlock.
-                    unsigned int nTxPos = sizeof(pchMessageStart) + sizeof(unsigned int); // offset of first tx in block
+                    // CDiskTxPos::nTxPos is an absolute file offset. Match
+                    // ConnectBlock's layout: block start, 80-byte header,
+                    // CompactSize transaction count, then transaction bytes.
+                    const unsigned int nBlockPos = nBlockStart +
+                        sizeof(pchMessageStart) + sizeof(unsigned int);
+                    unsigned int nTxPos = nBlockPos +
+                        ::GetSerializeSize(CBlock(), SER_DISK, CLIENT_VERSION) -
+                        (2 * GetSizeOfCompactSize(0)) +
+                        GetSizeOfCompactSize(block.vtx.size());
                     for (const CTransaction& tx : block.vtx) {
-                        CDiskTxPos posThisTx(1, nBlockStart, nTxPos);
+                        CDiskTxPos posThisTx(1, nBlockPos, nTxPos);
                         txdb.UpdateTxIndex(tx.GetHash(), CTxIndex(posThisTx, tx.vout.size()));
                         nTxPos += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
                         nTxsIndexed++;

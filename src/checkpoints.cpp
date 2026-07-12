@@ -52,6 +52,7 @@ namespace Checkpoints
                 { 2213000, uint256("0x7bc9652d423676c52ba8b0a287e0b46e1eca6e8eecc51d3f30e0d665d3b236f5")},
                 { 2214000, uint256("0x17e61ceb45db36358aaabe91b094a77ecba32370a467185fa9af75eef6c8e414")},
                 { 2214400, uint256("0x8ebb818f7280850c5a3916b7c8a2bca603f7c4f9926d3cdc2262f726035d96ed")},
+                { 2214547, uint256("0xe7a1363144b39c5ae70e4c32757055e07ac7fa859cb60cbe1acd883d9010f8ba")},
             };
 
     // Published UTXO snapshot file SHA256, keyed by snapshot height.
@@ -64,6 +65,7 @@ namespace Checkpoints
     // mapCheckpoints / mapCheckpointsTestnet.
     static std::map<int, uint256> mapSnapshotHashes = {
         { 2206004, uint256("0x1419282dae817315ee1b955543f6248233fe5800f5e8488734a0ece5bd6781ea")},
+        { 2214547, uint256("0xf2f277c70536c1acb0cf96b331c5e3398d92d69d88061190c3673e336b104895")},
     };
 
     static std::map<int, uint256> mapSnapshotHashesTestnet = {
