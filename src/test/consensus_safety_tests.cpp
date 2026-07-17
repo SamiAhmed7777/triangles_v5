@@ -20,6 +20,13 @@
 #include "../script.h"
 #include "../checkpoints.h"
 
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <cstring>
+#include <vector>
+#include <functional>
+
 extern CBlockIndex* pindexBest;
 extern unsigned int nTargetSpacing;
 extern unsigned int nStakeMinAge;
@@ -651,12 +658,13 @@ BOOST_AUTO_TEST_CASE(reorg_guard_offbyone_hardening)
 }
 
 // ─── Duplicate-guard detection: variable referenced only in allowed files ─
-// Adversarial review (round 3 on 6116cff) also flagged that the existing
+// Adversarial review (round 3 on 6116cff) flagged that the existing
 // grep test only scans src/main.cpp. A future consensus guard added to a
 // different file (e.g. src/miner.cpp, src/init.cpp, a new consensus module)
 // would silently bypass it. This test pins the allowed-file set as a
-// structural invariant: any .cpp/.h outside this list must not contain a
-// non-comment, non-test reference to pindexLastHardenedCheckpoint.
+// structural invariant: any .cpp/.h under src/ that contains the literal
+// "pindexLastHardenedCheckpoint" AND is not on the allow-list AND is not
+// a test/embedded/Qt file must be flagged.
 //
 // Allowed files (production code):
 //   - src/main.cpp       : declaration + Reorganize guard + getheaders serving
@@ -665,13 +673,15 @@ BOOST_AUTO_TEST_CASE(reorg_guard_offbyone_hardening)
 //   - src/checkpoints.cpp: helper comment
 //   - src/checkpoints.h  : helper comment
 //
-// Test files are excluded because they reference the variable by design.
+// Round-4 review caught a coverage gap in a prior version: the test looped
+// over a hand-curated list that included 3 nonexistent filenames and skipped
+// ~80 production files. This rewrite walks src/ directly via std::filesystem
+// and asserts every production file outside the allow-list is clean.
 BOOST_AUTO_TEST_CASE(hardened_checkpoint_no_rogue_guard_in_other_files)
 {
-    // Files that ARE allowed to reference pindexLastHardenedCheckpoint in
-    // production code. Keep this list minimal — every entry should be
-    // justified. Update this list with care if a new intentional reference
-    // is added in production.
+    // Files explicitly allowed to reference pindexLastHardenedCheckpoint
+    // in production code. Update this list with care — every new entry
+    // should be justified in a comment on the listed file.
     static const char* allowed_files[] = {
         "src/main.cpp",
         "src/main.h",
@@ -680,51 +690,92 @@ BOOST_AUTO_TEST_CASE(hardened_checkpoint_no_rogue_guard_in_other_files)
         "src/checkpoints.h",
     };
 
-    // Walk src/ for any file containing the literal text
-    // "pindexLastHardenedCheckpoint". For each match outside the
-    // allow-list, fail with the offending file name.
-    //
-    // Implementation note: the test runner's filesystem root is /root/triangles_v5,
-    // same convention as the other readEntireFile calls. We use a small
-    // inline scan via search_files semantics — but to avoid coupling to a
-    // specific ls/grep helper, this test re-implements a minimal scan
-    // using the same readEntireFile approach as the rest of the suite.
-    //
-    // For maintainability, we hardcode the production file set the test
-    // expects to be CLEAN: any file under src/ that contains the variable
-    // AND is not on the allowed list AND is not a test file must be flagged.
-    // We enumerate the production files we expect to be clean:
-    static const char* expected_clean_files[] = {
-        "src/miner.cpp",
-        "src/wallet.cpp",
-        "src/net.cpp",
-        "src/txdb.cpp",
-        "src/script.cpp",
-        "src/blocksizecalculator.cpp",
-        "src/keystore.cpp",
-        "src/kernel.cpp",
-        "src/chainparams.cpp",
+    // Directories under src/ that contain code we should NOT scan. They're
+    // either test code (which references the variable by design), vendored
+    // (Tor, I2P), or UI code (Qt) that has no consensus path.
+    static const char* excluded_dirs[] = {
+        "src/test",
+        "src/qt",
+        "src/tor",
+        "src/i2p",
+        "src/leveldb",
     };
+
+    auto is_allowed = [](const std::string& path) {
+        for (const char* allow : allowed_files)
+            if (path == allow) return true;
+        return false;
+    };
+
+    auto is_excluded_dir = [](const std::string& path) {
+        for (const char* dir : excluded_dirs)
+            if (path.compare(0, std::strlen(dir), dir) == 0) return true;
+        return false;
+    };
+
+    // Walk src/ non-recursively into subdirs except the excluded ones.
+    namespace fs = std::filesystem;
+    fs::path src_root = "src";
+    if (!fs::exists(src_root))
+    {
+        BOOST_FAIL("src/ directory not found at test runtime; cannot walk for rogue-guard detection");
+        return;
+    }
 
     int nFailures = 0;
     std::string firstOffender;
-    for (const char* path : expected_clean_files)
-    {
-        std::string contents = readEntireFile(path);
-        if (contents.empty()) continue;  // file may not exist in some builds
-        if (contents.find("pindexLastHardenedCheckpoint") != std::string::npos)
+    std::vector<std::string> scanned;
+
+    // Recursive walk, with excluded-dir pruning.
+    std::function<void(const fs::path&)> walk = [&](const fs::path& dir) {
+        std::error_code ec;
+        for (auto it = fs::directory_iterator(dir, ec);
+             !ec && it != fs::directory_iterator();
+             it.increment(ec))
         {
-            if (firstOffender.empty()) firstOffender = path;
-            ++nFailures;
+            const auto& entry = *it;
+            std::string path = entry.path().string();
+            if (entry.is_directory(ec))
+            {
+                if (!is_excluded_dir(path))
+                    walk(entry.path());
+                continue;
+            }
+            if (!entry.is_regular_file(ec)) continue;
+            // Only .cpp and .h files.
+            std::string ext = entry.path().extension().string();
+            if (ext != ".cpp" && ext != ".h") continue;
+            if (is_allowed(path)) continue;
+            // Read and check for the literal variable reference.
+            std::ifstream f(entry.path());
+            if (!f.good()) continue;
+            std::stringstream ss; ss << f.rdbuf();
+            const std::string& contents = ss.str();
+            scanned.push_back(path);
+            if (contents.find("pindexLastHardenedCheckpoint") != std::string::npos)
+            {
+                if (firstOffender.empty()) firstOffender = path;
+                ++nFailures;
+            }
         }
-    }
+    };
+    walk(src_root);
 
     BOOST_CHECK_MESSAGE(nFailures == 0,
-        "pindexLastHardenedCheckpoint referenced in unexpected production file: "
-        + firstOffender + ". The variable must remain scoped to consensus "
-        "validation (main.cpp Reorganize()) and startup (init.cpp); adding a "
-        "guard or comparison in another module requires an explicit guard "
-        "update matching the nHardenedCheckpointHeight two-layer fallback.");
+        "pindexLastHardenedCheckpoint referenced in unexpected production file: '"
+        + firstOffender + "'. Allow-listed files: src/main.cpp, src/main.h, "
+        "src/init.cpp, src/checkpoints.cpp, src/checkpoints.h. The variable "
+        "must remain scoped to consensus validation (main.cpp Reorganize()) "
+        "and startup (init.cpp). Adding a guard or comparison in another "
+        "module requires an explicit guard update matching the "
+        "nHardenedCheckpointHeight two-layer fallback in Reorganize().");
+
+    // Sanity: at least one production file must have been scanned, otherwise
+    // we silently passed because the walk found nothing.
+    BOOST_CHECK_MESSAGE(!scanned.empty(),
+        "Rogue-guard scan found zero production files under src/. The walk "
+        "is broken — fix the test (check excluded_dirs or path root) before "
+        "trusting its PASS.");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
