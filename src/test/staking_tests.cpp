@@ -3,11 +3,47 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <filesystem>
+#include <vector>
+
 #include "../main.h"
 #include "../kernel.h"
 
 extern unsigned int nStakeMinAge;
 extern unsigned int nStakeMaxAge;
+
+// Resolve the project root from this test file's __FILE__.
+// See consensus_safety_tests.cpp::findProjectRootFromHere for the full
+// rationale — the version here is kept in lock-step so that local
+// `ctest --output-on-failure` runs from build/ succeed.
+static std::string findProjectRootFromHere_staking(const std::string& here)
+{
+    namespace fs = std::filesystem;
+    std::string h = here;
+    while (h.size() >= 2 && h[0] == '.' && h[1] == '/') h.erase(0, 2);
+    size_t abs_pos = h.rfind("/src/test/");
+    if (abs_pos != std::string::npos) {
+        std::string root = h.substr(0, abs_pos);
+        if (!root.empty()) return root + "/";
+    }
+    size_t rel_pos = h.rfind("src/test/");
+    if (rel_pos != std::string::npos) {
+        std::string prefix = h.substr(0, rel_pos);
+        fs::path candidate;
+        if (prefix.empty()) candidate = fs::current_path();
+        else candidate = fs::path(prefix);
+        if (fs::exists(candidate / "src" / "checkpoints.cpp"))
+            return candidate.string() + "/";
+    }
+    fs::path cur = fs::current_path();
+    for (int i = 0; i < 8; ++i) {
+        if (fs::exists(cur / "src" / "checkpoints.cpp"))
+            return cur.string() + "/";
+        if (cur == cur.root_path()) break;
+        cur = cur.parent_path();
+    }
+    return "./";
+}
 
 BOOST_AUTO_TEST_SUITE(staking_tests)
 
@@ -354,14 +390,17 @@ BOOST_AUTO_TEST_CASE(is_staking_safe_is_continuous_not_one_shot)
     // wait loop. Post-fix must NOT have the fTryToSync flag at all.
     //
     // Use __FILE__ to find the repo root so the path resolves regardless
-    // of the build directory or test runner cwd.
-    std::string here = __FILE__;
-    size_t pos = here.rfind("/src/test/");
-    BOOST_REQUIRE(pos != std::string::npos);
-    std::string miner_src_path = here.substr(0, pos) + "/src/miner.cpp";
+    // of the build directory or test runner cwd. The resolver tolerates
+    // both absolute paths and the bare-rel or "./"-rel forms cmake+ninja
+    // sometimes bake in, and falls back to walking up from CWD looking
+    // for src/checkpoints.cpp.
+    std::string root = findProjectRootFromHere_staking(__FILE__);
+    std::string miner_src_path = root + "src/miner.cpp";
 
     FILE* f = fopen(miner_src_path.c_str(), "r");
-    BOOST_REQUIRE(f != nullptr);
+    BOOST_REQUIRE_MESSAGE(f != nullptr,
+        "Could not open '" + miner_src_path + "' — repository root resolution is "
+        "broken; ctest from build/ would also fail.");
     fseek(f, 0, SEEK_END);
     long nSize = ftell(f);
     fseek(f, 0, SEEK_SET);

@@ -413,20 +413,72 @@ BOOST_AUTO_TEST_CASE(target_spacing_immutable)
 //   4. There is no longer a 10% trust hysteresis check.
 // Helper: resolve the repository root from the test file's __FILE__
 // so the static-source tests below don't depend on the caller's cwd.
-// We assume the test file lives at <root>/src/test/<this>.cpp.
+//
+// __FILE__ resolution varies by build system:
+//   - Absolute path: "/foo/bar/src/test/foo.cpp"           (most cmake configs)
+//   - Build-dir relative: "./src/test/foo.cpp"             (cmake + ninja often)
+//   - Repo-relative: "src/test/foo.cpp"                    (we've seen this too;
+//     strips to nothing on `rfind("src/test/")` so we must NOT take
+//     that as the project root, because ctest runs from build/,
+//     not the repo root).
+//
+// Resolution strategy: take "everything strictly before src/test/"
+// if that prefix itself points to a directory (or to the filesystem
+// root). Otherwise (bare "src/test/foo.cpp"), fall back to walking
+// up from CWD looking for the canonical src/checkpoints.cpp sentinel.
+// This always works because ctest sets CWD to the build dir, and we
+// can find the repo root by walking up until we hit one containing
+// src/.
+static std::string findProjectRootFromHere(const std::string& here)
+{
+    namespace fs = std::filesystem;
+    std::string h = here;
+
+    // Strip any leading "./" so the search anchors line up.
+    while (h.size() >= 2 && h[0] == '.' && h[1] == '/') h.erase(0, 2);
+
+    // Anchor 1: "/src/test/" — absolute path form.
+    size_t abs_pos = h.rfind("/src/test/");
+    if (abs_pos != std::string::npos) {
+        std::string root = h.substr(0, abs_pos);
+        if (!root.empty()) return root + "/";
+    }
+    // Anchor 2: "src/test/" (relative path, no leading slash).
+    // Only accept this as the project root if the prefix, joined
+    // with the cwd, actually exists as a directory containing a
+    // src/ subtree. Otherwise we have a bare relative path with no
+    // prefix and ctest's CWD is build/, so we must walk up.
+    size_t rel_pos = h.rfind("src/test/");
+    if (rel_pos != std::string::npos) {
+        std::string prefix = h.substr(0, rel_pos);
+        fs::path candidate;
+        if (prefix.empty()) {
+            candidate = fs::current_path();
+        } else {
+            candidate = fs::path(prefix);
+        }
+        if (fs::exists(candidate / "src" / "checkpoints.cpp")) {
+            return candidate.string() + "/";
+        }
+    }
+
+    // Fallback: walk up from CWD looking for the canonical src/ sentinel.
+    fs::path cur = fs::current_path();
+    for (int i = 0; i < 8; ++i) {
+        if (fs::exists(cur / "src" / "checkpoints.cpp")) {
+            return cur.string() + "/";
+        }
+        if (cur == cur.root_path()) break;
+        cur = cur.parent_path();
+    }
+    // Last-resort fallback: cwd + "src/"
+    return "./";
+}
+
 static std::string readEntireFile(const char* relToSrc)
 {
-    // __FILE__ resolves to an absolute path under typical compilers;
-    // fall back to a CWD-relative path if it doesn't.
-    std::string here = __FILE__;
-    size_t pos = here.rfind("/src/test/");
-    std::string root;
-    if (pos != std::string::npos)
-        root = here.substr(0, pos);
-    else
-        root = ".";
-
-    std::string full = root + "/" + relToSrc;
+    static const std::string root = findProjectRootFromHere(__FILE__);
+    std::string full = root + relToSrc;
     FILE* f = fopen(full.c_str(), "r");
     if (!f)
         return std::string();
@@ -713,18 +765,34 @@ BOOST_AUTO_TEST_CASE(hardened_checkpoint_no_rogue_guard_in_other_files)
         return false;
     };
 
-    // Walk src/ non-recursively into subdirs except the excluded ones.
+    // Resolve src/ from the project root, not the current working dir.
+    // Under ctest the CWD is <repo>/build, but the source tree is at
+    // <repo>/src — use the same root resolver as readEntireFile().
     namespace fs = std::filesystem;
-    fs::path src_root = "src";
+    const std::string projectRoot = findProjectRootFromHere(__FILE__);
+    fs::path src_root = projectRoot + "src";
     if (!fs::exists(src_root))
     {
-        BOOST_FAIL("src/ directory not found at test runtime; cannot walk for rogue-guard detection");
+        BOOST_FAIL("src/ directory not found at test runtime at resolved path '"
+                    + src_root.string() + "'. Project-root resolution is broken — "
+                    "fix findProjectRootFromHere() in this file before trusting the test.");
         return;
     }
 
     int nFailures = 0;
     std::string firstOffender;
     std::vector<std::string> scanned;
+
+    // Build a relative path anchored at <projectRoot>, so it looks
+    // like "src/main.cpp" regardless of whether the walker entered
+    // via an absolute or a relative starting point. This matches
+    // the relative style used in allowed_files[] below.
+    auto to_rel = [&](const fs::path& p) -> std::string {
+        std::string s = p.string();
+        if (!projectRoot.empty() && s.compare(0, projectRoot.size(), projectRoot) == 0)
+            s.erase(0, projectRoot.size());
+        return s;
+    };
 
     // Recursive walk, with excluded-dir pruning.
     std::function<void(const fs::path&)> walk = [&](const fs::path& dir) {
@@ -735,9 +803,10 @@ BOOST_AUTO_TEST_CASE(hardened_checkpoint_no_rogue_guard_in_other_files)
         {
             const auto& entry = *it;
             std::string path = entry.path().string();
+            std::string rel = to_rel(entry.path());
             if (entry.is_directory(ec))
             {
-                if (!is_excluded_dir(path))
+                if (!is_excluded_dir(path) && !is_excluded_dir(rel))
                     walk(entry.path());
                 continue;
             }
@@ -745,16 +814,16 @@ BOOST_AUTO_TEST_CASE(hardened_checkpoint_no_rogue_guard_in_other_files)
             // Only .cpp and .h files.
             std::string ext = entry.path().extension().string();
             if (ext != ".cpp" && ext != ".h") continue;
-            if (is_allowed(path)) continue;
+            if (is_allowed(rel)) continue;
             // Read and check for the literal variable reference.
             std::ifstream f(entry.path());
             if (!f.good()) continue;
             std::stringstream ss; ss << f.rdbuf();
             const std::string& contents = ss.str();
-            scanned.push_back(path);
+            scanned.push_back(rel);
             if (contents.find("pindexLastHardenedCheckpoint") != std::string::npos)
             {
-                if (firstOffender.empty()) firstOffender = path;
+                if (firstOffender.empty()) firstOffender = rel;
                 ++nFailures;
             }
         }
