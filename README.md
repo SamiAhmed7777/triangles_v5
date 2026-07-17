@@ -237,6 +237,18 @@ Then set `externalip=<your-onion-address>` in `triangles.conf`.
 
 ## RPC Commands
 
+The JSON-RPC CLI is `triangles-cli`. For full flag reference, custom
+data-dir setups, and the full list of operations, see
+**[doc/triangles-cli.md](doc/triangles-cli.md)**. Quick start:
+
+```bash
+# Default datadir (Linux: ~/.cryptographic-triangles)
+triangles-cli getinfo
+
+# Custom datadir — most production nodes need this
+triangles-cli -datadir=/var/lib/triangles getinfo
+```
+
 ### General
 - `getinfo` - Node status, balance, block height, connections
 - `getpeerinfo` - Connected peer details
