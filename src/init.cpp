@@ -1378,34 +1378,35 @@ bool AppInit2()
     if (!LoadBlockIndex())
         return InitError(_("Error loading blkindex.dat"));
 
-    // triangles fix (pitfall #61): initialize pindexFinalized from the
-    // hardcoded checkpoint on startup, BEFORE the daemon opens any peer
-    // connections or processes any block messages.
+    // pindexLastHardenedCheckpoint is initialized from the hardened checkpoint
+    // map on startup, BEFORE the daemon opens any peer connections or
+    // processes any block messages. It is intentionally NOT advanced at
+    // runtime — see fix/consensus-convergence.
     //
-    // Without this, pindexFinalized stays NULL on a fresh restart even when
-    // we have 2.2M blocks on disk, because the auto-checkpoint code in
-    // ActivateBestChain() at main.cpp:2459 only sets it when
-    // !IsInitialBlockDownload(). If the chain tip is more than 24h stale
-    // (which happens on every restart with a synced chain), IsInitialBlockDownload()
-    // returns true and pindexFinalized never gets set.
-    //
-    // The downstream reorg guard at main.cpp:2198 short-circuits when
-    // pindexFinalized is NULL, which allowed a 3,755-block minority fork
-    // to overwrite a healthy 2,206,004-block chain on 2026-06-16. Loading
-    // the hardcoded checkpoint from checkpoints.cpp (block 2,205,000) on
-    // startup means the reorg guard is always active whenever the
-    // checkpointed block is in our local mapBlockIndex.
+    // GetLastCheckpoint(mapBlockIndex) returns the newest compiled
+    // checkpoint present in this node's local block index. On current
+    // master (2026-07) the newest compiled checkpoint is whatever block
+    // hash is highest in src/checkpoints.cpp::mapCheckpoints and present
+    // in the local index; it is NOT hardcoded to block 2,205,000 here.
+    // The downstream rules that consume this variable are:
+    //   - main.cpp Reorganize(): reject reorgs whose fork point is at
+    //     or below the checkpoint height (convergence rule, see the
+    //     comment block above the rejection in Reorganize()).
+    //   - main.cpp getheaders handler: when the peer's locator contains
+    //     the checkpoint, serve canonical headers from the checkpoint
+    //     forward; otherwise fall back to the last common ancestor (or
+    //     genesis if none). This is the recovery path for forked peers.
     {
         CBlockIndex* pCheckpoint = Checkpoints::GetLastCheckpoint(mapBlockIndex);
-        if (pCheckpoint && pCheckpoint != pindexFinalized)
+        if (pCheckpoint && pCheckpoint != pindexLastHardenedCheckpoint)
         {
-            pindexFinalized = pCheckpoint;
-            printf("STARTUP-CHECKPOINT: pindexFinalized set to block %d (%s) from hardcoded checkpoint\n",
-                pindexFinalized->nHeight, pindexFinalized->GetBlockHash().ToString().substr(0,20).c_str());
+            pindexLastHardenedCheckpoint = pCheckpoint;
+            printf("STARTUP-CHECKPOINT: pindexLastHardenedCheckpoint set to block %d (%s) from compiled hardened checkpoint\n",
+                pindexLastHardenedCheckpoint->nHeight, pindexLastHardenedCheckpoint->GetBlockHash().ToString().substr(0,20).c_str());
         }
         else if (!pCheckpoint)
         {
-            printf("STARTUP-CHECKPOINT: WARNING — hardcoded checkpoint not in local block index, pindexFinalized remains NULL\n");
+            printf("STARTUP-CHECKPOINT: WARNING — no compiled hardened checkpoint present in local block index, pindexLastHardenedCheckpoint remains NULL\n");
         }
     }
 

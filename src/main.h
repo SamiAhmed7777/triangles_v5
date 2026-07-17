@@ -42,7 +42,10 @@ constexpr unsigned int MAX_BLOCK_SIGOPS = MAX_BLOCK_SIZE/50;
 constexpr unsigned int MAX_ORPHAN_TRANSACTIONS = MAX_BLOCK_SIZE/100;
 constexpr unsigned int MAX_ORPHAN_BLOCKS = 750;
 constexpr unsigned int MAX_ORPHAN_BLOCKS_IBD = 1500;
-constexpr unsigned int MAX_REORG_DEPTH = 100;  // reject reorgs deeper than this (finality)
+// MAX_REORG_DEPTH is retained as a compile-time constant for tests and
+// legacy callers but no longer gates reorgs above the hardened checkpoint.
+// See Reorganize() in main.cpp for the new convergence rule.
+constexpr unsigned int MAX_REORG_DEPTH = 100;  // historical finality depth (no longer enforced)
 
 // ASSUME_VALID_BUFFER: how many blocks BACK from the tip to keep fully
 // validating. Blocks at or below nAssumeValidThreshold take the fast path
@@ -96,7 +99,7 @@ extern uint256 nBestChainTrust;
 extern uint256 nBestInvalidTrust;
 extern uint256 hashBestChain;
 extern CBlockIndex* pindexBest;
-extern CBlockIndex* pindexFinalized;  // auto-checkpoint: deepest finalized block
+extern CBlockIndex* pindexLastHardenedCheckpoint;  // last compiled hardened checkpoint in our local index (set at startup only; never advanced at runtime)
 extern int nAssumeValidThreshold;      // highest height covered by assumeValid fast path
 extern unsigned int nTransactionsUpdated;
 extern uint64_t nLastBlockTx;
@@ -146,6 +149,28 @@ int64_t GetProofOfStakeReward(int64_t nCoinAge, int64_t nFees);
 unsigned int ComputeMinWork(unsigned int nBase, int64_t nTime);
 unsigned int ComputeMinStake(unsigned int nBase, int64_t nTime, unsigned int nBlockTime);
 int GetNumBlocksOfPeers();
+
+// IsStakingSafe: continuous safety gate for StakeMiner (fix/consensus-convergence).
+//
+// Returns true only when the following conditions ALL hold:
+//   - Not in IBD (IsInitialBlockDownload)
+//   - At least 2 fully connected, non-disconnecting peers
+//   - Our active chain height is at or above the peer median
+//   - We do not have a chain-trust deficit relative to peers we trust
+//
+// The chain-trust-vs-peers check is a defensive guard against staking
+// on an isolated chain while another competing fork has equal or
+// greater cumulative trust on the network. Without peer-tip-hash
+// agreement (which is a separate protocol-level follow-up, not in this
+// branch) the most we can honestly assert is "our height matches or
+// exceeds the peer median" — that catches the failure mode this gate
+// was added to prevent (laptop alone minting against an isolated
+// consensus state). The full chain-trust comparison is left as a
+// follow-up that requires real peer-tip-hash state.
+//
+// Caller may pass an empty peer list to simulate a network outage
+// (useful from staking_tests).
+bool IsStakingSafe(const CWallet* pwallet, const std::vector<CNode*>& vNodesSnapshot);
 [[nodiscard]] bool IsInitialBlockDownload();
 // Height-based consensus fast path for historical checkpoint / rolling
 // assume-valid validation. This intentionally excludes operational IBD states
@@ -1545,6 +1570,39 @@ public:
     bool IsNull()
     {
         return vHave.empty();
+    }
+
+    // Return true if this locator's hash list contains the given hash.
+    // Used by getheaders fork-recovery to check whether the peer already
+    // knows the hardened checkpoint before serving from it (see
+    // fix/consensus-convergence in main.cpp).
+    bool Has(const uint256& hash) const
+    {
+        for (const uint256& h : vHave)
+            if (h == hash)
+                return true;
+        return false;
+    }
+
+    // Find the deepest block in this locator that exists in the given
+    // block index AND is on the main chain. Returns nullptr if no match.
+    // Used by getheaders fork-recovery to compute the last-common-ancestor
+    // when the peer doesn't already know the hardened checkpoint.
+    CBlockIndex* FindCommonAncestorInMainChain() const
+    {
+        CBlockIndex* pCommon = nullptr;
+        for (const uint256& h : vHave)
+        {
+            std::map<uint256, CBlockIndex*>::iterator mi = mapBlockIndex.find(h);
+            if (mi == mapBlockIndex.end())
+                continue;
+            CBlockIndex* pIdx = mi->second;
+            if (!pIdx->IsInMainChain())
+                continue;
+            if (pCommon == nullptr || pIdx->nHeight > pCommon->nHeight)
+                pCommon = pIdx;
+        }
+        return pCommon;
     }
 
     // Return the first hash in the locator (peer's tip), or 0 if empty

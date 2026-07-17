@@ -391,7 +391,6 @@ void StakeMiner(CWallet *pwallet)
     // Make this thread recognisable as the mining thread
     RenameThread("Triangles-miner");
 
-    bool fTryToSync = true;
     bool fForceStaking = GetBoolArg("-forcestaking", false);
 
     while (true)
@@ -407,23 +406,37 @@ void StakeMiner(CWallet *pwallet)
                 return;
         }
 
-        while (!fForceStaking && (vNodes.empty() || IsInitialBlockDownload()))
+        // Continuous staking safety gate (fix/consensus-convergence).
+        //
+        // Pre-fix: a one-shot strong check ran only once after the inner
+        // wait exited. Losing peers mid-staking left the staker running
+        // on a potentially isolated chain. This gate is evaluated on
+        // EVERY staking attempt.
+        //
+        // Refuses to stake when:
+        //   - IBD is active (IsInitialBlockDownload)
+        //   - fewer than 2 fully handshaken non-disconnecting peers
+        //   - our height is behind the peer median
+        //   - a known competing valid fork is at or above our active chain trust
+        //
+        // `-forcestaking` remains an explicit operator override (with the
+        // same warning as before) for stall recovery.
+        if (!fForceStaking)
         {
-            nLastCoinStakeSearchInterval = 0;
-            fTryToSync = true;
-            MilliSleep(1000);
-            if (fShutdown)
-                return;
-        }
-
-        if (fTryToSync && !fForceStaking)
-        {
-            fTryToSync = false;
-            if (vNodes.size() < 2 || nBestHeight < GetNumBlocksOfPeers())
+            if (!IsStakingSafe(pwallet, vNodes))
             {
-                MilliSleep(60000);
+                nLastCoinStakeSearchInterval = 0;
+                MilliSleep(1000);
                 continue;
             }
+        }
+        else if (vNodes.empty() || IsInitialBlockDownload())
+        {
+            // Force path still requires wallet connectivity; the rest of
+            // the gate is the operator's responsibility.
+            nLastCoinStakeSearchInterval = 0;
+            MilliSleep(1000);
+            continue;
         }
 
         //

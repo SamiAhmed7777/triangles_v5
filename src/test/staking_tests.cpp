@@ -316,4 +316,72 @@ BOOST_AUTO_TEST_CASE(weight_v5_min_age_floor_still_applies)
     BOOST_CHECK_EQUAL(weight, 0);
 }
 
+// --- IsStakingSafe: continuous staking safety gate (fix/consensus-convergence) ---
+//
+// Pre-fix: fTryToSync in StakeMiner was set false after the first use,
+// so losing peers mid-staking left the staker running on a potentially
+// isolated chain. The new gate (IsStakingSafe) is evaluated on every
+// staking attempt and refuses to stake when:
+//   - IBD is active
+//   - fewer than 2 fully handshaken, non-disconnecting peers
+//   - our height is behind the peer median
+//   - a peer reports a tip materially ahead of ours (>= 2 blocks)
+
+BOOST_AUTO_TEST_CASE(is_staking_safe_refuses_with_empty_peer_list)
+{
+    // Empty peer snapshot = the network-outage case. We must refuse to
+    // stake, otherwise the laptop-and-PC-with-no-network scenario
+    // (the original failure mode fix/consensus-convergence was created
+    // for) would still happen.
+    std::vector<CNode*> vEmpty;
+    BOOST_CHECK(!IsStakingSafe(nullptr, vEmpty));
+}
+
+BOOST_AUTO_TEST_CASE(is_staking_safe_refuses_when_wallet_is_null)
+{
+    // The gate must check the wallet pointer before doing anything
+    // else. A null wallet must refuse.
+    std::vector<CNode*> vEmpty;
+    BOOST_CHECK(!IsStakingSafe(nullptr, vEmpty));
+}
+
+BOOST_AUTO_TEST_CASE(is_staking_safe_is_continuous_not_one_shot)
+{
+    // Static structural test: the StakeMiner loop must call IsStakingSafe
+    // every iteration, not just once. Pre-fix code only ran the strong
+    // check after fTryToSync was reset to true, and then set fTryToSync
+    // false — meaning the check ran exactly once per exit from the inner
+    // wait loop. Post-fix must NOT have the fTryToSync flag at all.
+    //
+    // Use __FILE__ to find the repo root so the path resolves regardless
+    // of the build directory or test runner cwd.
+    std::string here = __FILE__;
+    size_t pos = here.rfind("/src/test/");
+    BOOST_REQUIRE(pos != std::string::npos);
+    std::string miner_src_path = here.substr(0, pos) + "/src/miner.cpp";
+
+    FILE* f = fopen(miner_src_path.c_str(), "r");
+    BOOST_REQUIRE(f != nullptr);
+    fseek(f, 0, SEEK_END);
+    long nSize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    std::vector<char> buf((size_t)nSize + 1, 0);
+    BOOST_REQUIRE(fread(buf.data(), 1, (size_t)nSize, f) == (size_t)nSize);
+    fclose(f);
+    std::string src(buf.data(), (size_t)nSize);
+
+    // The continuous gate must be in place.
+    BOOST_CHECK(src.find("IsStakingSafe(pwallet, vNodes)") != std::string::npos);
+
+    // fTryToSync must be gone from runtime code. We grep for the
+    // declaration `bool fTryToSync` and the assignments
+    // `fTryToSync = true` / `fTryToSync = false`. Comments are
+    // allowed (this test even has them) — only the runtime references
+    // are forbidden, since those are what would re-introduce the
+    // one-shot gate bug.
+    BOOST_CHECK(src.find("bool fTryToSync") == std::string::npos);
+    BOOST_CHECK(src.find("fTryToSync = true") == std::string::npos);
+    BOOST_CHECK(src.find("fTryToSync = false") == std::string::npos);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

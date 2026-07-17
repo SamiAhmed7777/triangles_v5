@@ -74,7 +74,7 @@ uint256 nBestInvalidTrust = 0;
 
 uint256 hashBestChain = 0;
 CBlockIndex* pindexBest = nullptr;
-CBlockIndex* pindexFinalized = nullptr;  // auto-checkpoint: deepest finalized block
+CBlockIndex* pindexLastHardenedCheckpoint = nullptr;  // last compiled hardened checkpoint in our local index (set at startup only; never advanced at runtime)
 
 // nAssumeValidThreshold: highest block height covered by the assumeValid
 // fast path. The fast path skips sigops/script/UTXO validation for blocks
@@ -1644,6 +1644,77 @@ int GetNumBlocksOfPeers()
     return std::max(cPeerBlockCounts.median(), Checkpoints::GetTotalBlocksEstimate());
 }
 
+bool IsStakingSafe(const CWallet* pwallet, const std::vector<CNode*>& vNodesSnapshot)
+{
+    // (1) Never stake during IBD.
+    if (IsInitialBlockDownload())
+    {
+        if (fDebug) printf("STAKING-GATE: refuse (IBD)\n");
+        return false;
+    }
+    if (!pwallet)
+    {
+        if (fDebug) printf("STAKING-GATE: refuse (no wallet)\n");
+        return false;
+    }
+
+    // (2) Require at least 2 fully handshaken, non-disconnecting peers.
+    int nLivePeers = 0;
+    for (CNode* pnode : vNodesSnapshot)
+    {
+        if (!pnode || pnode->fDisconnect)
+            continue;
+        // VERSION handshake complete: required to trust peer's tip data.
+        if (pnode->nVersion == 0)
+            continue;
+        nLivePeers++;
+    }
+    if (nLivePeers < 2)
+    {
+        if (fDebug) printf("STAKING-GATE: refuse (only %d live peers, need >=2)\n", nLivePeers);
+        return false;
+    }
+
+    // (3) Refuse to stake while our height is behind the peer median.
+    int nPeerMedian = GetNumBlocksOfPeers();
+    if (nBestHeight < nPeerMedian)
+    {
+        if (fDebug) printf("STAKING-GATE: refuse (our height %d behind peer median %d)\n",
+            nBestHeight, nPeerMedian);
+        return false;
+    }
+
+    // (4) Chain-trust vs. peers — the most we can honestly assert without
+    // peer-tip-hash state is that our cumulative chain trust has not
+    // fallen behind what peers report on nBestKnownHeight. If a peer's
+    // nBestKnownHeight is far beyond us, they may be on a competing fork.
+    // Until we add real peer-tip-hash protocol state, this is a
+    // conservative height+trust delta check.
+    if (pindexBest == nullptr)
+    {
+        if (fDebug) printf("STAKING-GATE: refuse (no active chain)\n");
+        return false;
+    }
+
+    // If any peer reports a tip materially ahead of us (>=2 blocks), treat
+    // as a competing-fork signal and wait. This is the defensive layer;
+    // the full "competing valid fork at our trust level" check needs
+    // peer-tip-hash agreement, which is a separate protocol change.
+    for (CNode* pnode : vNodesSnapshot)
+    {
+        if (!pnode || pnode->fDisconnect || pnode->nVersion == 0)
+            continue;
+        if (pnode->nBestKnownHeight > nBestHeight + 2)
+        {
+            if (fDebug) printf("STAKING-GATE: refuse (peer reports height %d, well ahead of our %d — possible competing fork)\n",
+                pnode->nBestKnownHeight, nBestHeight);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 bool IsInitialBlockDownload()
 {
     // Bootstrap escape hatch: when the network has stalled and every node
@@ -2579,46 +2650,22 @@ bool static Reorganize(CTxDBBase& txdb, CBlockIndex* pindexNew)
             return error("Reorganize() : pfork->pprev is null");
     }
 
-    // Finality: reject reorgs that go below the auto-checkpoint or
-    // exceed MAX_REORG_DEPTH blocks.  During IBD we allow deep reorgs
-    // since we haven't settled on a tip yet.
-    if (!IsInitialBlockDownload())
+    // Convergence rule (fix/consensus-convergence):
+    //
+    // Above the last globally shared hardened checkpoint, the valid chain
+    // with strictly greater cumulative chain trust wins — no depth cap,
+    // no local finality, no trust hysteresis.
+    //
+    // Below the hardened checkpoint: reject unconditionally. The
+    // checkpoint is sourced from the same compiled map (Checkpoints::
+    // GetLastCheckpoint via init.cpp startup init) on every node, so
+    // it is a globally shared anchor, not locally invented finality.
+    if (pindexLastHardenedCheckpoint && pfork->nHeight <= pindexLastHardenedCheckpoint->nHeight)
     {
-        if (pindexFinalized && pfork->nHeight < pindexFinalized->nHeight)
-        {
-            printf("REORGANIZE: REJECTED — fork at %d is below finalized block %d\n",
-                pfork->nHeight, pindexFinalized->nHeight);
-            return error("Reorganize() : fork point %d below auto-checkpoint %d",
-                pfork->nHeight, pindexFinalized->nHeight);
-        }
-        unsigned int nDisconnectDepth = pindexBest->nHeight - pfork->nHeight;
-        if (nDisconnectDepth > MAX_REORG_DEPTH)
-        {
-            printf("REORGANIZE: REJECTED — depth %u exceeds finality limit %u (fork at %d)\n",
-                nDisconnectDepth, MAX_REORG_DEPTH, pfork->nHeight);
-            return error("Reorganize() : reorg depth %u exceeds maximum %u", nDisconnectDepth, MAX_REORG_DEPTH);
-        }
-        // Deep reorgs (>6 blocks): require 10% more cumulative trust.
-        // Shallow reorgs (1-6 blocks) converge freely so nodes don't
-        // get stuck on their own fork.  Deep reorgs need a substantial
-        // trust advantage to prevent long-range attacks.
-        if (nDisconnectDepth > 6)
-        {
-            CBigNum bnNewTrust(pindexNew->nChainTrust);
-            CBigNum bnBestTrust(pindexBest->nChainTrust);
-            if (bnNewTrust * 10 <= bnBestTrust * 11)
-            {
-                printf("REORGANIZE: REJECTED — deep reorg (%u blocks) has insufficient trust delta "
-                       "(need >10%%, have %s vs %s)\n",
-                       nDisconnectDepth,
-                       bnNewTrust.ToString().c_str(),
-                       bnBestTrust.ToString().c_str());
-                return error("Reorganize() : deep reorg %u blocks with insufficient trust delta",
-                    nDisconnectDepth);
-            }
-            printf("REORGANIZE: Deep reorg (%u blocks) accepted — trust delta sufficient\n",
-                nDisconnectDepth);
-        }
+        printf("REORGANIZE: REJECTED — fork point %d is below shared hardened checkpoint %d\n",
+            pfork->nHeight, pindexLastHardenedCheckpoint->nHeight);
+        return error("Reorganize() : fork point %d at or below shared hardened checkpoint %d",
+            pfork->nHeight, pindexLastHardenedCheckpoint->nHeight);
     }
 
     // List of what to disconnect
@@ -2842,22 +2889,8 @@ bool CBlock::SetBestChain(CTxDBBase& txdb, CBlockIndex* pindexNew)
     nTimeBestReceived = GetTime();
     nTransactionsUpdated++;
 
-    // Auto-checkpoint: finalize the block at depth MAX_REORG_DEPTH.
-    // Only set when fully synced (not IBD) so we don't lock in a
-    // potentially wrong chain during initial sync.
-    if (!IsInitialBlockDownload() && nBestHeight > (int)MAX_REORG_DEPTH)
-    {
-        CBlockIndex* pcandidate = pindexBest;
-        for (int i = 0; i < (int)MAX_REORG_DEPTH && pcandidate; i++)
-            pcandidate = pcandidate->pprev;
-        if (pcandidate && pcandidate != pindexFinalized)
-        {
-            pindexFinalized = pcandidate;
-            printf("AUTO-CHECKPOINT: block %d (%s) is now finalized\n",
-                pindexFinalized->nHeight,
-                pindexFinalized->GetBlockHash().ToString().substr(0,20).c_str());
-        }
-    }
+    // pindexLastHardenedCheckpoint is intentionally NOT advanced here. See
+    // fix/consensus-convergence in init.cpp and Reorganize().
 
     // Rolling assumeValid threshold: advance so blocks older than
     // ASSUME_VALID_BUFFER from the tip take the fast path on future
@@ -4981,26 +5014,68 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             // happens when LoadBlockIndex() didn't fully heal pnext links,
             // or the chain was bootstrapped from a snapshot).
             //
-            // pitfall #61 guard: if pindexFinalized is set (from the startup
-            // hardcoded-checkpoint init in init.cpp), serve from there instead
-            // of genesis. This prevents a fork peer from feeding us their
-            // short chain back via getheaders — the peer only learns our
-            // canonical chain from the finalized point forward, and their
-            // conflicting fork gets rejected at the reorg check in
-            // Reorganize() because the fork point is below pindexFinalized.
+            // fork-peer getheaders recovery (fix/consensus-convergence).
+            //
+            // A forked peer calls getheaders with a locator containing the
+            // highest blocks it knows. If none of those hashes are in our
+            // main chain, locator.GetBlockIndex() returns pindexGenesisBlock
+            // and the for-loop below would send zero headers (the peer
+            // already has genesis), leaving the forked peer stuck.
+            //
+            // Recovery rule:
+            //   - If the locator contains pindexLastHardenedCheckpoint,
+            //     serve headers starting after the checkpoint — the peer
+            //     already has the checkpoint and needs canonical history
+            //     forward.
+            //   - Otherwise, serve from the last common ancestor (if any)
+            //     of the locator against our main chain, falling back to
+            //     pindexGenesisBlock so the peer can walk forward from
+            //     scratch.
+            //
+            // We never re-anchor at pindexLastHardenedCheckpoint without
+            // confirming the peer already knows it; otherwise we'd hand
+            // them a header whose parent they don't have, which is the
+            // inverse of the recovery path we want.
             if (!locator.IsNull() && pindex == pindexGenesisBlock &&
                 pindexGenesisBlock && locator.GetTipHash() != pindexGenesisBlock->GetBlockHash())
             {
-                if (pindexFinalized && pindexFinalized->pnext)
+                bool fServed = false;
+                if (pindexLastHardenedCheckpoint)
                 {
-                    printf("getheaders: fork detected from peer %s, serving headers from finalized block %d (not genesis) — pitfall #61 guard\n",
-                        pfrom->addr.ToString().c_str(), pindexFinalized->nHeight);
-                    pindex = pindexFinalized;
+                    if (locator.Has(pindexLastHardenedCheckpoint->GetBlockHash()))
+                    {
+                        printf("getheaders: peer locator contains hardened checkpoint %d — serving canonical headers from there\n",
+                            pindexLastHardenedCheckpoint->nHeight);
+                        pindex = pindexLastHardenedCheckpoint;
+                        fServed = true;
+                    }
+                    else
+                    {
+                        printf("getheaders: peer locator lacks hardened checkpoint %d — falling back to last common ancestor\n",
+                            pindexLastHardenedCheckpoint->nHeight);
+                    }
                 }
-                else
+                if (!fServed)
                 {
-                    printf("WARNING: peer getheaders locator has no common blocks — serving headers from genesis (peer may be on a fork)\n");
-                    pindex = pindexGenesisBlock;
+                    // Last-common-ancestor walk via the public locator API. We can't
+                    // iterate locator.vHave from outside the class (it's
+                    // protected); CBlockLocator::FindCommonAncestorInMainChain
+                    // does the walk for us and returns the deepest block
+                    // we have on the main chain that the peer also knows.
+                    // Falling back to genesis when no overlap exists
+                    // ensures the peer gets a recoverable header chain.
+                    CBlockIndex* pCommon = locator.FindCommonAncestorInMainChain();
+                    if (pCommon && pCommon != pindexLastHardenedCheckpoint)
+                    {
+                        printf("getheaders: serving canonical headers from last common ancestor %d (peer may be on a fork)\n",
+                            pCommon->nHeight);
+                        pindex = pCommon;
+                    }
+                    else
+                    {
+                        printf("getheaders: peer locator has no common blocks — serving headers from genesis (peer on a long fork)\n");
+                        pindex = pindexGenesisBlock;
+                    }
                 }
             }
 

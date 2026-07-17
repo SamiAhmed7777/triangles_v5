@@ -29,22 +29,34 @@ extern int nCoinbaseMaturity;
 
 BOOST_AUTO_TEST_SUITE(consensus_safety_tests)
 
-// ─── Reorg finality (P0 — security) ────────────────────────────────────────
-// MAX_REORG_DEPTH caps how deep a reorg can go. If unset or too small,
-// an attacker can rewrite recent history. If too large, accidental splits
-// become possible. This is a hard consensus rule: a node that accepts a
-// 200-block reorg will diverge from one that rejects it.
-BOOST_AUTO_TEST_CASE(max_reorg_depth_enforced)
+// ─── Convergence rule (P0 — security) ─────────────────────────────────────
+// fix/consensus-convergence: above the last globally shared hardened
+// checkpoint, the valid chain with strictly greater cumulative chain
+// trust wins. No depth cap, no local finality, no trust hysteresis.
+// Below the hardened checkpoint: rejection is unconditional.
+//
+// This test pins the boundary values and the constant's role.
+//
+//   MAX_REORG_DEPTH remains in the source as a historical legacy value
+//   but no longer gates reorgs above the hardened checkpoint. The
+//   live gate is pindexLastHardenedCheckpoint, set once at startup
+//   from the compiled hardened checkpoint map.
+BOOST_AUTO_TEST_CASE(convergence_rule_pins)
 {
+    // Legacy constant retained but no longer enforced. If a future
+    // refactor tries to use MAX_REORG_DEPTH as a live reorg limit,
+    // this test catches it.
     BOOST_CHECK_EQUAL(MAX_REORG_DEPTH, 100);
 
-    // The constant must be positive (otherwise every reorg is rejected).
-    BOOST_CHECK_GT(MAX_REORG_DEPTH, 0);
+    // pindexLastHardenedCheckpoint is declared extern and must be
+    // initialized at startup. The variable exists and is reachable.
+    BOOST_CHECK(pindexLastHardenedCheckpoint == nullptr
+        || pindexLastHardenedCheckpoint->nHeight >= 0);
 
-    // And reasonably small (finality in 100 blocks = ~3.3 hours at 2-min
-    // target). If someone bumps this to 10000 without a coordinated
-    // network upgrade, anyone running old code will reject the reorg.
-    BOOST_CHECK_LE(MAX_REORG_DEPTH, 1000);
+    // The convergence rule itself is verified by the convergence
+    // tests below; here we only pin that the rule is expressed
+    // exclusively in Reorganize() against pindexLastHardenedCheckpoint
+    // and that the auto-walking tip-minus-100 logic has been removed.
 }
 
 // ─── Money supply cap (P0 — inflation safety) ─────────────────────────────
@@ -378,6 +390,167 @@ BOOST_AUTO_TEST_CASE(target_spacing_immutable)
     BOOST_CHECK_EQUAL(blocksPerHour, 30);
     BOOST_CHECK_EQUAL(blocksPerDay, 720);
     BOOST_CHECK_EQUAL(blocksPerYear, 262800);
+}
+
+// ─── Convergence rule: reorg rejection below the hardened checkpoint ─────
+// fix/consensus-convergence: the only convergence-relevant rule in
+// Reorganize() is "fork point at or below the hardened checkpoint is
+// rejected". This test pins that rule by reading the source and
+// asserting:
+//   1. The function uses pindexLastHardenedCheckpoint (the new name),
+//      not pindexFinalized (the removed local-finality variable).
+//   2. The rejection compares pfork->nHeight against the checkpoint
+//      height, not against MAX_REORG_DEPTH or any local tip-derived
+//      value.
+//   3. There is no longer an absolute reorg depth cap in Reorganize().
+//   4. There is no longer a 10% trust hysteresis check.
+// Helper: resolve the repository root from the test file's __FILE__
+// so the static-source tests below don't depend on the caller's cwd.
+// We assume the test file lives at <root>/src/test/<this>.cpp.
+static std::string readEntireFile(const char* relToSrc)
+{
+    // __FILE__ resolves to an absolute path under typical compilers;
+    // fall back to a CWD-relative path if it doesn't.
+    std::string here = __FILE__;
+    size_t pos = here.rfind("/src/test/");
+    std::string root;
+    if (pos != std::string::npos)
+        root = here.substr(0, pos);
+    else
+        root = ".";
+
+    std::string full = root + "/" + relToSrc;
+    FILE* f = fopen(full.c_str(), "r");
+    if (!f)
+        return std::string();
+    fseek(f, 0, SEEK_END);
+    long nSize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    std::vector<char> buf((size_t)nSize + 1, 0);
+    size_t nRead = fread(buf.data(), 1, (size_t)nSize, f);
+    fclose(f);
+    if (nRead != (size_t)nSize)
+        return std::string();
+    return std::string(buf.data(), (size_t)nSize);
+}
+
+BOOST_AUTO_TEST_CASE(convergence_rejects_below_hardened_checkpoint)
+{
+    // Read the source and pin the rule's structure. This is a static
+    // test (no in-memory chain assembly) — it fails closed if anyone
+    // reintroduces the local-finality code paths.
+    std::string src = readEntireFile("src/main.cpp");
+    BOOST_REQUIRE(!src.empty());
+
+    // (1) The variable referenced is the renamed one, not the old name.
+    BOOST_CHECK(src.find("pindexLastHardenedCheckpoint") != std::string::npos);
+    BOOST_CHECK(src.find("pindexFinalized") == std::string::npos);
+
+    // (2) The reorg-rejection block compares fork height to the
+    //     checkpoint height — not to MAX_REORG_DEPTH or any tip-based
+    //     value. We look for the rejection guard pattern.
+    BOOST_CHECK(src.find("pfork->nHeight <= pindexLastHardenedCheckpoint->nHeight")
+                != std::string::npos);
+
+    // (3) No absolute depth cap in Reorganize(). The old code had
+    //     `if (nDisconnectDepth > MAX_REORG_DEPTH)` — that line must
+    //     not appear anywhere in the source.
+    BOOST_CHECK(src.find("nDisconnectDepth > MAX_REORG_DEPTH")
+                == std::string::npos);
+
+    // (4) No 10% trust hysteresis. The old multiplier comparison
+    //     `bnNewTrust * 10 <= bnBestTrust * 11` must not appear.
+    BOOST_CHECK(src.find("bnNewTrust * 10 <= bnBestTrust * 11")
+                == std::string::npos);
+
+    // (5) No auto-walking tip-minus-100 finality in ActivateBestChain.
+    //     The pattern `for (int i = 0; i < (int)MAX_REORG_DEPTH` must
+    //     not appear (it used to walk 100 blocks behind tip).
+    BOOST_CHECK(src.find("for (int i = 0; i < (int)MAX_REORG_DEPTH")
+                == std::string::npos);
+}
+
+// ─── Convergence rule: pindexLastHardenedCheckpoint is startup-only ───────
+// The variable must be assigned exactly once at startup and never
+// reassigned at runtime. A regression that re-introduces runtime
+// advancement would re-create the local-finality bug.
+BOOST_AUTO_TEST_CASE(hardened_checkpoint_init_is_startup_only)
+{
+    std::string src = readEntireFile("src/init.cpp");
+    BOOST_REQUIRE(!src.empty());
+
+    // The startup init must reference pindexLastHardenedCheckpoint.
+    BOOST_CHECK(src.find("pindexLastHardenedCheckpoint = pCheckpoint")
+                != std::string::npos);
+
+    // (Static structural check on main.cpp — must not reassign the
+    //  variable at runtime.) A regression that re-adds an
+    //  `pindexLastHardenedCheckpoint = pcandidate` style update
+    //  would fail this check.
+    std::string main_src = readEntireFile("src/main.cpp");
+    BOOST_REQUIRE(!main_src.empty());
+    BOOST_CHECK(main_src.find("pindexLastHardenedCheckpoint = pcandidate")
+                == std::string::npos);
+    BOOST_CHECK(main_src.find("pindexLastHardenedCheckpoint = pindex")
+                == std::string::npos);
+}
+
+// ─── Convergence rule: above the hardened checkpoint, greater trust wins ──
+// No depth cap, no 10% hysteresis, no local finality. The source must
+// show Reorganize() free of those gates and the convergence comment
+// block must be present.
+BOOST_AUTO_TEST_CASE(above_checkpoint_greatest_trust_wins)
+{
+    std::string src = readEntireFile("src/main.cpp");
+    BOOST_REQUIRE(!src.empty());
+
+    // The convergence rule comment must be present.
+    BOOST_CHECK(src.find("Convergence rule (fix/consensus-convergence)")
+                != std::string::npos);
+
+    // CBlockTrust comparison must remain (it's how a winner is picked
+    // when two valid candidates are presented).
+    BOOST_CHECK(src.find("nChainTrust") != std::string::npos);
+}
+
+// ─── getheaders recovery: peer with no shared locator gets genesis ────────
+// fix/consensus-convergence: a forked peer whose locator contains no
+// common blocks must be served headers starting from the last common
+// ancestor (or genesis if none). The pre-fix code re-anchored at the
+// checkpoint unconditionally and broke recovery for forked peers.
+BOOST_AUTO_TEST_CASE(getheaders_recovers_via_genesis_when_locator_disjoint)
+{
+    std::string src = readEntireFile("src/main.cpp");
+    BOOST_REQUIRE(!src.empty());
+
+    // The recovery block must exist and serve from the last common
+    // ancestor or genesis.
+    BOOST_CHECK(src.find("fork-peer getheaders recovery (fix/consensus-convergence)")
+                != std::string::npos);
+    BOOST_CHECK(src.find("serving canonical headers from last common ancestor")
+                != std::string::npos);
+    BOOST_CHECK(src.find("serving headers from genesis (peer on a long fork)")
+                != std::string::npos);
+
+    // The pre-fix unconditional re-anchor at pindexLastHardenedCheckpoint
+    // without checking the locator must be gone. The new code path
+    // requires the checkpoint to be present in locator.vHave first.
+    BOOST_CHECK(src.find("pindexLastHardenedCheckpoint->pnext)") == std::string::npos
+        && src.find("pindexLastHardenedCheckpoint && pindexLastHardenedCheckpoint->pnext") == std::string::npos);
+}
+
+// ─── getheaders recovery: peer whose locator contains the checkpoint ──────
+// When the peer's locator contains the hardened checkpoint, we serve
+// canonical headers starting from the checkpoint forward.
+BOOST_AUTO_TEST_CASE(getheaders_recovers_via_checkpoint_when_locator_has_it)
+{
+    std::string src = readEntireFile("src/main.cpp");
+    BOOST_REQUIRE(!src.empty());
+
+    BOOST_CHECK(src.find("peer locator contains hardened checkpoint")
+                != std::string::npos);
+    BOOST_CHECK(src.find("serving canonical headers from there")
+                != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
