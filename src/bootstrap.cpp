@@ -4,6 +4,7 @@
 #include "bootstrap.h"
 #include "utxosnapshot.h"
 #include "txdb.h"
+#include "checkpoints.h"
 
 #include <filesystem>
 #include <fstream>
@@ -22,6 +23,7 @@
 #include "key.h"
 #include "base58.h"
 #include "util.h"
+#include "json/nlohmann_json.hpp"
 
 extern const std::string strMessageMagic;
 
@@ -30,12 +32,14 @@ extern const std::string strMessageMagic;
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <cctype>
 
 #ifdef WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <netdb.h>
 #include <unistd.h>
 #endif
@@ -87,6 +91,20 @@ static SOCKET ConnectDirectTCP(const std::string& host, int port, std::string& s
         hSocket = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
         if (hSocket == INVALID_SOCKET)
             continue;
+
+        // A bootstrap endpoint must not be able to wedge daemon startup by
+        // accepting a connection and then never sending a response.
+#ifdef WIN32
+        DWORD timeoutMs = 30000;
+        setsockopt(hSocket, SOL_SOCKET, SO_RCVTIMEO,
+                   reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+        setsockopt(hSocket, SOL_SOCKET, SO_SNDTIMEO,
+                   reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+#else
+        struct timeval timeout = {30, 0};
+        setsockopt(hSocket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        setsockopt(hSocket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#endif
 
         if (connect(hSocket, rp->ai_addr, (int)rp->ai_addrlen) == 0)
             break; // success
@@ -154,8 +172,11 @@ struct HttpConn {
             strError = "Failed to create SSL context";
             return false;
         }
-        // Skip cert verification — we verify data integrity via checkpoint hashes
-        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+        if (SSL_CTX_set_default_verify_paths(ctx) != 1) {
+            strError = "Failed to load the system TLS trust store";
+            return false;
+        }
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
 
         ssl = SSL_new(ctx);
         if (!ssl) {
@@ -163,13 +184,21 @@ struct HttpConn {
             return false;
         }
         SSL_set_fd(ssl, (int)sock);
-        SSL_set_tlsext_host_name(ssl, hostname.c_str()); // SNI
+        if (SSL_set_tlsext_host_name(ssl, hostname.c_str()) != 1 ||
+            SSL_set1_host(ssl, hostname.c_str()) != 1) {
+            strError = "Failed to configure TLS hostname verification for " + hostname;
+            return false;
+        }
 
         if (SSL_connect(ssl) != 1) {
             unsigned long err = ERR_get_error();
             char errBuf[256];
             ERR_error_string_n(err, errBuf, sizeof(errBuf));
             strError = "TLS handshake failed with " + hostname + ": " + errBuf;
+            return false;
+        }
+        if (SSL_get_verify_result(ssl) != X509_V_OK) {
+            strError = "TLS certificate verification failed for " + hostname;
             return false;
         }
         return true;
@@ -229,13 +258,18 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
                   ProgressCallback progressFn,
                   std::string& strError,
                   bool noProxy,
-                  int portOverride)
+                  int portOverride,
+                  int64_t maxDownloadBytes)
 {
     try {
+        if (maxDownloadBytes <= 0) {
+            strError = "Download size limit must be positive";
+            return false;
+        }
         std::string currentHost = host;
         std::string currentPath = urlPath;
         int currentPort = (portOverride > 0) ? portOverride : PORT;
-        bool useSSL = false;
+        bool useSSL = (currentPort == 443);
         std::string headerData;
         int redirectCount = 0;
         const int MAX_REDIRECTS = 5;
@@ -324,11 +358,23 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
                 // Parse redirect URL — supports http://, https://, and relative paths
                 if (location.compare(0, 7, "http://") == 0 ||
                     location.compare(0, 8, "https://") == 0) {
-                    if (!ParseAbsoluteUrl(location, useSSL, currentHost,
-                                          currentPort, currentPath)) {
+                    bool redirectUsesSSL = false;
+                    std::string redirectHost;
+                    std::string redirectPath;
+                    int redirectPort = 0;
+                    if (!ParseAbsoluteUrl(location, redirectUsesSSL, redirectHost,
+                                          redirectPort, redirectPath)) {
                         strError = "Unsupported redirect location: " + location;
                         return false;
                     }
+                    if (useSSL && !redirectUsesSSL) {
+                        strError = "Refusing HTTPS downgrade redirect to " + location;
+                        return false;
+                    }
+                    useSSL = redirectUsesSSL;
+                    currentHost = redirectHost;
+                    currentPath = redirectPath;
+                    currentPort = redirectPort;
                 } else if (!location.empty() && location[0] == '/') {
                     currentPath = location;
                 } else {
@@ -362,6 +408,10 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
             if (lineEnd != std::string::npos)
                 content_length = std::stoll(headerData.substr(valStart, lineEnd - valStart));
         }
+        if (content_length < 0 || content_length > maxDownloadBytes) {
+            strError = "Download response exceeds the configured size limit";
+            return false;
+        }
 
         // Open output file
         FILE* file = fopen(destPath.string().c_str(), "wb");
@@ -385,7 +435,18 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
             }
             if (n == 0) break; // EOF
 
-            fwrite(chunk, 1, n, file);
+            if (bytes_written > maxDownloadBytes - n) {
+                fclose(file);
+                fs::remove(destPath);
+                strError = "Download response exceeded the configured size limit";
+                return false;
+            }
+            if (fwrite(chunk, 1, n, file) != static_cast<size_t>(n)) {
+                fclose(file);
+                fs::remove(destPath);
+                strError = "Failed writing bootstrap data to disk";
+                return false;
+            }
             bytes_written += n;
 
             if (progressFn && (bytes_written - last_progress >= 262144)) {
@@ -422,7 +483,8 @@ bool FetchFileList(const std::string& host,
     fs::path tmpPath = fs::temp_directory_path() / "triangles_bootstrap_filelist.txt";
 
     std::string urlPath = std::string(BASE_PATH) + "filelist.txt";
-    if (!DownloadFile(host, urlPath, tmpPath, nullptr, strError, noProxy))
+    if (!DownloadFile(host, urlPath, tmpPath, nullptr, strError, noProxy,
+                      -1, 1024 * 1024))
         return false;
 
     // Read lines
@@ -451,23 +513,6 @@ bool FetchFileList(const std::string& host,
 }
 
 // --- tar.gz bootstrap support ---
-
-namespace {
-
-// Parse a tar octal field (ASCII octal, null/space terminated)
-static int64_t ParseTarOctal(const char* field, size_t len)
-{
-    int64_t result = 0;
-    for (size_t i = 0; i < len && field[i] != '\0' && field[i] != ' '; i++) {
-        if (field[i] < '0' || field[i] > '7') continue;
-        result = (result << 3) | (field[i] - '0');
-    }
-    return result;
-}
-
-// Extract a tar.gz file to a destination directory
-
-} // anonymous namespace
 
 bool ParseManifest(const fs::path& manifestPath,
                    SnapshotManifest& manifest,
@@ -575,12 +620,9 @@ bool VerifyManifest(const SnapshotManifest& manifest,
     }
 
     // ─── Signature verification (#11) ─────────────────────────────────────
-    // If the manifest includes a signature, verify it against the
-    // compiled-in snapshot signing key. This prevents MITM attacks
-    // where an attacker replaces the snapshot file on the bootstrap server.
-    //
-    // If no signature is present, print a warning but continue (backward
-    // compatibility with older snapshots that pre-date signing).
+    // Legacy pre-built indexes are never accepted without authentication.
+    // This format is disabled below, but keep its verifier fail-closed so a
+    // future caller cannot silently revive the old trust behavior.
     if (!manifest.signature.empty()) {
         // Build the message that was signed: "height||hash" (ASCII)
         std::string message = std::to_string(manifest.height) + "||" + manifest.hash;
@@ -656,12 +698,12 @@ bool VerifyManifest(const SnapshotManifest& manifest,
             strError = "Snapshot manifest signature INVALID — possible tampering detected";
             return false;
         } else {
-            // rc < 0 means error (e.g., placeholder zero pubkey not yet deployed)
-            printf("WARNING: Snapshot manifest signature verification error (rc=%d). "
-                   "Signing key may not be deployed yet. Proceeding without verification.\n", rc);
+            strError = "Snapshot manifest signature verification error";
+            return false;
         }
     } else {
-        printf("WARNING: Snapshot manifest has no signature — loading WITHOUT signature verification\n");
+        strError = "Snapshot manifest has no signature";
+        return false;
     }
 
     return true;
@@ -672,6 +714,13 @@ bool DownloadBootstrap(const std::string& host,
                        ProgressCallback progressFn,
                        std::string& strError)
 {
+    (void)host;
+    (void)dataDir;
+    (void)progressFn;
+    strError = "Legacy file-list bootstrap is disabled; use a compiled-hash UTXO snapshot or sync from genesis";
+    return false;
+
+#if 0
     bool gotBlockFile = false;
 
     // FastImport removed (commit bdb7253). v2 UTXO snapshot is the ONLY
@@ -758,8 +807,10 @@ bool DownloadBootstrap(const std::string& host,
         fs::remove(manifestPath);
 
     return true;
+#endif
 }
 
+#if 0
 namespace {
 
 // Try to find the canonical UTXO snapshot entry in the bootstrap server's
@@ -892,6 +943,7 @@ bool UnsetTrustedSnapshotPublisher(std::string& strError)
     fs::remove(filePath);
     return true;
 }
+#endif
 
 // Re-enter anonymous namespace for the remaining file-private helpers.
 // (IsTrustedSnapshotSigner / VerifySignedMessage / ExtractJsonString are
@@ -899,6 +951,7 @@ bool UnsetTrustedSnapshotPublisher(std::string& strError)
 
 namespace {
 
+#if 0
 bool IsTrustedSnapshotSigner(const std::string& addr)
 {
     // 1. Runtime override (set via RPC).
@@ -1072,6 +1125,7 @@ bool FindCanonicalSnapshotInManifest(const std::string& manifestText,
 
     return true;
 }
+#endif
 
 // Read an entire file into a string. Empty string on error.
 std::string ReadFileToString(const fs::path& path)
@@ -1114,6 +1168,80 @@ std::string Sha256OfFile(const fs::path& path)
 
 } // anonymous namespace
 
+namespace {
+
+bool IsHexString(const std::string& value, size_t expectedLength)
+{
+    if (value.size() != expectedLength)
+        return false;
+    for (unsigned char c : value) {
+        if (!std::isxdigit(c))
+            return false;
+    }
+    return true;
+}
+
+} // anonymous namespace
+
+bool ParseRemoteSnapshotManifest(const std::string& manifestText,
+                                 RemoteSnapshot& snapshot,
+                                 std::string& strError)
+{
+    snapshot = RemoteSnapshot{};
+
+    try {
+        const nlohmann::json root = nlohmann::json::parse(manifestText);
+        if (!root.is_object() || !root.contains("canonical") ||
+            !root.contains("files") || !root.contains("chain_tip")) {
+            strError = "manifest.json is missing canonical, files, or chain_tip";
+            return false;
+        }
+
+        snapshot.filename = root.at("canonical").at("snapshot").get<std::string>();
+        if (snapshot.filename.empty() || snapshot.filename == "." ||
+            snapshot.filename == ".." ||
+            snapshot.filename.find('/') != std::string::npos ||
+            snapshot.filename.find('\\') != std::string::npos) {
+            strError = "manifest snapshot filename must be a plain filename";
+            return false;
+        }
+
+        const nlohmann::json& files = root.at("files");
+        if (!files.is_object() || !files.contains(snapshot.filename)) {
+            strError = "canonical snapshot is absent from the files object";
+            return false;
+        }
+
+        const nlohmann::json& file = files.at(snapshot.filename);
+        const std::string type = file.at("type").get<std::string>();
+        if (type.rfind("utxo_snapshot", 0) != 0) {
+            strError = "canonical file is not a UTXO snapshot";
+            return false;
+        }
+
+        snapshot.sha256 = file.at("sha256").get<std::string>();
+        std::transform(snapshot.sha256.begin(), snapshot.sha256.end(),
+                       snapshot.sha256.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        snapshot.height = root.at("chain_tip").at("height").get<int>();
+        snapshot.blockHash = root.at("chain_tip").at("blockhash").get<std::string>();
+        std::transform(snapshot.blockHash.begin(), snapshot.blockHash.end(),
+                       snapshot.blockHash.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        if (snapshot.height <= 0 || !IsHexString(snapshot.sha256, 64) ||
+            !IsHexString(snapshot.blockHash, 64)) {
+            strError = "manifest snapshot height or hash fields are invalid";
+            return false;
+        }
+    } catch (const std::exception& e) {
+        strError = std::string("invalid manifest.json: ") + e.what();
+        return false;
+    }
+
+    return true;
+}
+
 bool DownloadUtxoSnapshot(const std::string& host,
                           const fs::path& dataDir,
                           ProgressCallback progressFn,
@@ -1121,79 +1249,51 @@ bool DownloadUtxoSnapshot(const std::string& host,
 {
     const bool noProxy = true;
 
-    // Step 1: discover the canonical snapshot filename + expected SHA256 +
-    // per-snapshot manifest filename from the big manifest.json. Falls back
-    // to legacy URL if manifest unavailable.
-    std::string snapshotFilename = "utxo-snapshot.bin";
-    std::string expectedSha256;
-    std::string snapshotManifestFilename;
-    bool haveManifest = false;
-
+    // manifest.json is discovery metadata, not a trust root. The only accepted
+    // snapshot hash is the one compiled into this release for the same height.
     fs::path tmpManifest = dataDir / "manifest.json.tmp";
-    if (DownloadFile(host, "manifest.json", tmpManifest, nullptr, strError, noProxy)) {
-        std::string text = ReadFileToString(tmpManifest);
+    if (!DownloadFile(host, std::string(BASE_PATH) + "manifest.json",
+                      tmpManifest, nullptr, strError, noProxy,
+                      -1, 4 * 1024 * 1024)) {
         fs::remove(tmpManifest);
-
-        std::string mFile, mSha, mManifest;
-        std::string mErr;
-        if (FindCanonicalSnapshotInManifest(text, mFile, mSha, mManifest, mErr)) {
-            snapshotFilename = mFile;
-            expectedSha256 = mSha;
-            snapshotManifestFilename = mManifest;
-            haveManifest = true;
-            printf("Bootstrap: manifest declares canonical snapshot %s (sha256=%s)\n",
-                   snapshotFilename.c_str(), expectedSha256.substr(0, 16).c_str());
-        } else {
-            printf("Bootstrap: manifest parse failed (%s) — falling back to legacy URL\n",
-                   mErr.c_str());
-        }
-    } else {
-        printf("Bootstrap: no manifest.json available — falling back to legacy URL\n");
-        strError.clear();
+        return false;
     }
 
-    // Step 2: verify the per-snapshot manifest's signature. This is the
-    // AUTHENTICATION gate — the signature attests that the listed snapshot
-    // file came from a trusted operator. No checkpoint required; signature
-    // alone proves authenticity.
-    if (!snapshotManifestFilename.empty()) {
-        fs::path tmpSnapManifest = dataDir / "snapshot-manifest.tmp";
-        if (!DownloadFile(host, snapshotManifestFilename, tmpSnapManifest, nullptr, strError, noProxy)) {
-            fs::remove(tmpSnapManifest);
-            return false;
-        }
-        std::string snapManifestText = ReadFileToString(tmpSnapManifest);
-        fs::remove(tmpSnapManifest);
-
-        std::string signerAddr = ExtractJsonString(snapManifestText, "signing_address");
-        std::string message     = ExtractJsonString(snapManifestText, "message");
-        std::string signature   = ExtractJsonString(snapManifestText, "signature");
-        std::string declaredSha = ExtractJsonString(snapManifestText, "snapshot_sha256");
-
-        if (signerAddr.empty() || message.empty() || signature.empty()) {
-            strError = "per-snapshot manifest missing required fields (signing_address/message/signature)";
-            return false;
-        }
-        if (!IsTrustedSnapshotSigner(signerAddr)) {
-            strError = "snapshot manifest signer " + signerAddr + " is not in trusted signers list";
-            return false;
-        }
-        std::string vErr;
-        if (!VerifySignedMessage(signerAddr, signature, message, vErr)) {
-            strError = "snapshot signature verification failed: " + vErr;
-            return false;
-        }
-        if (!declaredSha.empty())
-            expectedSha256 = declaredSha;
-        printf("Bootstrap: snapshot signature verified (signer=%s)\n", signerAddr.c_str());
-    } else {
-        printf("Bootstrap: WARNING — no per-snapshot manifest available; "
-               "loading snapshot WITHOUT signature verification\n");
+    const std::string manifestText = ReadFileToString(tmpManifest);
+    fs::remove(tmpManifest);
+    if (manifestText.empty()) {
+        strError = "Cannot read downloaded manifest.json";
+        return false;
     }
 
-    // Step 3: download the canonical snapshot file.
+    RemoteSnapshot snapshot;
+    if (!ParseRemoteSnapshotManifest(manifestText, snapshot, strError))
+        return false;
+
+    const uint256 manifestBlockHash(snapshot.blockHash);
+    if (!Checkpoints::IsKnownCheckpoint(snapshot.height, manifestBlockHash)) {
+        strError = "Server snapshot tip is not a hardened checkpoint in this release";
+        return false;
+    }
+
+    uint256 compiledFileHash;
+    if (!Checkpoints::GetSnapshotHash(snapshot.height, compiledFileHash)) {
+        strError = "Snapshot height " + std::to_string(snapshot.height) +
+                   " has no file hash compiled into this release";
+        return false;
+    }
+    const std::string compiledSha256 = compiledFileHash.ToString();
+    if (snapshot.sha256 != compiledSha256) {
+        strError = "Server snapshot hash does not match the hash compiled into this release";
+        return false;
+    }
+
+    printf("Bootstrap: manifest selects compiled snapshot %s at height %d (sha256=%s)\n",
+           snapshot.filename.c_str(), snapshot.height,
+           compiledSha256.substr(0, 16).c_str());
+
     fs::path tmpPath = dataDir / "utxo-snapshot.bin.tmp";
-    std::string urlPath = std::string(BASE_PATH) + snapshotFilename;
+    std::string urlPath = std::string(BASE_PATH) + snapshot.filename;
 
     printf("Bootstrap: downloading UTXO snapshot from %s%s...\n", host.c_str(), urlPath.c_str());
 
@@ -1202,30 +1302,25 @@ bool DownloadUtxoSnapshot(const std::string& host,
         return false;
     }
 
-    // Step 4: verify the downloaded file's SHA256 against the manifest.
-    if (!expectedSha256.empty()) {
-        std::string actualSha = Sha256OfFile(tmpPath);
-        if (actualSha.empty()) {
-            strError = "Cannot read downloaded snapshot for SHA256 verification";
-            fs::remove(tmpPath);
-            return false;
-        }
-        if (actualSha != expectedSha256) {
-            strError = "Snapshot SHA256 mismatch: expected " + expectedSha256
-                     + ", got " + actualSha
-                     + " (manifest/snapshot tampering or server misconfiguration)";
-            fs::remove(tmpPath);
-            return false;
-        }
-        printf("Bootstrap: snapshot SHA256 verified (%s)\n", actualSha.substr(0, 16).c_str());
+    const std::string actualSha256 = Sha256OfFile(tmpPath);
+    if (actualSha256.empty()) {
+        strError = "Cannot read downloaded snapshot for SHA256 verification";
+        fs::remove(tmpPath);
+        return false;
     }
+    if (actualSha256 != compiledSha256) {
+        strError = "Snapshot SHA256 does not match the hash compiled into this release";
+        fs::remove(tmpPath);
+        return false;
+    }
+    printf("Bootstrap: compiled snapshot SHA256 verified (%s)\n",
+           actualSha256.substr(0, 16).c_str());
 
     printf("Bootstrap: UTXO snapshot downloaded, loading into database...\n");
 
-    // Step 5: load the snapshot. requireCheckpoint is FALSE — signature is
-    // the authentication gate; checkpoints would force snapshots only at
-    // specific heights. Signature alone is sufficient.
-    if (!UtxoSnapshot::LoadSnapshot(tmpPath, dataDir, strError, /*requireCheckpoint=*/false)) {
+    // File hash and tip checkpoint are independent gates. The hash commits to
+    // the complete serialized UTXO set; the checkpoint commits to chain identity.
+    if (!UtxoSnapshot::LoadSnapshot(tmpPath, dataDir, strError, /*requireCheckpoint=*/true)) {
         fs::remove(tmpPath);
         return false;
     }

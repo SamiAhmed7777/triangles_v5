@@ -8,6 +8,9 @@ on:
     branches: [master]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test-linux-unit:
     # This is the canonical CI gate for unit tests. Failures here MUST block
@@ -18,7 +21,7 @@ jobs:
     # Unit regression = blocking PR (this job).
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
@@ -85,8 +88,8 @@ jobs:
           if [ -x build/bin/test_chaindb_equivalence ]; then
             ./build/bin/test_chaindb_equivalence --log_level=test_suite
           else
-            echo "test_chaindb_equivalence not built — skipping chaindb equivalence"
-            exit 0
+            echo "::error::test_chaindb_equivalence was not built"
+            exit 1
           fi
 
       - name: Run unit tests
@@ -110,7 +113,7 @@ jobs:
       # and BDB until they're fixed file-by-file.
       SAN_FLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -fno-sanitize=alignment,signed-integer-overflow,vptr"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
@@ -168,7 +171,7 @@ jobs:
       UBSAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
       SAN_FLAGS: "-fsanitize=address,undefined,fuzzer-no-link -fno-omit-frame-pointer -fno-sanitize-recover=undefined -fno-sanitize=alignment,signed-integer-overflow,vptr"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
@@ -263,11 +266,11 @@ jobs:
             echo "::error::Fuzzer produced crash/leak artifacts"
             exit 1
           fi
-          exit 0
+          exit "$FUZZ_EXIT"
 
       - name: Upload fuzzer artifacts on success
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fuzz-artifacts
           path: build-fuzz/fuzz_artifacts/
@@ -278,11 +281,11 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
         with:
           msystem: MINGW64
           update: true
@@ -320,7 +323,7 @@ jobs:
             -DBUILD_QT=ON \
             -DBUILD_DAEMON=OFF \
             -DBUILD_TESTS=OFF \
-            -DUSE_UPNP=ON \
+            -DUSE_UPNP=OFF \
             -DUSE_QRCODE=OFF \
             -DUSE_I2P_EMBEDDED=ON
 
@@ -404,7 +407,7 @@ jobs:
           Get-Item "Cryptographic-Triangles-${env:VERSION}-win-x64.zip"
 
       - name: Upload artifact (portable zip)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-qt-zip
           path: Cryptographic-Triangles-*-win-x64.zip
@@ -420,6 +423,7 @@ jobs:
         shell: powershell
         run: |
           $TOR_VERSION = "15.0.9"
+          $TOR_SHA256 = "adebc1b7c65dc1b5e471064ed17585464af6f6198c3fe5c8c9108138b59ccf65"
           $TOR_URL = "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-windows-x86_64-${TOR_VERSION}.tar.gz"
           $torPath = "tor-bundle.tar.gz"
           $attempts = 0
@@ -443,6 +447,10 @@ jobs:
             }
           }
           if (-not $downloaded) { throw "Tor bundle download failed after $maxAttempts attempts" }
+          $actualSha256 = (Get-FileHash -Algorithm SHA256 $torPath).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $TOR_SHA256) {
+            throw "Tor bundle SHA256 mismatch: expected $TOR_SHA256, got $actualSha256"
+          }
           New-Item -ItemType Directory -Path tor-extract -Force
           tar -xzf tor-bundle.tar.gz -C tor-extract
           New-Item -ItemType Directory -Path tor-files -Force
@@ -459,23 +467,11 @@ jobs:
       - name: Install NSIS via MSYS2
         run: pacman -S --noconfirm mingw-w64-x86_64-nsis
 
-      - name: Install NSIS inetc plugin
-        run: |
-          pacman -S --noconfirm unzip
-          NSIS_DIR="/mingw64/share/nsis"
-          cd /tmp
-          curl -L -o Inetc.zip "https://nsis.sourceforge.io/mediawiki/images/c/c9/Inetc.zip"
-          unzip -o Inetc.zip -d inetc_extract
-          # MSYS2 mingw64 NSIS is 64-bit, needs amd64-unicode plugin in Plugins/unicode/
-          mkdir -p "$NSIS_DIR/Plugins/unicode"
-          cp inetc_extract/Plugins/amd64-unicode/INetC.dll "$NSIS_DIR/Plugins/unicode/"
-          echo "Installed 64-bit INetC.dll to $NSIS_DIR/Plugins/unicode/"
-
       - name: Build NSIS installer
         run: makensis //DVERSION=$VERSION contrib/nsis/setup.nsi
 
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-qt-setup
           path: contrib/nsis/Cryptographic-Triangles-*-setup.exe
@@ -486,11 +482,11 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
         with:
           msystem: MINGW64
           update: true
@@ -516,7 +512,7 @@ jobs:
             -DBUILD_DAEMON=ON \
             -DBUILD_CLI=ON \
             -DBUILD_TESTS=OFF \
-            -DUSE_UPNP=ON \
+            -DUSE_UPNP=OFF \
             -DUSE_I2P_EMBEDDED=ON
 
       - name: Build libtor (embedded Tor static lib)
@@ -548,6 +544,7 @@ jobs:
         shell: powershell
         run: |
           $TOR_VERSION = "15.0.9"
+          $TOR_SHA256 = "adebc1b7c65dc1b5e471064ed17585464af6f6198c3fe5c8c9108138b59ccf65"
           $TOR_URL = "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-windows-x86_64-${TOR_VERSION}.tar.gz"
           $torPath = "tor-bundle.tar.gz"
           $attempts = 0
@@ -571,6 +568,10 @@ jobs:
             }
           }
           if (-not $downloaded) { throw "Tor bundle download failed after $maxAttempts attempts" }
+          $actualSha256 = (Get-FileHash -Algorithm SHA256 $torPath).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $TOR_SHA256) {
+            throw "Tor bundle SHA256 mismatch: expected $TOR_SHA256, got $actualSha256"
+          }
           New-Item -ItemType Directory -Path tor-extract -Force
           tar -xzf tor-bundle.tar.gz -C tor-extract
           Copy-Item -Recurse tor-extract/tor/* daemon-dist/tor/
@@ -579,7 +580,7 @@ jobs:
           }
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-daemon
           path: daemon-dist/
@@ -587,7 +588,7 @@ jobs:
   build-linux-qt:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
@@ -621,7 +622,7 @@ jobs:
             -DBUILD_QT=ON \
             -DBUILD_DAEMON=OFF \
             -DBUILD_TESTS=OFF \
-            -DUSE_UPNP=ON \
+            -DUSE_UPNP=OFF \
             -DUSE_I2P_EMBEDDED=ON
 
       - name: Build libtor (embedded Tor static lib)
@@ -646,6 +647,7 @@ jobs:
         run: |
           set -euo pipefail
           TOR_VERSION="15.0.9"
+          TOR_SHA256="7ea13e14cddafb36c6347a9c4f4e639f6010364c16acfd519157c29e226277f2"
           # Resilient download: archive.torproject.org occasionally times out
           # from CI egress (observed 2026-07-03: macOS job exit code 6 after
           # exactly 30s of curl hang). Retries + --fail-with-body surface the
@@ -654,6 +656,7 @@ jobs:
             --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors \
             "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-linux-x86_64-${TOR_VERSION}.tar.gz" \
             -o tor-bundle.tar.gz
+          printf '%s  %s\n' "$TOR_SHA256" tor-bundle.tar.gz | sha256sum --check --strict -
           mkdir -p tor-extract && tar -xzf tor-bundle.tar.gz -C tor-extract
 
           PKG="cryptographic-triangles_${VERSION}_amd64"
@@ -723,7 +726,7 @@ jobs:
           dpkg-deb --build ${PKG}
 
       - name: Upload .deb
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: linux-qt-deb
           path: cryptographic-triangles_*_amd64.deb
@@ -731,7 +734,7 @@ jobs:
   build-linux-daemon:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
@@ -765,7 +768,7 @@ jobs:
             -DBUILD_DAEMON=ON \
             -DBUILD_CLI=ON \
             -DBUILD_TESTS=OFF \
-            -DUSE_UPNP=ON \
+            -DUSE_UPNP=OFF \
             -DUSE_I2P_EMBEDDED=ON
 
       - name: Build libtor (embedded Tor static lib)
@@ -794,7 +797,7 @@ jobs:
         run: bash scripts/ci/package-linux-daemon.sh "${VERSION}"
 
       - name: Upload .deb
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: linux-daemon-deb
           path: cryptographic-triangles-daemon_*_amd64.deb
@@ -802,7 +805,7 @@ jobs:
   build-macos:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
@@ -834,7 +837,7 @@ jobs:
             -DBUILD_QT=ON \
             -DBUILD_DAEMON=OFF \
             -DBUILD_TESTS=OFF \
-            -DUSE_UPNP=ON \
+            -DUSE_UPNP=OFF \
             -DUSE_I2P_EMBEDDED=ON \
             -DBOOST_ROOT=/opt/homebrew/opt/boost \
             -DBDB_INCLUDE_PATH=/opt/homebrew/opt/berkeley-db@5/include \
@@ -855,18 +858,6 @@ jobs:
         # at the configured TOR_SOURCE_ROOT location.
         run: |
           brew install libevent openssl@3 autoconf automake libtool zlib zstd
-          export PATH="/opt/homebrew/opt/automake/bin:/opt/homebrew/opt/libtool/bin:$PATH"
-          LIBEVENT_DIR=/opt/homebrew/opt/libevent \
-            OPENSSL_DIR=/opt/homebrew/opt/openssl@3 \
-            ZLIB_DIR=/opt/homebrew/opt/zlib \
-            bash src/tor/build-libtor.sh
-
-      - name: Build libtor (embedded Tor static lib)
-        # macOS Qt GUI also transitively links -ltor via triangles_common.
-        # macOS Qt is built with @rpath embedded, so libtor needs to be
-        # at the configured TOR_SOURCE_ROOT location.
-        run: |
-          brew install libevent openssl@3 autoconf automake libtool zlib
           export PATH="/opt/homebrew/opt/automake/bin:/opt/homebrew/opt/libtool/bin:$PATH"
           LIBEVENT_DIR=/opt/homebrew/opt/libevent \
             OPENSSL_DIR=/opt/homebrew/opt/openssl@3 \
@@ -929,10 +920,12 @@ jobs:
         run: |
           set -euo pipefail
           TOR_VERSION="15.0.9"
+          TOR_SHA256="8ab84587b09b0053e85a137969b501744fa14640aa126af6e36997189950d254"
           curl -fSL --connect-timeout 15 --max-time 120 \
             --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors \
             "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-macos-aarch64-${TOR_VERSION}.tar.gz" \
             -o tor-bundle.tar.gz
+          printf '%s  %s\n' "$TOR_SHA256" tor-bundle.tar.gz | shasum -a 256 --check -
           mkdir -p tor-extract && tar -xzf tor-bundle.tar.gz -C tor-extract
           APP=$(find build/bin -name "*.app" -maxdepth 1 | head -1)
           mkdir -p "$APP/Contents/MacOS/tor"
@@ -952,7 +945,7 @@ jobs:
             "Cryptographic-Triangles-v${VERSION}-macos-arm64.dmg"
 
       - name: Upload DMG
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-arm64-dmg
           path: "*.dmg"
@@ -968,7 +961,7 @@ jobs:
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
 
@@ -990,7 +983,7 @@ jobs:
           ls -la release/
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: release/*
           generate_release_notes: true

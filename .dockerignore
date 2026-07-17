@@ -1,0 +1,16 @@
+.git
+.github
+build
+build-*
+cmake-build-*
+*.dat
+*.log
+*.pid
+*.conf
+*.key
+*.pem
+*.sqlite
+*.sqlite3
+.triangles
+wallet.dat
+wallet.dat.*

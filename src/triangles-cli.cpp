@@ -19,7 +19,7 @@
 // Connection parameters (highest precedence first):
 //   1. Command line flags: -rpcuser/-rpcpassword/-rpcconnect/-rpcport
 //   2. triangles.conf in the data directory (or -conf=<path>)
-//   3. Defaults: 127.0.0.1:19111 mainnet, 19112 testnet; no auth (must be set in conf)
+//   3. Defaults: 127.0.0.1:19112 mainnet, 19111 testnet; no auth (must be set in conf)
 //
 // Usage:
 //   triangles-cli help                              List commands (delegates to daemon)
@@ -70,6 +70,7 @@
   #define TRI_CLI_CLOSE_SOCKET(s) closesocket(s)
 #else
   #include <sys/types.h>
+  #include <sys/stat.h>
   #include <sys/socket.h>
   #include <netinet/in.h>
   #include <arpa/inet.h>
@@ -108,10 +109,20 @@ static bool GetBoolArg(const string& key, bool def)
     return (v != "0" && v != "false" && v != "no");
 }
 
-static void ReadConfigFile(const string& path)
+static bool ReadConfigFile(const string& path, string& error)
 {
+#ifndef _WIN32
+    struct stat configStat;
+    if (::lstat(path.c_str(), &configStat) == 0 &&
+        (!S_ISREG(configStat.st_mode) || configStat.st_uid != geteuid() ||
+         (configStat.st_mode & (S_IRWXG | S_IRWXO)) != 0)) {
+        error = "refusing insecure configuration file " + path +
+                "; require a regular file owned by the current user with no group or other access";
+        return false;
+    }
+#endif
     ifstream f(path);
-    if (!f.good()) return;
+    if (!f.good()) return true;
     string line;
     while (getline(f, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -141,6 +152,7 @@ static void ReadConfigFile(const string& path)
             mapMultiArgs[dashKey].push_back(value);
         }
     }
+    return true;
 }
 
 static fs::path GetDefaultDataDir()
@@ -179,6 +191,16 @@ static fs::path GetConfigFilePath()
 // Command-line parsing
 // ─────────────────────────────────────────────────────────────────────────────
 
+static string NormalizeSwitch(const string& value)
+{
+    if (value.empty() || value.front() != '-')
+        return value;
+    const size_t keyStart = value.find_first_not_of('-');
+    if (keyStart == string::npos)
+        return "-";
+    return "-" + value.substr(keyStart);
+}
+
 static void ParseCommandLine(int argc, char* const argv[])
 {
     mapArgs.clear();
@@ -189,13 +211,17 @@ static void ParseCommandLine(int argc, char* const argv[])
             mapMultiArgs["-"].push_back("-");
             continue;
         }
+        str = NormalizeSwitch(str);
+        if (str.empty())
+            continue;
         string strKey, strVal;
         size_t idx = str.find('=');
         if (idx == string::npos) {
-            strKey = "-" + str;
+            strKey = str.front() == '-' ? str : "-" + str;
             strVal = "1";
         } else {
-            strKey = "-" + str.substr(0, idx);
+            strKey = str.front() == '-' ? str.substr(0, idx)
+                                        : "-" + str.substr(0, idx);
             strVal = str.substr(idx + 1);
         }
         mapArgs[strKey] = strVal;
@@ -209,7 +235,7 @@ static void ParseCommandLine(int argc, char* const argv[])
 
 struct RPCConn {
     string host = "127.0.0.1";
-    string port = "19111";
+    string port = "19112";
     string user;
     string pass;
 };
@@ -217,10 +243,16 @@ struct RPCConn {
 static int AppInitRPCConn(RPCConn& conn)
 {
     fs::path confPath = GetConfigFilePath();
-    if (!confPath.empty()) ReadConfigFile(confPath.string());
+    if (!confPath.empty()) {
+        string configError;
+        if (!ReadConfigFile(confPath.string(), configError)) {
+            cerr << "triangles-cli: " << configError << "\n";
+            return 1;
+        }
+    }
 
     bool fTestNet = GetBoolArg("-testnet", false);
-    conn.port = GetArg("-rpcport", fTestNet ? "19112" : "19111");
+    conn.port = GetArg("-rpcport", fTestNet ? "19111" : "19112");
     conn.host = GetArg("-rpcconnect", "127.0.0.1");
     conn.user = GetArg("-rpcuser", "");
     conn.pass = GetArg("-rpcpassword", "");
@@ -263,7 +295,8 @@ static void ParseCommandLineRPCParams(int argc, char* const argv[],
     while (i < argc) {
         string arg(argv[i]);
         if (arg == "-" || arg.size() < 2 || arg[0] != '-') break;
-        if (valFlags.count(arg) && i + 1 < argc &&
+        const string optionName = NormalizeSwitch(arg.substr(0, arg.find('=')));
+        if (valFlags.count(optionName) && arg.find('=') == string::npos && i + 1 < argc &&
             string(argv[i+1]).substr(0,1) != "-") {
             i += 2;
         } else {
@@ -541,9 +574,9 @@ static int CommandLineHelp(ostream& out)
         << "Options:\n"
         << "  -conf=<file>       Specify configuration file (default: triangles.conf)\n"
         << "  -datadir=<dir>     Specify data directory\n"
-        << "  -testnet           Use testnet (RPC port 19112)\n"
+        << "  -testnet           Use testnet (RPC port 19111)\n"
         << "  -rpcconnect=<ip>   Send commands to node running on <ip> (default: 127.0.0.1)\n"
-        << "  -rpcport=<port>    Connect to JSON-RPC on <port> (default: 19111 or testnet: 19112)\n"
+        << "  -rpcport=<port>    Connect to JSON-RPC on <port> (default: 19112 or testnet: 19111)\n"
         << "  -rpcuser=<user>    Username for JSON-RPC connections\n"
         << "  -rpcpassword=<pw>  Password for JSON-RPC connections\n"
         << "  -stdin             Read extra params from standard input, one per line\n"
@@ -577,11 +610,11 @@ int main(int argc, char* argv[])
     ParseCommandLine(argc, argv);
 
     if (argc < 2 || GetArg("-?", "") == "1" || GetArg("-h", "") == "1" ||
-        GetArg("--help", "") == "1") {
+        GetArg("-help", "") == "1") {
         CommandLineHelp(cerr);
         return argc < 2 ? 1 : 0;
     }
-    if (!GetArg("-version", "").empty() || !GetArg("--version", "").empty()) {
+    if (!GetArg("-version", "").empty()) {
         CommandLineVersion();
         return 0;
     }

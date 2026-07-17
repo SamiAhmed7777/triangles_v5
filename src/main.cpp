@@ -1384,12 +1384,16 @@ CBlockIndex* FindBlockByHeight(int nHeight)
         pblockindex = pindexGenesisBlock;
     else
         pblockindex = pindexBest;
+    if (!pblockindex)
+        return nullptr;
     if (pblockindexFBBHLast && abs(nHeight - pblockindex->nHeight) > abs(nHeight - pblockindexFBBHLast->nHeight))
         pblockindex = pblockindexFBBHLast;
-    while (pblockindex->nHeight > nHeight)
+    while (pblockindex && pblockindex->nHeight > nHeight)
         pblockindex = pblockindex->pprev;
-    while (pblockindex->nHeight < nHeight)
+    while (pblockindex && pblockindex->nHeight < nHeight)
         pblockindex = pblockindex->pnext;
+    if (!pblockindex || pblockindex->nHeight != nHeight)
+        return nullptr;
     pblockindexFBBHLast = pblockindex;
     return pblockindex;
 }
@@ -1745,6 +1749,11 @@ bool IsConsensusAssumeValidHeight(int nHeight)
 {
     return (nHeight <= Checkpoints::GetTotalBlocksEstimate())
         || (nHeight <= nAssumeValidThreshold);
+}
+
+bool IsBlockSignatureRequiredAtHeight(int nHeight)
+{
+    return nHeight > Checkpoints::GetTotalBlocksEstimate();
 }
 
 void static InvalidChainFound(CBlockIndex* pindexNew)
@@ -3401,6 +3410,12 @@ bool CBlock::AcceptBlock()
     uint256 hashProofOfStake = 0, targetProofOfStake = 0;
     if (IsProofOfStake())
     {
+        // The rolling validation optimization is not a signature trust root.
+        // Every PoS block above the compiled checkpoint must authorize its
+        // exact block contents, including while the local tip is stale.
+        if (IsBlockSignatureRequiredAtHeight(nHeight) && !CheckBlockSignature())
+            return DoS(100, error("AcceptBlock() : bad proof-of-stake block signature at height %d", nHeight));
+
         if (IsConsensusAssumeValidHeight(nHeight))
         {
             // Historical fast path: blocks at/below hardcoded checkpoint or
@@ -3539,10 +3554,16 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     if (pblock->IsProofOfStake() && !GetBoolArg("-ignoredupstake", false) && setStakeSeen.count(pblock->GetProofOfStake()) && !mapOrphanBlocksByPrev.count(hash))
         return error("ProcessBlock() : duplicate proof-of-stake (%s, %d) for block %s", pblock->GetProofOfStake().first.ToString().c_str(), pblock->GetProofOfStake().second, hash.ToString().c_str());
 
-    // Preliminary checks
-    // Skip block signature verification during initial block download (below checkpoint).
-    // The hardcoded checkpoint guarantees historical chain integrity.
-    if (!pblock->CheckBlock(true, true, !IsInitialBlockDownload()))
+    // Operational IBD state is never permission to skip a live proof-of-stake
+    // block signature. Only a candidate height committed by the latest
+    // hardened checkpoint uses the historical fast path.
+    bool checkBlockSignature = true;
+    const auto prevIt = mapBlockIndex.find(pblock->hashPrevBlock);
+    if (prevIt != mapBlockIndex.end()) {
+        const int candidateHeight = prevIt->second->nHeight + 1;
+        checkBlockSignature = IsBlockSignatureRequiredAtHeight(candidateHeight);
+    }
+    if (!pblock->CheckBlock(true, true, checkBlockSignature))
     {
         printf("IBD-DIAG: CheckBlock FAILED for %s (PoS=%d, IBD=%d)\n",
             hash.ToString().substr(0,20).c_str(), pblock->IsProofOfStake(), IsInitialBlockDownload());
@@ -3752,9 +3773,14 @@ bool CBlock::CheckBlockSignature() const
     if (IsProofOfWork())
         return vchBlockSig.empty();
 
+    // Every proof-of-stake block must carry a non-empty block signature.
+    if (vchBlockSig.empty())
+        return false;
+
     vector<valtype> vSolutions;
     TxnOutType whichType;
 
+    // The coinstake kernel output (vtx[1].vout[1]) identifies the staker.
     const CTxOut& txout = vtx[1].vout[1];
 
     if (!Solver(txout.scriptPubKey, whichType, vSolutions))
@@ -3762,15 +3788,48 @@ bool CBlock::CheckBlockSignature() const
 
     if (whichType == TxnOutType::PubKey)
     {
-        valtype& vchPubKey = vSolutions[0];
+        // Raw-pay-to-pubkey: the public key is embedded in scriptPubKey.
         CKey key;
-        if (!key.SetPubKey(vchPubKey))
-            return false;
-        if (vchBlockSig.empty())
+        if (!key.SetPubKey(vSolutions[0]))
             return false;
         return key.Verify(GetHash(), vchBlockSig);
     }
 
+    if (whichType == TxnOutType::PubKeyHash)
+    {
+        // Pay-to-pubkey-hash: the public key is NOT in the scriptPubKey.
+        // Extract it from the coinstake input's scriptSig, which for a
+        // standard P2PKH spend has the form:  <DER-sig> <pubkey>.
+        // The last data-push of valid pubkey size (33 or 65 bytes) is the key.
+        const CScript& scriptSig = vtx[1].vin[0].scriptSig;
+
+        std::vector<unsigned char> vchPubKey;
+        opcodetype opcode;
+        std::vector<unsigned char> vchPush;
+        CScript::const_iterator pc = scriptSig.begin();
+        while (scriptSig.GetOp(pc, opcode, vchPush))
+        {
+            if (vchPush.size() == 33 || vchPush.size() == 65)
+                vchPubKey = vchPush;
+        }
+
+        CPubKey pubkey(vchPubKey);
+        if (!pubkey.IsValid())
+            return false;
+
+        // Fail-closed: the extracted key must hash to the address encoded
+        // in the coinstake scriptPubKey.
+        if (pubkey.GetID() != CKeyID(uint160(vSolutions[0])))
+            return false;
+
+        CKey key;
+        if (!key.SetPubKey(pubkey))
+            return false;
+        return key.Verify(GetHash(), vchBlockSig);
+    }
+
+    // Other script types (multisig, scripthash, nonstandard): we cannot
+    // reliably extract a single verification key, so fail-closed.
     return false;
 }
 
@@ -3786,6 +3845,7 @@ bool CheckDiskSpace(uint64_t nAdditionalBytes)
         strMiscWarning = strMessage;
         printf("*** %s\n", strMessage.c_str());
         uiInterface.ThreadSafeMessageBox(strMessage, "Triangles", CClientUIInterface::OK | CClientUIInterface::ICON_EXCLAMATION | CClientUIInterface::MODAL);
+        MarkShutdownFailure();
         StartShutdown();
         return false;
     }
@@ -6039,5 +6099,3 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
     }
     return true;
 }
-
-

@@ -21,6 +21,8 @@
 #include <fstream>
 #include <memory>
 #include <list>
+#include <cerrno>
+#include <limits>
 
 #ifndef WIN32
 #include <sys/select.h>
@@ -41,6 +43,19 @@ const Object emptyobj;
 CNotificationQueue* pNotificationQueue = nullptr;
 
 void ThreadRPCServer3(void* parg);
+
+static bool RPCMethodAllowed(const std::string& method)
+{
+    const auto it = mapMultiArgs.find("-rpcallowmethod");
+    if (it == mapMultiArgs.end() || it->second.empty())
+        return true;
+
+    for (const std::string& allowed : it->second) {
+        if (allowed == method)
+            return true;
+    }
+    return false;
+}
 
 static inline unsigned short GetDefaultRPCPort()
 {
@@ -317,10 +332,7 @@ static const CRPCCommand vRPCCommands[] =
     { "getcheckpoint",          &getcheckpoint,          true,   false },
     { "gencheckpoints",         &gencheckpoints,          true,   false },
     { "publishcheckpoint",      &publishcheckpoint,       true,   false },
-        { "settrustedv2snapshotpublisher",   &settrustedv2snapshotpublisher,   false,  false },
-        { "gettrustedv2snapshotpublisher",   &gettrustedv2snapshotpublisher,   false,  false },
-        { "unsettrustedv2snapshotpublisher", &unsettrustedv2snapshotpublisher, false,  false },
-        { "getchaintips",           &getchaintips,           true,   false },
+    { "getchaintips",           &getchaintips,           true,   false },
     { "invalidateblock",        &invalidateblock,        false,  false },
     { "reconsiderblock",        &reconsiderblock,        false,  false },
     { "recalculatesupply",      &recalculatesupply,      false,  false },
@@ -455,11 +467,27 @@ static string HTTPReply(int nStatus, const string& strMsg, bool keepalive)
         strMsg.c_str());
 }
 
+static bool ReadHTTPLine(std::basic_istream<char>& stream, std::string& line,
+                         size_t maxLength)
+{
+    line.clear();
+    char c = 0;
+    while (stream.get(c)) {
+        if (c == '\n')
+            return true;
+        if (line.size() >= maxLength)
+            return false;
+        line.push_back(c);
+    }
+    return false;
+}
+
 int ReadHTTPStatus(std::basic_istream<char>& stream, int &proto,
                    string& strMethodHTTP, string& strURI)
 {
     string str;
-    getline(stream, str);
+    if (!ReadHTTPLine(stream, str, 8192))
+        return HTTP_BAD_REQUEST;
     // Trim trailing \r
     if (!str.empty() && str[str.size()-1] == '\r')
         str.resize(str.size()-1);
@@ -485,10 +513,15 @@ int ReadHTTPStatus(std::basic_istream<char>& stream, int &proto,
 int ReadHTTPHeader(std::basic_istream<char>& stream, map<string, string>& mapHeadersRet)
 {
     int nLen = 0;
+    size_t totalHeaderBytes = 0;
     while (true)
     {
         string str;
-        std::getline(stream, str);
+        if (!ReadHTTPLine(stream, str, 8192))
+            return -1;
+        totalHeaderBytes += str.size() + 1;
+        if (totalHeaderBytes > 64 * 1024)
+            return -1;
         if (str.empty() || str == "\r")
             break;
         string::size_type nColon = str.find(":");
@@ -499,9 +532,22 @@ int ReadHTTPHeader(std::basic_istream<char>& stream, map<string, string>& mapHea
             strHeader = ToLower(strHeader);
             string strValue = str.substr(nColon+1);
             strValue = TrimString(strValue);
+            if (strHeader == "transfer-encoding" ||
+                (strHeader == "content-length" && mapHeadersRet.count(strHeader) != 0)) {
+                return -1;
+            }
             mapHeadersRet[strHeader] = strValue;
-            if (strHeader == "content-length")
-                nLen = atoi(strValue.c_str());
+            if (strHeader == "content-length") {
+                errno = 0;
+                char* end = nullptr;
+                const unsigned long long parsed = std::strtoull(strValue.c_str(), &end, 10);
+                if (errno != 0 || end == strValue.c_str() || *end != '\0' ||
+                    parsed > static_cast<unsigned long long>(MAX_SIZE) ||
+                    parsed > static_cast<unsigned long long>(std::numeric_limits<int>::max())) {
+                    return -1;
+                }
+                nLen = static_cast<int>(parsed);
+            }
         }
     }
     return nLen;
@@ -703,7 +749,15 @@ void ThreadRPCServer2(void* parg)
         (mapArgs["-rpcuser"] == mapArgs["-rpcpassword"]))
     {
         unsigned char rand_pwd[32];
-        RAND_bytes(rand_pwd, 32);
+        if (RAND_bytes(rand_pwd, sizeof(rand_pwd)) != 1) {
+            uiInterface.ThreadSafeMessageBox(
+                _("Unable to generate a secure suggested RPC password. "
+                  "The RPC server will not start."),
+                _("Error"), CClientUIInterface::OK | CClientUIInterface::MODAL);
+            MarkShutdownFailure();
+            StartShutdown();
+            return;
+        }
         string strWhatAmI = "To use trianglesd";
         if (mapArgs.count("-server"))
             strWhatAmI = strprintf(_("To use the %s option"), "\"-server\"");
@@ -721,6 +775,7 @@ void ThreadRPCServer2(void* parg)
                 GetConfigFile().string().c_str(),
                 EncodeBase58(&rand_pwd[0],&rand_pwd[0]+32).c_str()),
             _("Error"), CClientUIInterface::OK | CClientUIInterface::MODAL);
+        MarkShutdownFailure();
         StartShutdown();
         return;
     }
@@ -732,23 +787,23 @@ void ThreadRPCServer2(void* parg)
                "or Tor.\n");
     }
 
-    // Bind the loopback interface(s) unless the operator explicitly opened the
-    // RPC port to other hosts with -rpcallowip.
-    const bool loopbackOnly = !mapArgs.count("-rpcallowip");
     const int nPort = (int)GetArg("-rpcport", GetDefaultRPCPort());
+    const std::string rpcBind = GetArg(
+        std::string_view{"-rpcbind"}, std::string_view{""});
 
     std::string strBindError;
-    std::vector<SOCKET> vListen = BindRPCSockets(nPort, loopbackOnly, strBindError);
+    std::vector<SOCKET> vListen = BindRPCSockets(nPort, rpcBind, strBindError);
     if (vListen.empty()) {
         uiInterface.ThreadSafeMessageBox(
             strprintf(_("An error occurred while setting up the RPC port %d for listening: %s"),
                       nPort, strBindError.c_str()),
             _("Error"), CClientUIInterface::OK | CClientUIInterface::MODAL);
+        MarkShutdownFailure();
         StartShutdown();
         return;
     }
     printf("RPC server listening on port %d (%s)\n", nPort,
-           loopbackOnly ? "loopback only" : "all interfaces");
+           rpcBind.empty() ? "loopback only" : rpcBind.c_str());
 
     // Accept loop. select() with a short timeout keeps the listener responsive
     // to fShutdown. Each accepted connection is handed to its own handler thread
@@ -783,6 +838,15 @@ void ThreadRPCServer2(void* parg)
             if (hConn == INVALID_SOCKET) {
                 printf("RPC accept() failed\n");
                 continue;
+            }
+
+            int64_t timeoutSeconds = GetArg("-rpcservertimeout", 30);
+            if (timeoutSeconds < 1)
+                timeoutSeconds = 1;
+            if (timeoutSeconds > 600)
+                timeoutSeconds = 600;
+            if (!SetRPCSocketTimeouts(hConn, static_cast<int>(timeoutSeconds))) {
+                printf("RPC warning: failed to set connection timeouts\n");
             }
 
             const std::string strPeer = SockaddrToString((struct sockaddr*)&ss, len);
@@ -979,7 +1043,13 @@ void ThreadRPCServer3(void* parg)
         map<string, string> mapHeaders;
         string strRequest;
 
-        ReadHTTP(conn->stream(), mapHeaders, strRequest);
+        const int requestStatus = ReadHTTP(conn->stream(), mapHeaders, strRequest);
+        if (requestStatus != 0) {
+            conn->stream() << HTTPReply(HTTP_BAD_REQUEST,
+                                        "{\"error\":\"Malformed HTTP request\"}",
+                                        false) << std::flush;
+            break;
+        }
 
         // Handle REST API requests
         string strHTTPMethod = mapHeaders.count("_method") ? mapHeaders["_method"] : "POST";
@@ -1099,6 +1169,9 @@ void ThreadRPCServer3(void* parg)
 
 json_spirit::Value CRPCTable::execute(const std::string &strMethod, const json_spirit::Array &params) const
 {
+    if (!RPCMethodAllowed(strMethod))
+        throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Method not found");
+
     // Find method
     const CRPCCommand *pcmd = tableRPC[strMethod];
     if (!pcmd)

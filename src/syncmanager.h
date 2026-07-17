@@ -31,6 +31,18 @@ public:
     static constexpr int64_t HEADER_SYNC_REFILL_MIN_INTERVAL_SECONDS = 5;
     static constexpr int64_t HEADER_SYNC_CONTROL_INTERVAL_SECONDS = 5;
     static constexpr int64_t HEADER_SYNC_WATCHDOG_SECONDS = 25;
+    // Legacy peers may implement getblocks/inv but never answer getheaders.
+    // Keep this slower than the headers heartbeat so headers-first remains the
+    // primary path while still guaranteeing progress from an empty planner.
+    static constexpr int64_t LEGACY_BLOCK_FALLBACK_INTERVAL_SECONDS = 30;
+
+    static constexpr bool ShouldRequestLegacyBlocks(
+        unsigned int nPlannerDepth, unsigned int nInFlight,
+        int64_t nSecondsSinceLastRequest)
+    {
+        return nPlannerDepth == 0 && nInFlight == 0 &&
+            nSecondsSinceLastRequest >= LEGACY_BLOCK_FALLBACK_INTERVAL_SECONDS;
+    }
 
     bool HaveHeader(const uint256& hash) const;
     uint256 GetBestHeader() const;

@@ -9,6 +9,8 @@
 #include "util_signal.h"
 #include "sync.h"
 
+#include <utility>
+
 class CScript;
 
 /** A virtual base class for key stores */
@@ -112,7 +114,13 @@ protected:
 
     bool SetCrypted();
 
-    // will encrypt previously unencrypted keys
+    // Stage and commit wallet-key encryption separately so callers can make
+    // the on-disk update atomic before discarding plaintext keys in memory.
+    bool PrepareKeyEncryption(CKeyingMaterial& vMasterKeyIn,
+                              CryptedKeyMap& cryptedKeysOut) const;
+    bool CommitKeyEncryption(CryptedKeyMap&& cryptedKeys);
+
+    // Encrypt previously unencrypted keys in memory.
     bool EncryptKeys(CKeyingMaterial& vMasterKeyIn);
 
     bool Unlock(const CKeyingMaterial& vMasterKeyIn);

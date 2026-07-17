@@ -13,18 +13,44 @@
 #include "kernel.h"
 #include "coincontrol.h"
 #include "addressindex.h"
+#include "init.h"
 #include "util.h"
 #include <cstring>
 #include <memory>
 #include <algorithm>
+#include <limits>
 #include <random>
 #include <deque>
+#include <openssl/crypto.h>
 
 using namespace std;
 extern unsigned int nStakeMaxAge;
 
 unsigned int nStakeSplitAge = 1 * 3 * 60 * 60;
 int64_t nStakeCombineThreshold = 20 * COIN;
+
+namespace {
+void CleanseWalletString(std::string& value)
+{
+    if (!value.empty())
+        OPENSSL_cleanse(value.data(), value.size());
+    value.clear();
+}
+
+bool RewriteWalletDatabase(const std::string& walletFile, const char* skip = nullptr)
+{
+    if (ResolveWalletDbKind() != WalletDbKind::SQLite)
+        return CDB::Rewrite(walletFile, skip);
+
+    try {
+        CWalletDB walletdb(walletFile);
+        return walletdb.RewriteDatabase(skip);
+    } catch (const std::exception& e) {
+        printf("RewriteWalletDatabase: %s\n", e.what());
+        return false;
+    }
+}
+} // namespace
 
 //////////////////////////////////////////////////////////////////////////////
 //
@@ -132,32 +158,80 @@ CPubKey CWallet::GenerateNewKey()
     RandAddSeedPerfmon();
     CKey key;
     bool fUsedHD = false;
-    if (fHDEnabled && !hdMnemonic.empty()) {
-        if (DeriveHDKey(nHDChainIndex, key)) { fUsedHD = true; fCompressed = true; }
+    if (fHDEnabled) {
+        if (hdMnemonic.empty())
+            throw std::runtime_error("CWallet::GenerateNewKey() : HD seed is unavailable while wallet is locked");
+        if (!DeriveHDKey(nHDChainIndex, key))
+            throw std::runtime_error("CWallet::GenerateNewKey() : HD key derivation failed");
+        fUsedHD = true;
+        fCompressed = true;
     }
     if (!fUsedHD)
         key.MakeNewKey(fCompressed);
 
     // Compressed public keys were introduced in version 0.6.0
-    if (fCompressed)
-        SetMinVersion(WalletFeature::ComprPubKey);
+    if (fCompressed && !SetMinVersion(WalletFeature::ComprPubKey))
+        throw std::runtime_error("CWallet::GenerateNewKey() : wallet version update failed");
 
     CPubKey pubkey = key.GetPubKey();
 
-    // Create new metadata
-    int64_t nCreationTime = GetTime();
-    mapKeyMetadata[pubkey.GetID()] = CKeyMetadata(nCreationTime);
+    const int64_t nCreationTime = GetTime();
+    const CKeyMetadata metadata(nCreationTime);
+
+    if (fUsedHD && fFileBacked) {
+        const int64_t nextHDChainIndex = nHDChainIndex + 1;
+        std::vector<unsigned char> cryptedSecret;
+        if (IsCrypted()) {
+            if (IsLocked() || vMasterKey.size() != WALLET_CRYPTO_KEY_SIZE)
+                throw std::runtime_error("CWallet::GenerateNewKey() : encrypted HD wallet is locked");
+            bool compressed = false;
+            if (!EncryptSecret(vMasterKey, key.GetSecret(compressed),
+                               pubkey.GetHash(), cryptedSecret))
+                throw std::runtime_error("CWallet::GenerateNewKey() : key encryption failed");
+        }
+
+        CWalletDB walletdb(strWalletFile);
+        if (!walletdb.TxnBegin())
+            throw std::runtime_error("CWallet::GenerateNewKey() : database transaction failed");
+        bool wrote = IsCrypted()
+            ? walletdb.WriteCryptedKey(pubkey, cryptedSecret, metadata)
+            : walletdb.WriteKey(pubkey, key.GetPrivKey(), metadata);
+        wrote = wrote && walletdb.WriteHDChain(nextHDChainIndex);
+        if (!wrote) {
+            walletdb.TxnAbort();
+            throw std::runtime_error("CWallet::GenerateNewKey() : atomic HD key write failed");
+        }
+        if (!walletdb.TxnCommit()) {
+            walletdb.TxnAbort();
+            throw std::runtime_error("CWallet::GenerateNewKey() : atomic HD key commit failed");
+        }
+
+        const bool added = IsCrypted()
+            ? CCryptoKeyStore::AddCryptedKey(pubkey, cryptedSecret)
+            : CBasicKeyStore::AddKey(key);
+        if (!added) {
+            printf("GenerateNewKey: HD key persisted but could not be added in memory; shutting down\n");
+            MarkShutdownFailure();
+            StartShutdown();
+            throw std::runtime_error("CWallet::GenerateNewKey() : in-memory HD key commit failed");
+        }
+        mapKeyMetadata[pubkey.GetID()] = metadata;
+        if (!nTimeFirstKey || nCreationTime < nTimeFirstKey)
+            nTimeFirstKey = nCreationTime;
+        nHDChainIndex = nextHDChainIndex;
+        return pubkey;
+    }
+
+    mapKeyMetadata[pubkey.GetID()] = metadata;
+    if (!AddKey(key)) {
+        mapKeyMetadata.erase(pubkey.GetID());
+        throw std::runtime_error("CWallet::GenerateNewKey() : AddKey failed");
+    }
     if (!nTimeFirstKey || nCreationTime < nTimeFirstKey)
         nTimeFirstKey = nCreationTime;
-
-    if (!AddKey(key))
-        throw std::runtime_error("CWallet::GenerateNewKey() : AddKey failed");
-    if (fUsedHD) {
-        nHDChainIndex++;
-        if (fFileBacked)
-            CWalletDB(strWalletFile).WriteHDChain(nHDChainIndex);
-    }
-    return key.GetPubKey();
+    if (fUsedHD)
+        ++nHDChainIndex;
+    return pubkey;
 }
 
 bool CWallet::AddKey(const CKey& key)
@@ -215,22 +289,17 @@ bool fWalletUnlockStakingOnly = false;
 
 bool CWallet::Lock()
 {
+    if (IsCrypted()) {
+        CleanseWalletString(hdMnemonic);
+        CleanseWalletString(hdPassphrase);
+    }
+
     if (IsLocked())
         return true;
 
     if (fDebug)
         printf("Locking wallet.\n");
 
-    if (IsCrypted()) {
-        hdMnemonic.clear();   // keep only the encrypted copies while locked
-        hdPassphrase.clear();
-    }
-
-    {
-        LOCK(cs_wallet);
-        CWalletDB wdb(strWalletFile);
-
-    }
     return LockKeyStore();
 };
 
@@ -242,38 +311,66 @@ bool CWallet::Unlock(const SecureString& strWalletPassphrase)
     CCrypter crypter;
     CKeyingMaterial vMasterKey;
 
+    bool unlocked = false;
     {
         LOCK(cs_wallet);
         for (const MasterKeyMap::value_type& pMasterKey : mapMasterKeys)
         {
             if(!crypter.SetKeyFromPassphrase(strWalletPassphrase, pMasterKey.second.vchSalt, pMasterKey.second.nDeriveIterations, pMasterKey.second.nDerivationMethod))
-                return false;
+                continue;
             if (!crypter.Decrypt(pMasterKey.second.vchCryptedKey, vMasterKey))
-                return false;
+                continue;
             if (CCryptoKeyStore::Unlock(vMasterKey)) {
-                if (fHDEnabled && hdMnemonic.empty() && !vchCryptedHDMnemonic.empty()) {
+                if (fHDEnabled) {
+                    if (vchCryptedHDMnemonic.empty()) {
+                        LockKeyStore();
+                        return false;
+                    }
                     CSecret sec;
-                    if (DecryptSecret(vMasterKey, vchCryptedHDMnemonic, hdMnemonicIV, sec))
-                        hdMnemonic.assign(sec.begin(), sec.end());
+                    if (!DecryptSecret(vMasterKey, vchCryptedHDMnemonic, hdMnemonicIV, sec)) {
+                        LockKeyStore();
+                        return false;
+                    }
+                    std::string mnemonic(sec.begin(), sec.end());
+                    if (!hd::CheckMnemonic(mnemonic)) {
+                        OPENSSL_cleanse(mnemonic.data(), mnemonic.size());
+                        LockKeyStore();
+                        return false;
+                    }
+
+                    std::string passphrase;
+                    if (!vchCryptedHDPassphrase.empty()) {
+                        CSecret psec;
+                        if (!DecryptSecret(vMasterKey, vchCryptedHDPassphrase,
+                                           hdPassphraseIV, psec)) {
+                            OPENSSL_cleanse(mnemonic.data(), mnemonic.size());
+                            LockKeyStore();
+                            return false;
+                        }
+                        passphrase.assign(psec.begin(), psec.end());
+                    }
+
+                    CleanseWalletString(hdMnemonic);
+                    CleanseWalletString(hdPassphrase);
+                    hdMnemonic = std::move(mnemonic);
+                    hdPassphrase = std::move(passphrase);
                 }
-                if (fHDEnabled && hdPassphrase.empty() && !vchCryptedHDPassphrase.empty()) {
-                    CSecret psec;
-                    if (DecryptSecret(vMasterKey, vchCryptedHDPassphrase, hdPassphraseIV, psec))
-                        hdPassphrase.assign(psec.begin(), psec.end());
-                }
-                return true;
+                unlocked = true;
+                break;
             }
         }
-
-        SecureMsgWalletUnlocked();
-        return true;
     }
-    return false;
+    if (!unlocked)
+        return false;
+
+    SecureMsgWalletUnlocked();
+    return true;
 }
 
 bool CWallet::ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase, const SecureString& strNewWalletPassphrase)
 {
-    bool fWasLocked = IsLocked();
+    const bool fWasLocked = IsLocked();
+    bool changed = false;
 
     {
         LOCK(cs_wallet);
@@ -284,39 +381,73 @@ bool CWallet::ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase,
         for (MasterKeyMap::value_type& pMasterKey : mapMasterKeys)
         {
             if(!crypter.SetKeyFromPassphrase(strOldWalletPassphrase, pMasterKey.second.vchSalt, pMasterKey.second.nDeriveIterations, pMasterKey.second.nDerivationMethod))
-                return false;
+                continue;
             if (!crypter.Decrypt(pMasterKey.second.vchCryptedKey, vMasterKey))
-                return false;
+                continue;
             if (CCryptoKeyStore::Unlock(vMasterKey))
             {
+                CMasterKey updatedMasterKey = pMasterKey.second;
                 int64_t nStartTime = GetTimeMillis();
-                crypter.SetKeyFromPassphrase(strNewWalletPassphrase, pMasterKey.second.vchSalt, pMasterKey.second.nDeriveIterations, pMasterKey.second.nDerivationMethod);
+                if (!crypter.SetKeyFromPassphrase(strNewWalletPassphrase,
+                                                  updatedMasterKey.vchSalt,
+                                                  updatedMasterKey.nDeriveIterations,
+                                                  updatedMasterKey.nDerivationMethod))
+                    break;
                 int64_t nElapsed = std::max((int64_t)1, GetTimeMillis() - nStartTime);
-                pMasterKey.second.nDeriveIterations = pMasterKey.second.nDeriveIterations * (100 / ((double)nElapsed));
+                updatedMasterKey.nDeriveIterations =
+                    updatedMasterKey.nDeriveIterations * (100 / ((double)nElapsed));
 
                 nStartTime = GetTimeMillis();
-                crypter.SetKeyFromPassphrase(strNewWalletPassphrase, pMasterKey.second.vchSalt, pMasterKey.second.nDeriveIterations, pMasterKey.second.nDerivationMethod);
+                if (!crypter.SetKeyFromPassphrase(strNewWalletPassphrase,
+                                                  updatedMasterKey.vchSalt,
+                                                  updatedMasterKey.nDeriveIterations,
+                                                  updatedMasterKey.nDerivationMethod))
+                    break;
                 nElapsed = std::max((int64_t)1, GetTimeMillis() - nStartTime);
-                pMasterKey.second.nDeriveIterations = (pMasterKey.second.nDeriveIterations + pMasterKey.second.nDeriveIterations * 100 / ((double)nElapsed)) / 2;
+                updatedMasterKey.nDeriveIterations =
+                    (updatedMasterKey.nDeriveIterations +
+                     updatedMasterKey.nDeriveIterations * 100 / ((double)nElapsed)) / 2;
 
-                if (pMasterKey.second.nDeriveIterations < 25000)
-                    pMasterKey.second.nDeriveIterations = 25000;
+                if (updatedMasterKey.nDeriveIterations < 25000)
+                    updatedMasterKey.nDeriveIterations = 25000;
 
-                printf("Wallet passphrase changed to an nDeriveIterations of %i\n", pMasterKey.second.nDeriveIterations);
+                printf("Wallet passphrase changed to an nDeriveIterations of %i\n",
+                       updatedMasterKey.nDeriveIterations);
 
-                if (!crypter.SetKeyFromPassphrase(strNewWalletPassphrase, pMasterKey.second.vchSalt, pMasterKey.second.nDeriveIterations, pMasterKey.second.nDerivationMethod))
-                    return false;
-                if (!crypter.Encrypt(vMasterKey, pMasterKey.second.vchCryptedKey))
-                    return false;
-                CWalletDB(strWalletFile).WriteMasterKey(pMasterKey.first, pMasterKey.second);
-                if (fWasLocked)
-                    Lock();
-                return true;
+                if (!crypter.SetKeyFromPassphrase(strNewWalletPassphrase,
+                                                  updatedMasterKey.vchSalt,
+                                                  updatedMasterKey.nDeriveIterations,
+                                                  updatedMasterKey.nDerivationMethod))
+                    break;
+                if (!crypter.Encrypt(vMasterKey, updatedMasterKey.vchCryptedKey))
+                    break;
+
+                bool persisted = true;
+                if (fFileBacked) {
+                    try {
+                        persisted = CWalletDB(strWalletFile).WriteMasterKey(
+                            pMasterKey.first, updatedMasterKey);
+                    } catch (const std::exception& e) {
+                        printf("ChangeWalletPassphrase: %s\n", e.what());
+                        persisted = false;
+                    }
+                }
+                if (!persisted)
+                    break;
+
+                pMasterKey.second = std::move(updatedMasterKey);
+                changed = true;
+                break;
             }
         }
+        LockKeyStore();
     }
 
-    return false;
+    if (!changed)
+        return false;
+    if (!fWasLocked && !Unlock(strNewWalletPassphrase))
+        return false;
+    return true;
 }
 
 void CWallet::SetBestChain(const CBlockLocator& loc)
@@ -346,27 +477,44 @@ bool CWallet::SetMinVersion(WalletFeature nVersion, CWalletDB* pwalletdbIn, bool
     if (fExplicit && static_cast<int>(nVersion) > nWalletMaxVersion)
             nVersion = WalletFeature::Latest;
 
-    nWalletVersion = static_cast<int>(nVersion);
-
-    if (static_cast<int>(nVersion) > nWalletMaxVersion)
-        nWalletMaxVersion = static_cast<int>(nVersion);
+    const int newWalletVersion = static_cast<int>(nVersion);
 
     if (fFileBacked)
     {
-        CWalletDB* pwalletdb = pwalletdbIn ? pwalletdbIn : new CWalletDB(strWalletFile);
-        if (nWalletVersion >= 40000)
+        std::unique_ptr<CWalletDB> ownedWalletDB;
+        CWalletDB* pwalletdb = pwalletdbIn;
+        if (!pwalletdb) {
+            ownedWalletDB = std::make_unique<CWalletDB>(strWalletFile);
+            pwalletdb = ownedWalletDB.get();
+            if (!pwalletdb->TxnBegin())
+                return false;
+        }
+
+        bool wrote = true;
+        if (newWalletVersion >= 40000)
         {
             // Versions prior to 0.4.0 did not support the "minversion" record.
             // Use a CCorruptAddress to make them crash instead.
             CCorruptAddress corruptAddress;
-            pwalletdb->WriteSetting("addrIncoming", corruptAddress);
+            wrote = pwalletdb->WriteSetting("addrIncoming", corruptAddress);
         }
-        if (nWalletVersion > 40000)
-            pwalletdb->WriteMinVersion(nWalletVersion);
-        if (!pwalletdbIn)
-            delete pwalletdb;
+        if (wrote && newWalletVersion > 40000)
+            wrote = pwalletdb->WriteMinVersion(newWalletVersion);
+
+        if (!wrote) {
+            if (ownedWalletDB)
+                pwalletdb->TxnAbort();
+            return false;
+        }
+        if (ownedWalletDB && !pwalletdb->TxnCommit()) {
+            pwalletdb->TxnAbort();
+            return false;
+        }
     }
 
+    nWalletVersion = newWalletVersion;
+    if (newWalletVersion > nWalletMaxVersion)
+        nWalletMaxVersion = newWalletVersion;
     return true;
 }
 
@@ -385,27 +533,38 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
 {
     if (IsCrypted())
         return false;
+    if (fHDEnabled && hdMnemonic.empty())
+        return false;
+    if (nMasterKeyMaxID == std::numeric_limits<unsigned int>::max())
+        return false;
 
     CKeyingMaterial vMasterKey;
     RandAddSeedPerfmon();
 
     vMasterKey.resize(WALLET_CRYPTO_KEY_SIZE);
-    RAND_bytes(&vMasterKey[0], WALLET_CRYPTO_KEY_SIZE);
+    if (RAND_bytes(&vMasterKey[0], WALLET_CRYPTO_KEY_SIZE) != 1)
+        return false;
 
     CMasterKey kMasterKey(nDerivationMethodIndex);
 
     RandAddSeedPerfmon();
     kMasterKey.vchSalt.resize(WALLET_CRYPTO_SALT_SIZE);
-    RAND_bytes(&kMasterKey.vchSalt[0], WALLET_CRYPTO_SALT_SIZE);
+    if (RAND_bytes(&kMasterKey.vchSalt[0], WALLET_CRYPTO_SALT_SIZE) != 1)
+        return false;
 
     CCrypter crypter;
     int64_t nStartTime = GetTimeMillis();
-    crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt, 25000, kMasterKey.nDerivationMethod);
+    if (!crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt,
+                                      25000, kMasterKey.nDerivationMethod))
+        return false;
     int64_t nElapsed = std::max((int64_t)1, GetTimeMillis() - nStartTime);
     kMasterKey.nDeriveIterations = 2500000 / ((double)nElapsed);
 
     nStartTime = GetTimeMillis();
-    crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt, kMasterKey.nDeriveIterations, kMasterKey.nDerivationMethod);
+    if (!crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt,
+                                      kMasterKey.nDeriveIterations,
+                                      kMasterKey.nDerivationMethod))
+        return false;
     nElapsed = std::max((int64_t)1, GetTimeMillis() - nStartTime);
     kMasterKey.nDeriveIterations = (kMasterKey.nDeriveIterations + kMasterKey.nDeriveIterations * 100 / ((double)nElapsed)) / 2;
 
@@ -421,51 +580,109 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
 
     {
         LOCK(cs_wallet);
-        mapMasterKeys[++nMasterKeyMaxID] = kMasterKey;
+        CryptedKeyMap cryptedKeys;
+        if (!PrepareKeyEncryption(vMasterKey, cryptedKeys))
+            return false;
+
+        uint256 newMnemonicIV;
+        uint256 newPassphraseIV;
+        std::vector<unsigned char> newCryptedMnemonic;
+        std::vector<unsigned char> newCryptedPassphrase;
+        if (fHDEnabled) {
+            CSecret mnemonicSecret(hdMnemonic.begin(), hdMnemonic.end());
+            newMnemonicIV = GetRandHash();
+            if (!EncryptSecret(vMasterKey, mnemonicSecret, newMnemonicIV,
+                               newCryptedMnemonic))
+                return false;
+            if (!hdPassphrase.empty()) {
+                CSecret passphraseSecret(hdPassphrase.begin(), hdPassphrase.end());
+                newPassphraseIV = GetRandHash();
+                if (!EncryptSecret(vMasterKey, passphraseSecret, newPassphraseIV,
+                                   newCryptedPassphrase))
+                    return false;
+            }
+        }
+
+        const unsigned int newMasterKeyID = nMasterKeyMaxID + 1;
+        const int oldWalletVersion = nWalletVersion;
+        const int oldWalletMaxVersion = nWalletMaxVersion;
         if (fFileBacked)
         {
-            std::unique_ptr<CWalletDB> dbEnc(new CWalletDB(strWalletFile));
+            std::unique_ptr<CWalletDB> dbEnc = std::make_unique<CWalletDB>(strWalletFile);
             if (!dbEnc->TxnBegin())
                 return false;
-            dbEnc->WriteMasterKey(nMasterKeyMaxID, kMasterKey);
+            bool wrote = dbEnc->WriteMasterKey(newMasterKeyID, kMasterKey);
+            for (const auto& item : cryptedKeys) {
+                if (!wrote)
+                    break;
+                CKeyMetadata metadata;
+                auto metadataIt = mapKeyMetadata.find(item.first);
+                if (metadataIt != mapKeyMetadata.end())
+                    metadata = metadataIt->second;
+                wrote = dbEnc->WriteCryptedKey(item.second.first,
+                                               item.second.second, metadata);
+            }
+            if (wrote && fHDEnabled) {
+                wrote = dbEnc->WriteHDCryptedMnemonic(newMnemonicIV,
+                                                      newCryptedMnemonic);
+                if (wrote) {
+                    wrote = hdPassphrase.empty()
+                        ? dbEnc->EraseHDPassphrase()
+                        : dbEnc->WriteHDCryptedPassphrase(newPassphraseIV,
+                                                         newCryptedPassphrase);
+                }
+            }
+            if (wrote)
+                wrote = SetMinVersion(WalletFeature::WalletCrypt, dbEnc.get(), true);
 
-            if (!EncryptKeys(vMasterKey))
-            {
+            if (!wrote) {
                 dbEnc->TxnAbort();
+                nWalletVersion = oldWalletVersion;
+                nWalletMaxVersion = oldWalletMaxVersion;
                 return false;
             }
-
-            if (fHDEnabled && !hdMnemonic.empty()) {
-                CSecret sec(hdMnemonic.begin(), hdMnemonic.end());
-                uint256 iv = GetRandHash();
-                std::vector<unsigned char> cipher;
-                if (!EncryptSecret(vMasterKey, sec, iv, cipher)) { dbEnc->TxnAbort(); return false; }
-                hdMnemonicIV = iv; vchCryptedHDMnemonic = cipher;
-                dbEnc->WriteHDCryptedMnemonic(iv, cipher);
-            }
-            if (fHDEnabled && !hdPassphrase.empty()) {
-                CSecret psec(hdPassphrase.begin(), hdPassphrase.end());
-                uint256 piv = GetRandHash();
-                std::vector<unsigned char> pcipher;
-                if (!EncryptSecret(vMasterKey, psec, piv, pcipher)) { dbEnc->TxnAbort(); return false; }
-                hdPassphraseIV = piv; vchCryptedHDPassphrase = pcipher;
-                dbEnc->WriteHDCryptedPassphrase(piv, pcipher);
-            }
-
-            SetMinVersion(WalletFeature::WalletCrypt, dbEnc.get(), true);
-
-            if (!dbEnc->TxnCommit())
+            if (!dbEnc->TxnCommit()) {
+                dbEnc->TxnAbort();
+                nWalletVersion = oldWalletVersion;
+                nWalletMaxVersion = oldWalletMaxVersion;
                 return false;
+            }
+        } else if (!SetMinVersion(WalletFeature::WalletCrypt, nullptr, true)) {
+            return false;
+        }
+
+        if (!CommitKeyEncryption(std::move(cryptedKeys))) {
+            printf("EncryptWallet: disk was updated but in-memory key encryption could not be committed; shutting down\n");
+            MarkShutdownFailure();
+            StartShutdown();
+            return false;
+        }
+        nMasterKeyMaxID = newMasterKeyID;
+        mapMasterKeys[newMasterKeyID] = kMasterKey;
+        if (fHDEnabled) {
+            hdMnemonicIV = newMnemonicIV;
+            hdPassphraseIV = newPassphraseIV;
+            vchCryptedHDMnemonic = std::move(newCryptedMnemonic);
+            vchCryptedHDPassphrase = std::move(newCryptedPassphrase);
         }
 
         Lock();
-        Unlock(strWalletPassphrase);
-        NewKeyPool();
+        if (!Unlock(strWalletPassphrase)) {
+            printf("EncryptWallet: encrypted wallet could not be verified; shutting down\n");
+            MarkShutdownFailure();
+            StartShutdown();
+            return false;
+        }
+        if (!NewKeyPool())
+            printf("EncryptWallet: wallet encrypted, but keypool regeneration failed\n");
         Lock();
 
-        // Need to completely rewrite the wallet file; if we don't, bdb might keep
-        // bits of the unencrypted private key in slack space in the database file.
-        CDB::Rewrite(strWalletFile);
+        if (fFileBacked && !RewriteWalletDatabase(strWalletFile)) {
+            printf("EncryptWallet: secure wallet database rewrite failed; shutting down\n");
+            MarkShutdownFailure();
+            StartShutdown();
+            return false;
+        }
 
     }
     NotifyStatusChanged(this);
@@ -793,7 +1010,7 @@ bool CWallet::AbandonTransaction(const uint256& hashTx)
     // the inputs (vfSpent was tracked on the wtx) and resolves the conflict.
     bool fErased = EraseFromWallet(hashTx);
 
-    LogPrintf("CWallet::AbandonTransaction: %s abandoned (%u descendant(s) noted)\n",
+    LogPrintf("CWallet::AbandonTransaction: %s abandoned (%" PRIszu " descendant(s) noted)\n",
               hashTx.ToString().c_str(), sDescendants.size());
     return fErased;
 }
@@ -2115,10 +2332,12 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
                         break;  // unable to find corresponding public key
                     }
 
-                if (key.GetPubKey() != vchPubKey)
-                {
-                    if (fDebug && GetBoolArg("-printcoinstake"))
-                        printf("CreateCoinStake : invalid key for kernel type=%d\n", whichType);
+                    if (key.GetPubKey() != vchPubKey)
+                    {
+                        if (fDebug && GetBoolArg("-printcoinstake")) {
+                            printf("CreateCoinStake : invalid key for kernel type=%d\n",
+                                   static_cast<int>(whichType));
+                        }
                         break; // keys mismatch
                     }
 
@@ -2134,7 +2353,7 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
                 if (GetWeight(block.GetBlockTime(), (int64_t)txNew.nTime) < nStakeSplitAge)
                     txNew.vout.push_back(CTxOut(0, scriptPubKeyOut)); //split stake
                 if (fDebug && GetBoolArg("-printcoinstake"))
-                    printf("CreateCoinStake : added kernel type=%d\n", whichType);
+                    printf("CreateCoinStake : added kernel type=%d\n", static_cast<int>(whichType));
                 fKernelFound = true;
                 break;
             }
@@ -2351,7 +2570,7 @@ DBErrors CWallet::LoadWallet(bool& fFirstRunRet)
     DBErrors nLoadWalletRet = CWalletDB(strWalletFile,"cr+").LoadWallet(this);
     if (nLoadWalletRet == DB_NEED_REWRITE)
     {
-        if (CDB::Rewrite(strWalletFile, "\x04pool"))
+        if (RewriteWalletDatabase(strWalletFile, "\x04pool"))
         {
             setKeyPool.clear();
             // Note: can't top-up keypool here, because wallet is locked.
@@ -2478,9 +2697,13 @@ bool CWallet::NewKeyPool()
 {
     {
         LOCK(cs_wallet);
-        CWalletDB walletdb(strWalletFile);
-        for (int64_t nIndex : setKeyPool)
-            walletdb.ErasePool(nIndex);
+        std::unique_ptr<CWalletDB> walletdb;
+        if (fFileBacked)
+            walletdb = std::make_unique<CWalletDB>(strWalletFile);
+        for (int64_t nIndex : setKeyPool) {
+            if (walletdb && !walletdb->ErasePool(nIndex))
+                return false;
+        }
         setKeyPool.clear();
 
         if (IsLocked())
@@ -2490,7 +2713,9 @@ bool CWallet::NewKeyPool()
         for (int i = 0; i < nKeys; i++)
         {
             int64_t nIndex = i+1;
-            walletdb.WritePool(nIndex, CKeyPool(GenerateNewKey()));
+            CKeyPool keypool(GenerateNewKey());
+            if (walletdb && !walletdb->WritePool(nIndex, keypool))
+                return false;
             setKeyPool.insert(nIndex);
         }
         printf("CWallet::NewKeyPool wrote %"PRId64" new keys\n", nKeys);
@@ -2506,7 +2731,9 @@ bool CWallet::TopUpKeyPool(unsigned int nSize)
         if (IsLocked())
             return false;
 
-        CWalletDB walletdb(strWalletFile);
+        std::unique_ptr<CWalletDB> walletdb;
+        if (fFileBacked)
+            walletdb = std::make_unique<CWalletDB>(strWalletFile);
 
         // Top up key pool
         unsigned int nTargetSize;
@@ -2520,7 +2747,8 @@ bool CWallet::TopUpKeyPool(unsigned int nSize)
             int64_t nEnd = 1;
             if (!setKeyPool.empty())
                 nEnd = *(--setKeyPool.end()) + 1;
-            if (!walletdb.WritePool(nEnd, CKeyPool(GenerateNewKey())))
+            CKeyPool keypool(GenerateNewKey());
+            if (walletdb && !walletdb->WritePool(nEnd, keypool))
                 throw runtime_error("TopUpKeyPool() : writing generated key failed");
             setKeyPool.insert(nEnd);
             printf("keypool added key %"PRId64", size=%"PRIszu"\n", nEnd, setKeyPool.size());
@@ -2946,16 +3174,18 @@ void CWallet::GetKeyBirthTimes(std::map<CKeyID, int64_t> &mapKeyBirth) const {
 // ---- HD wallet (BIP39/BIP32) implementation ----
 bool CWallet::DeriveHDKey(int64_t index, CKey& keyOut) const
 {
-    if (hdMnemonic.empty())
+    if (hdMnemonic.empty() || index < 0 ||
+        static_cast<uint64_t>(index) > std::numeric_limits<uint32_t>::max())
         return false;
     // If a BIP39 passphrase ("25th word") was set with the seed, it MUST be
     // part of every derivation — otherwise restored wallets derive different
     // addresses than the originals. Empty string = no passphrase (legacy).
     unsigned char priv[32];
-    if (!hd::DeriveTriangles(hdMnemonic, hdPassphrase, 0, 0, (uint32_t)index, priv))
+    if (!hd::DeriveTriangles(hdMnemonic, hdPassphrase, 0, 0,
+                             static_cast<uint32_t>(index), priv))
         return false;
     CSecret secret(priv, priv + 32);
-    memset(priv, 0, sizeof(priv));
+    OPENSSL_cleanse(priv, sizeof(priv));
     keyOut.SetSecret(secret, true); // HD keys are compressed
     return true;
 }
@@ -2972,6 +3202,7 @@ bool CWallet::SetHDSeed(const std::string& mnemonicIn, const std::string& passph
 {
     LOCK(cs_wallet);
     if (IsLocked()) { strError = "Wallet is locked; unlock it before setting an HD seed."; return false; }
+    if (fHDEnabled) { strError = "Wallet already has an HD seed; refusing to replace it."; return false; }
 
     std::string m = mnemonicIn;
     if (m.empty()) {
@@ -2983,45 +3214,86 @@ bool CWallet::SetHDSeed(const std::string& mnemonicIn, const std::string& passph
 
     unsigned char priv[32];
     if (!hd::DeriveTriangles(m, passphrase, 0, 0, 0, priv)) { strError = "Key derivation failed."; return false; }
-    memset(priv, 0, sizeof(priv));
+    OPENSSL_cleanse(priv, sizeof(priv));
 
-    hdMnemonic = m;
-    hdPassphrase = passphrase;
-    fHDEnabled = true;
-    nHDChainIndex = 0;
+    uint256 newMnemonicIV;
+    uint256 newPassphraseIV;
+    std::vector<unsigned char> newCryptedMnemonic;
+    std::vector<unsigned char> newCryptedPassphrase;
+
+    if (IsCrypted()) {
+        if (vMasterKey.size() != WALLET_CRYPTO_KEY_SIZE) {
+            strError = "Wallet master key is unavailable.";
+            return false;
+        }
+        CSecret sec(m.begin(), m.end());
+        newMnemonicIV = GetRandHash();
+        if (!EncryptSecret(vMasterKey, sec, newMnemonicIV, newCryptedMnemonic)) {
+            strError = "Failed to encrypt seed.";
+            return false;
+        }
+        if (!passphrase.empty()) {
+            CSecret psec(passphrase.begin(), passphrase.end());
+            newPassphraseIV = GetRandHash();
+            if (!EncryptSecret(vMasterKey, psec, newPassphraseIV,
+                               newCryptedPassphrase)) {
+                strError = "Failed to encrypt passphrase.";
+                return false;
+            }
+        }
+    }
 
     if (fFileBacked) {
         CWalletDB wdb(strWalletFile);
-        if (IsCrypted()) {
-            CSecret sec(m.begin(), m.end());
-            uint256 iv = GetRandHash();
-            std::vector<unsigned char> cipher;
-            if (!EncryptSecret(vMasterKey, sec, iv, cipher)) { strError = "Failed to encrypt seed."; return false; }
-            hdMnemonicIV = iv; vchCryptedHDMnemonic = cipher;
-            wdb.WriteHDCryptedMnemonic(iv, cipher);
-            if (!passphrase.empty()) {
-                CSecret psec(passphrase.begin(), passphrase.end());
-                uint256 piv = GetRandHash();
-                std::vector<unsigned char> pcipher;
-                if (!EncryptSecret(vMasterKey, psec, piv, pcipher)) { strError = "Failed to encrypt passphrase."; return false; }
-                hdPassphraseIV = piv; vchCryptedHDPassphrase = pcipher;
-                wdb.WriteHDCryptedPassphrase(piv, pcipher);
-            } else {
-                vchCryptedHDPassphrase.clear();
-                wdb.EraseHDPassphrase(); // re-seed without passphrase: drop any old record
-            }
-        } else {
-            wdb.WriteHDMnemonic(m);
-            if (!passphrase.empty())
-                wdb.WriteHDPassphrase(passphrase);
-            else
-                wdb.EraseHDPassphrase();
+        if (!wdb.TxnBegin()) {
+            strError = "Failed to start wallet database transaction.";
+            return false;
         }
-        wdb.WriteHDChain(nHDChainIndex);
+
+        bool wrote = false;
+        if (IsCrypted()) {
+            wrote = wdb.WriteHDCryptedMnemonic(newMnemonicIV, newCryptedMnemonic) &&
+                    (passphrase.empty()
+                         ? wdb.EraseHDPassphrase()
+                         : wdb.WriteHDCryptedPassphrase(newPassphraseIV,
+                                                       newCryptedPassphrase));
+        } else {
+            wrote = wdb.WriteHDMnemonic(m) &&
+                    (passphrase.empty()
+                         ? wdb.EraseHDPassphrase()
+                         : wdb.WriteHDPassphrase(passphrase));
+        }
+        wrote = wrote && wdb.WriteHDChain(0);
+
+        if (!wrote) {
+            wdb.TxnAbort();
+            strError = "Failed to persist HD seed; wallet database transaction was rolled back.";
+            return false;
+        }
+        if (!wdb.TxnCommit()) {
+            wdb.TxnAbort();
+            strError = "Failed to commit HD seed to the wallet database.";
+            return false;
+        }
     }
+
+    CleanseWalletString(hdMnemonic);
+    CleanseWalletString(hdPassphrase);
+    hdMnemonic = m;
+    hdPassphrase = passphrase;
+    hdMnemonicIV = newMnemonicIV;
+    hdPassphraseIV = newPassphraseIV;
+    vchCryptedHDMnemonic = std::move(newCryptedMnemonic);
+    vchCryptedHDPassphrase = std::move(newCryptedPassphrase);
+    fHDEnabled = true;
+    nHDChainIndex = 0;
+
     // Replace any pre-existing (random) keypool with HD-derived keys so that
     // getnewaddress immediately hands out deterministic m/44'/2222'/0'/0/i keys.
-    NewKeyPool();
+    if (!NewKeyPool()) {
+        strError = "HD seed was stored, but rebuilding the keypool failed.";
+        return false;
+    }
     mnemonicOut = m;
     return true;
 }

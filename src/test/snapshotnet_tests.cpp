@@ -70,6 +70,7 @@ bool fUseFastIndex = false;
 enum Checkpoints::CPMode CheckpointsMode = Checkpoints::STRICT;
 
 void StartShutdown() { /* no-op for tests */ }
+void MarkShutdownFailure() { /* no-op for tests */ }
 
 namespace {
 
@@ -100,19 +101,9 @@ struct TmpDataDir
 // Compute SHA-256 of a file's bytes.
 uint256 Sha256OfFile(const fs::path& p)
 {
-    FILE* f = fopen(p.string().c_str(), "rb");
-    BOOST_REQUIRE_MESSAGE(f != nullptr, "open failed: " << p.string());
-    SHA256_CTX ctx;
-    SHA256_Init(&ctx);
-    std::vector<unsigned char> buf(64 * 1024);
-    while (true) {
-        size_t n = fread(buf.data(), 1, buf.size(), f);
-        if (n == 0) break;
-        SHA256_Update(&ctx, buf.data(), n);
-    }
-    fclose(f);
     uint256 out;
-    SHA256_Final(reinterpret_cast<unsigned char*>(&out), &ctx);
+    std::string error;
+    BOOST_REQUIRE_MESSAGE(SnapshotNet::ComputeSnapshotFileHash(p, out, error), error);
     return out;
 }
 
@@ -121,8 +112,16 @@ uint256 Sha256OfBytes(const std::vector<unsigned char>& bytes)
     SHA256_CTX ctx;
     SHA256_Init(&ctx);
     SHA256_Update(&ctx, bytes.data(), bytes.size());
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    SHA256_Final(digest, &ctx);
+    static const char hex[] = "0123456789abcdef";
+    std::string digestHex(SHA256_DIGEST_LENGTH * 2, '0');
+    for (size_t i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
+        digestHex[2 * i] = hex[(digest[i] >> 4) & 0x0f];
+        digestHex[2 * i + 1] = hex[digest[i] & 0x0f];
+    }
     uint256 out;
-    SHA256_Final(reinterpret_cast<unsigned char*>(&out), &ctx);
+    out.SetHex(digestHex);
     return out;
 }
 
@@ -176,6 +175,17 @@ BOOST_AUTO_TEST_SUITE_END()
 // ───────────────────────────────────────────────────────────────────────────
 
 BOOST_AUTO_TEST_SUITE(snapshotnet_hash)
+
+BOOST_AUTO_TEST_CASE(file_hash_uses_standard_sha256_display_order)
+{
+    TmpDataDir td;
+    fs::path p = td.path / "abc.bin";
+    WriteFile(p, {'a', 'b', 'c'});
+
+    BOOST_CHECK_EQUAL(
+        Sha256OfFile(p).ToString(),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+}
 
 BOOST_AUTO_TEST_CASE(file_hash_matches_inline_sha256)
 {
