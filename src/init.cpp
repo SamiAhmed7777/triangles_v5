@@ -1390,12 +1390,17 @@ bool AppInit2()
     // in the local index; it is NOT hardcoded to block 2,205,000 here.
     // The downstream rules that consume this variable are:
     //   - main.cpp Reorganize(): reject reorgs whose fork point is at
-    //     or below the checkpoint height (convergence rule, see the
-    //     comment block above the rejection in Reorganize()).
+    //     or below the checkpoint height. This is THE consensus-validating
+    //     guard. It has a bootstrap-time fallback that reads the compiled
+    //     map directly via Checkpoints::GetLastCheckpointHeight() when
+    //     this pointer is still NULL (early IBD / reindex / bootstrap
+    //     before the checkpoint block has been downloaded) — see the
+    //     fix/consensus-convergence review notes.
     //   - main.cpp getheaders handler: when the peer's locator contains
     //     the checkpoint, serve canonical headers from the checkpoint
     //     forward; otherwise fall back to the last common ancestor (or
     //     genesis if none). This is the recovery path for forked peers.
+    //     SERVING-side only; not a consensus guard.
     {
         CBlockIndex* pCheckpoint = Checkpoints::GetLastCheckpoint(mapBlockIndex);
         if (pCheckpoint && pCheckpoint != pindexLastHardenedCheckpoint)
