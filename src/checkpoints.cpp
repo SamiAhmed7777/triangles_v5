@@ -138,6 +138,19 @@ namespace Checkpoints
         return nullptr;
     }
 
+    // Independent of mapBlockIndex: returns the highest compiled checkpoint
+    // height for the current network. Returns -1 if the compiled map is
+    // empty (an unusual, but not impossible, configuration). Used as the
+    // fail-closed reorg floor before pindexLastHardenedCheckpoint has been
+    // resolved against the local block index (early IBD / reindex /
+    // bootstrap before the checkpoint block has been downloaded).
+    int GetLastCheckpointHeight()
+    {
+        MapCheckpoints& checkpoints = (fTestNet ? mapCheckpointsTestnet : mapCheckpoints);
+        if (checkpoints.empty()) return -1;
+        return checkpoints.rbegin()->first;
+    }
+
     // triangles: synchronized checkpoint (centrally broadcasted)
     uint256 hashSyncCheckpoint = uint256("0x7e7a6e4dd5fe895106fca912dfbacaeaf2a89e76c6a588df8ff96e0e18b96021");
     uint256 hashPendingCheckpoint = uint256("0x7e7a6e4dd5fe895106fca912dfbacaeaf2a89e76c6a588df8ff96e0e18b96021");

@@ -446,10 +446,18 @@ BOOST_AUTO_TEST_CASE(convergence_rejects_below_hardened_checkpoint)
     BOOST_CHECK(src.find("pindexLastHardenedCheckpoint") != std::string::npos);
     BOOST_CHECK(src.find("pindexFinalized") == std::string::npos);
 
-    // (2) The reorg-rejection block compares fork height to the
-    //     checkpoint height — not to MAX_REORG_DEPTH or any tip-based
-    //     value. We look for the rejection guard pattern.
-    BOOST_CHECK(src.find("pfork->nHeight <= pindexLastHardenedCheckpoint->nHeight")
+    // (2) The reorg-rejection block compares fork height against a
+    //     resolved checkpoint height (`nHardenedCheckpointHeight`), not
+    //     against MAX_REORG_DEPTH or any tip-based value. The literal
+    //     source pattern we look for is the new guard variable being
+    //     assigned from `Checkpoints::GetLastCheckpointHeight()` —
+    //     which is the bootstrap-time path that covers the
+    //     `pindexLastHardenedCheckpoint == nullptr` case (otherwise an
+    //     IBD-time reorg below the compiled checkpoint could slip
+    //     through the guard).
+    BOOST_CHECK(src.find("Checkpoints::GetLastCheckpointHeight()")
+                != std::string::npos);
+    BOOST_CHECK(src.find("nHardenedCheckpointHeight = pindexLastHardenedCheckpoint->nHeight")
                 != std::string::npos);
 
     // (3) No absolute depth cap in Reorganize(). The old code had
@@ -551,6 +559,56 @@ BOOST_AUTO_TEST_CASE(getheaders_recovers_via_checkpoint_when_locator_has_it)
                 != std::string::npos);
     BOOST_CHECK(src.find("serving canonical headers from there")
                 != std::string::npos);
+}
+
+// ─── Bootstrap-state reorg guard: hardened_checkpoint_height is fail-closed ─
+// Adversarial review (Codex, SHA 935d1d5) flagged that the original guard
+// short-circuited on `pindexLastHardenedCheckpoint == nullptr`. That happens
+// during early IBD, reindex, and bootstrap before the checkpoint block has
+// been downloaded — exactly when an attacker peer would most want to feed a
+// deep fork. The fix consults `Checkpoints::GetLastCheckpointHeight()`
+// (compiled map, independent of mapBlockIndex) as the second-layer floor.
+BOOST_AUTO_TEST_CASE(reorg_guard_fails_closed_when_checkpoint_pointer_null)
+{
+    std::string src = readEntireFile("src/main.cpp");
+    BOOST_REQUIRE(!src.empty());
+
+    // (a) The compiled-map helper is declared in checkpoints.h and
+    //     defined in checkpoints.cpp. The signature is
+    //     `int GetLastCheckpointHeight()` (declared inside the
+    //     Checkpoints namespace; namespace-qualified at call sites).
+    std::string cp_h = readEntireFile("src/checkpoints.h");
+    std::string cp_cpp = readEntireFile("src/checkpoints.cpp");
+    BOOST_REQUIRE(!cp_h.empty());
+    BOOST_REQUIRE(!cp_cpp.empty());
+    BOOST_CHECK(cp_h.find("int GetLastCheckpointHeight();") != std::string::npos);
+    BOOST_CHECK(cp_cpp.find("int GetLastCheckpointHeight()") != std::string::npos);
+    // The implementation is independent of mapBlockIndex — it returns
+    // checkpoints.rbegin()->first directly. This is what makes it usable
+    // before the checkpoint hash has been resolved in our local index.
+    BOOST_CHECK(cp_cpp.find("checkpoints.rbegin()->first") != std::string::npos);
+
+    // (b) The Reorganize() guard uses the compiled-height fallback when
+    //     the local pointer is NULL. The pattern is the local variable
+    //     `nHardenedCheckpointHeight` being assigned from
+    //     `Checkpoints::GetLastCheckpointHeight()` in the else branch.
+    BOOST_CHECK(src.find("nHardenedCheckpointHeight = Checkpoints::GetLastCheckpointHeight()")
+                != std::string::npos);
+
+    // (c) The guard fires for any fork point at or below the resolved
+    //     checkpoint height — independent of whether the resolution came
+    //     from the pointer or the compiled map. The literal pattern that
+    //     matters is `pfork->nHeight <= nHardenedCheckpointHeight`.
+    BOOST_CHECK(src.find("pfork->nHeight <= nHardenedCheckpointHeight")
+                != std::string::npos);
+
+    // (d) The old guard pattern that short-circuited on the null pointer
+    //     is gone. The exact prior pattern was:
+    //         if (pindexLastHardenedCheckpoint && pfork->nHeight <= pindexLastHardenedCheckpoint->nHeight)
+    //     That single `if` is no longer a guard by itself — it has been
+    //     replaced by the `nHardenedCheckpointHeight` two-layer check.
+    BOOST_CHECK(src.find("if (pindexLastHardenedCheckpoint && pfork->nHeight <= pindexLastHardenedCheckpoint->nHeight)")
+                == std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

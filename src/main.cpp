@@ -2658,14 +2658,30 @@ bool static Reorganize(CTxDBBase& txdb, CBlockIndex* pindexNew)
     //
     // Below the hardened checkpoint: reject unconditionally. The
     // checkpoint is sourced from the same compiled map (Checkpoints::
-    // GetLastCheckpoint via init.cpp startup init) on every node, so
+    // mapCheckpoints via GetLastCheckpointHeight) on every node, so
     // it is a globally shared anchor, not locally invented finality.
-    if (pindexLastHardenedCheckpoint && pfork->nHeight <= pindexLastHardenedCheckpoint->nHeight)
+    //
+    // pindexLastHardenedCheckpoint is set at startup from the same map,
+    // keyed by mapBlockIndex lookup of the compiled checkpoint hash. If
+    // that lookup fails (early IBD, reindex, or bootstrap before the
+    // checkpoint block has been downloaded into the local block index)
+    // the pointer is NULL. In that state we still know the *height* of
+    // the checkpoint from the compiled map directly — every node built
+    // from the same binary sees the same value — and we use it as the
+    // fail-closed floor. Without this second path, an IBD-time reorg
+    // attempt below the compiled checkpoint height would silently slip
+    // through the guard.
+    int nHardenedCheckpointHeight = -1;
+    if (pindexLastHardenedCheckpoint)
+        nHardenedCheckpointHeight = pindexLastHardenedCheckpoint->nHeight;
+    else
+        nHardenedCheckpointHeight = Checkpoints::GetLastCheckpointHeight();
+    if (nHardenedCheckpointHeight >= 0 && pfork->nHeight <= nHardenedCheckpointHeight)
     {
-        printf("REORGANIZE: REJECTED — fork point %d is below shared hardened checkpoint %d\n",
-            pfork->nHeight, pindexLastHardenedCheckpoint->nHeight);
+        printf("REORGANIZE: REJECTED — fork point %d is at or below shared hardened checkpoint %d\n",
+            pfork->nHeight, nHardenedCheckpointHeight);
         return error("Reorganize() : fork point %d at or below shared hardened checkpoint %d",
-            pfork->nHeight, pindexLastHardenedCheckpoint->nHeight);
+            pfork->nHeight, nHardenedCheckpointHeight);
     }
 
     // List of what to disconnect

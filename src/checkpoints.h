@@ -53,6 +53,14 @@ namespace Checkpoints
     // Returns last CBlockIndex* in mapBlockIndex that is a checkpoint
     CBlockIndex* GetLastCheckpoint(const std::map<uint256, CBlockIndex*>& mapBlockIndex);
 
+    // Returns the highest *compiled* checkpoint height, independent of
+    // whether mapBlockIndex has loaded the corresponding block yet. Every
+    // node built from the same binary sees the same value. Used as the
+    // fail-closed floor for Reorganize() when pindexLastHardenedCheckpoint
+    // has not yet been resolved (early IBD / reindex / bootstrap before
+    // the checkpoint block has been downloaded).
+    int GetLastCheckpointHeight();
+
     extern uint256 hashSyncCheckpoint;
     extern CSyncCheckpoint checkpointMessage;
     extern uint256 hashInvalidCheckpoint;
