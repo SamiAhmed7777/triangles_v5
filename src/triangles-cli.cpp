@@ -169,6 +169,17 @@ static fs::path GetDefaultDataDir()
 static fs::path GetConfigFilePath()
 {
     fs::path confPath = GetArg("-conf", "triangles.conf");
+    // Bug fix (round-8 NIT-1): if the user passed `-conf=` with no value
+    // (shell-quoting accident, env-var unset, or copy-paste template),
+    // mapArgs["-conf"] is "". Without this guard, we'd append an empty
+    // string to the datadir and produce a directory path like
+    // "/root/.cryptographic-triangles/" — std::ifstream opens that as a
+    // directory successfully on Linux, then readConfigFile's getline
+    // finds no lines and the error path mis-reports "missing BOTH
+    // rpcuser/rpcpassword" for a file we never actually read.
+    // Treat empty -conf as "use default name" so the conf lookup at the
+    // default datadir works the same as if no -conf was passed at all.
+    if (confPath.empty()) confPath = "triangles.conf";
     if (confPath.is_absolute()) return confPath;
     fs::path datadir = GetArg("-datadir", "");
     if (datadir.empty()) datadir = GetDefaultDataDir().string();
