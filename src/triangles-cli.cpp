@@ -189,13 +189,24 @@ static void ParseCommandLine(int argc, char* const argv[])
             mapMultiArgs["-"].push_back("-");
             continue;
         }
+        // Historical behavior: every arg is parsed as a potential flag.
+        // A non-flag positional arg like "getinfo" gets stored as
+        // mapArgs["-getinfo"] = "1" (the leading dash comes from the arg
+        // itself, NOT from us prepending one). It doesn't collide with
+        // any real flag because no flag has a name that looks like a
+        // typical RPC method.
+        //
+        // Bug fix: previous code was doing strKey = "-" + str, which
+        // produced "--conf" (two dashes) when the arg was "-conf=...",
+        // so GetArg("-conf") lookups never matched. The arg already
+        // starts with a dash, so we use it verbatim.
         string strKey, strVal;
         size_t idx = str.find('=');
         if (idx == string::npos) {
-            strKey = "-" + str;
+            strKey = str;       // already starts with "-", do NOT prepend another
             strVal = "1";
         } else {
-            strKey = "-" + str.substr(0, idx);
+            strKey = str.substr(0, idx);  // already starts with "-"
             strVal = str.substr(idx + 1);
         }
         mapArgs[strKey] = strVal;
@@ -217,7 +228,13 @@ struct RPCConn {
 static int AppInitRPCConn(RPCConn& conn)
 {
     fs::path confPath = GetConfigFilePath();
-    if (!confPath.empty()) ReadConfigFile(confPath.string());
+    bool confExisted = false;
+    if (!confPath.empty())
+    {
+        std::ifstream f(confPath);
+        confExisted = f.good();
+        if (confExisted) ReadConfigFile(confPath.string());
+    }
 
     bool fTestNet = GetBoolArg("-testnet", false);
     conn.port = GetArg("-rpcport", fTestNet ? "19112" : "19111");
@@ -226,9 +243,35 @@ static int AppInitRPCConn(RPCConn& conn)
     conn.pass = GetArg("-rpcpassword", "");
 
     if (conn.user.empty() || conn.pass.empty()) {
-        cerr << "triangles-cli: missing RPC credentials. Set rpcuser/rpcpassword in triangles.conf\n"
-             << "              or pass -rpcuser=<user> -rpcpassword=<pw> on the command line.\n"
-             << "              (RPC config file: " << confPath.string() << ")\n";
+        // Distinguish between "no conf file at all", "conf file exists but
+        // is missing one or both keys", and "no -rpcuser/-rpcpassword
+        // passed". The previous single-line error didn't tell the operator
+        // which case they were in, leading to confusion when the conf path
+        // was correct but a key was missing (or vice versa).
+        cerr << "triangles-cli: missing RPC credentials.\n";
+        if (confExisted) {
+            cerr << "  Read conf: " << confPath.string() << "\n";
+            if (conn.user.empty() && conn.pass.empty()) {
+                cerr << "  Conf is missing BOTH rpcuser= and rpcpassword= lines.\n";
+            } else if (conn.user.empty()) {
+                cerr << "  Conf is missing rpcuser= (rpcpassword was found).\n";
+            } else {
+                cerr << "  Conf is missing rpcpassword= (rpcuser was found).\n";
+            }
+            cerr << "  Edit the conf to add the missing line(s), or override on the command line:\n"
+                 << "    triangles-cli -rpcuser=<user> -rpcpassword=<pw> [other flags] <command>\n";
+        } else {
+            cerr << "  Could not read conf: " << confPath.string() << " (file not found).\n"
+                 << "  Either:\n"
+                 << "    - Create " << confPath.string() << " with rpcuser/rpcpassword set, or\n"
+                 << "    - Pass -conf=<path> to point at a conf that exists, or\n"
+                 << "    - Pass -rpcuser=<user> -rpcpassword=<pw> on the command line.\n";
+            if (GetArg("-datadir", "").empty()) {
+                cerr << "  Note: no -datadir was passed, so the default datadir\n"
+                     << "        (" << GetDefaultDataDir().string() << ") was used to find the conf.\n"
+                     << "        If your conf is elsewhere, pass -datadir=<dir> or -conf=<path>.\n";
+            }
+        }
         return 1;
     }
     return 0;
