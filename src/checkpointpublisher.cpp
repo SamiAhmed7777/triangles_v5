@@ -425,7 +425,8 @@ bool LoadSignedCheckpoints(
     if (Bootstrap::DownloadFile(host, "signed-checkpoints.json",
                                  std::filesystem::temp_directory_path() / "signed-checkpoints.json.tmp",
                                  nullptr, strError,
-                                 /*noProxy=*/true)) {
+                                 /*noProxy=*/true, /*portOverride=*/-1,
+                                 /*maxDownloadBytes=*/10 * 1024 * 1024)) {
         std::filesystem::path tmp = std::filesystem::temp_directory_path() / "signed-checkpoints.json.tmp";
         FILE* f = fopen(tmp.string().c_str(), "rb");
         if (f) {

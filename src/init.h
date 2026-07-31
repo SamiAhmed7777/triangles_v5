@@ -12,11 +12,11 @@
 extern std::unique_ptr<CWallet> pwalletMain;
 extern std::string strWalletFileName;
 void StartShutdown();
+void MarkShutdownFailure();
 bool ShutdownRequested();
 void Shutdown(void* parg);
 bool AppInit2();
 std::string HelpMessage();
 
 #endif
-
 

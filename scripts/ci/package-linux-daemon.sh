@@ -15,6 +15,7 @@ set -euo pipefail
 VERSION="${1:-0.0.0}"
 PKG="cryptographic-triangles-daemon_${VERSION}_amd64"
 TOR_VERSION="${TOR_VERSION:-15.0.9}"
+TOR_SHA256="${TOR_SHA256:-7ea13e14cddafb36c6347a9c4f4e639f6010364c16acfd519157c29e226277f2}"
 
 echo ">>> Building .deb for triangles ${VERSION}"
 
@@ -39,6 +40,7 @@ if [ ! -f "${TOR_TARBALL}" ]; then
         "https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/${TOR_TARBALL}" \
         -o "${TOR_TARBALL}"
 fi
+printf '%s  %s\n' "${TOR_SHA256}" "${TOR_TARBALL}" | sha256sum --check --strict -
 mkdir -p tor-extract
 tar -xzf "${TOR_TARBALL}" -C tor-extract
 
@@ -107,10 +109,35 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=triangles
+Group=triangles
+UMask=0077
+Environment=HOME=/var/lib/triangles
 Environment=LD_LIBRARY_PATH=/usr/lib/cryptographic-triangles/lib
-ExecStart=/usr/lib/cryptographic-triangles/trianglesd
+StateDirectory=triangles
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/triangles
+ExecStart=/usr/lib/cryptographic-triangles/trianglesd -datadir=/var/lib/triangles -conf=/etc/triangles/triangles.conf -printtoconsole
 Restart=on-failure
 RestartSec=10
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/triangles
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target
@@ -127,11 +154,41 @@ Description: Cryptographic Triangles daemon + CLI with integrated Tor
  Tor, and systemd service. No external dependencies required.
 Section: finance
 Priority: optional
+Depends: adduser
 CTRL
 
 # DEBIAN/postinst
 cat > "${PKG}/DEBIAN/postinst" << 'POST'
 #!/bin/bash
+set -e
+
+if ! getent group triangles >/dev/null; then
+    addgroup --system triangles
+fi
+if ! id triangles >/dev/null 2>&1; then
+    adduser --system --ingroup triangles --home /var/lib/triangles \
+        --no-create-home --disabled-login triangles
+fi
+
+install -d -m 0700 -o triangles -g triangles /var/lib/triangles
+install -d -m 0750 -o root -g triangles /etc/triangles
+
+if [ ! -e /etc/triangles/triangles.conf ]; then
+    RPC_PASSWORD="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+    CONFIG_TMP="$(mktemp)"
+    trap 'rm -f "${CONFIG_TMP}"' EXIT
+    cat > "${CONFIG_TMP}" << CONF
+server=1
+rpcuser=trianglesrpc
+rpcpassword=${RPC_PASSWORD}
+rpcbind=127.0.0.1
+rpcallowip=127.0.0.1
+rest=0
+upnp=0
+CONF
+    install -m 0640 -o root -g triangles "${CONFIG_TMP}" /etc/triangles/triangles.conf
+fi
+
 systemctl daemon-reload
 echo ""
 echo "Cryptographic Triangles daemon + CLI installed."

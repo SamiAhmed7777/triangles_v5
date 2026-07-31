@@ -51,6 +51,12 @@ bool TryFetchSnapshot(const std::filesystem::path& dataDir,
                       int timeoutSec,
                       std::string& strError);
 
+// Return SHA256 in conventional display byte order, matching sha256sum and
+// the hexadecimal values compiled into checkpoints.cpp.
+bool ComputeSnapshotFileHash(const std::filesystem::path& path,
+                             uint256& fileHash,
+                             std::string& strError);
+
 // Server-side message dispatch. Called from main.cpp ProcessMessage.
 // Returns true if strCommand was a snapshot-protocol message (handled or
 // rejected for malformed input).

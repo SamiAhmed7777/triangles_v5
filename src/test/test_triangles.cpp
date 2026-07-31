@@ -69,3 +69,4 @@ void StartShutdown()
   exit(0);
 }
 
+void MarkShutdownFailure() { /* no-op for tests */ }

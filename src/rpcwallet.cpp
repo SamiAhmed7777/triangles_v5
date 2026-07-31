@@ -13,6 +13,8 @@
 #include "tor/onion_v3.h"
 #include "tor/tor_embedded.h"
 
+#include <memory>
+
 using namespace json_spirit;
 using namespace std;
 
@@ -1519,7 +1521,7 @@ Value walletpassphrase(const Array& params, bool fHelp)
     if (pwalletMain->IsCrypted() && (fHelp || params.size() < 2 || params.size() > 3))
         throw runtime_error(
             "walletpassphrase <passphrase> <timeout> [stakingonly]\n"
-            "Stores the wallet decryption key in memory for <timeout> seconds.\n"
+            "Stores the wallet decryption key in memory for <timeout> seconds (1-604800).\n"
             "if [stakingonly] is true sending functions are disabled.");
     if (fHelp)
         return true;
@@ -1530,6 +1532,14 @@ Value walletpassphrase(const Array& params, bool fHelp)
 
     if (!pwalletMain->IsLocked())
         throw JSONRPCError(RPC_WALLET_ALREADY_UNLOCKED, "Error: Wallet is already unlocked, use walletlock first if need to change unlock settings.");
+
+    const int64_t timeoutSeconds = params[1].get_int64();
+    if (timeoutSeconds < 1 || timeoutSeconds > 7 * 24 * 60 * 60)
+        throw JSONRPCError(RPC_INVALID_PARAMETER,
+                           "Wallet unlock timeout must be between 1 and 604800 seconds.");
+    const bool stakingOnly = params.size() > 2 ? params[2].get_bool() : false;
+    std::unique_ptr<int64_t> sleepTime(new int64_t(timeoutSeconds));
+
     // Note that the walletpassphrase is stored in params[0] which is not mlock()ed
     SecureString strWalletPass;
     strWalletPass.reserve(100);
@@ -1545,15 +1555,18 @@ Value walletpassphrase(const Array& params, bool fHelp)
             "walletpassphrase <passphrase> <timeout>\n"
             "Stores the wallet decryption key in memory for <timeout> seconds.");
 
-    NewThread(ThreadTopUpKeyPool, nullptr);
-    int64_t* pnSleepTime = new int64_t(params[1].get_int64());
-    NewThread(ThreadCleanWalletPassphrase, pnSleepTime);
-
     // triangles: if user OS account compromised prevent trivial sendmoney commands
-    if (params.size() > 2)
-        fWalletUnlockStakingOnly = params[2].get_bool();
-    else
+    fWalletUnlockStakingOnly = stakingOnly;
+    if (!NewThread(ThreadCleanWalletPassphrase, sleepTime.get())) {
+        pwalletMain->Lock();
         fWalletUnlockStakingOnly = false;
+        throw JSONRPCError(RPC_WALLET_ERROR,
+                           "Could not start the wallet relock timer; wallet was locked again.");
+    }
+    sleepTime.release();
+
+    if (!NewThread(ThreadTopUpKeyPool, nullptr))
+        printf("walletpassphrase: could not start background keypool refill\n");
 
     return Value::null;
 }

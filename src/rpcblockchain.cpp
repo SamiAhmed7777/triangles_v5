@@ -250,6 +250,8 @@ Value getblockhash(const Array& params, bool fHelp)
         throw runtime_error("Block number out of range.");
 
     CBlockIndex* pblockindex = FindBlockByHeight(nHeight);
+    if (!pblockindex || !pblockindex->phashBlock)
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block height not available in local block index");
     return pblockindex->phashBlock->GetHex();
 }
 
@@ -286,14 +288,11 @@ Value getblockbynumber(const Array& params, bool fHelp)
     if (nHeight < 0 || nHeight > nBestHeight)
         throw runtime_error("Block number out of range.");
 
+    CBlockIndex* pblockindex = FindBlockByHeight(nHeight);
+    if (!pblockindex || !pblockindex->phashBlock)
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block height not available in local block index");
+
     CBlock block;
-    CBlockIndex* pblockindex = mapBlockIndex[hashBestChain];
-    while (pblockindex->nHeight > nHeight)
-        pblockindex = pblockindex->pprev;
-
-    uint256 hash = *pblockindex->phashBlock;
-
-    pblockindex = mapBlockIndex[hash];
     block.ReadFromDisk(pblockindex, true);
 
     return blockToJSON(block, pblockindex, params.size() > 1 ? params[1].get_bool() : false);
@@ -1321,93 +1320,5 @@ Value dumputxoset(const Array& params, bool fHelp)
     result.push_back(Pair("blockhash", hashBestChain.GetHex()));
     result.push_back(Pair("file_size", nFileSize));
 
-    return result;
-}
-
-// ============================================================================
-// Trusted snapshot publisher RPCs (Design A: single-slot rotation)
-// ============================================================================
-//
-// settrustedv2snapshotpublisher <address>
-//   - Atomically replaces the active trusted snapshot publisher.
-//   - The previous publisher is dropped immediately (no grace period).
-//   - The new publisher is persisted to <datadir>/snapshot-publisher.json
-//     so the choice survives daemon restarts.
-//
-// gettrustedv2snapshotpublisher
-//   - Returns the currently active runtime override.
-//   - Empty string means no runtime override; built-in fallback list is
-//     the source of truth (which contains "TG8f76ykt...").
-//
-// unsettrustedv2snapshotpublisher
-//   - Clears the runtime override.
-//   - The built-in fallback list (read-only, compiled in) becomes the
-//     source of truth again.
-//   - Removes <datadir>/snapshot-publisher.json.
-Value settrustedv2snapshotpublisher(const Array& params, bool fHelp)
-{
-    if (fHelp || params.size() != 1)
-        throw runtime_error(
-            "settrustedv2snapshotpublisher <address>\n"
-            "Atomically replace the trusted snapshot publisher.\n"
-            "The previous publisher is dropped immediately (no grace period).\n"
-            "The new publisher is persisted to <datadir>/snapshot-publisher.json.\n"
-            "\nArguments:\n"
-            "1. address   (string, required)   Triangles T-address (34 chars, starts with 'T')\n"
-            "\nResult:\n"
-            "{ previous: 'T...', current: 'T...' }  (previous is empty if first set)\n"
-            "\nExample:\n"
-            "  triangles-cli settrustedv2snapshotpublisher TGotWuftzH7rD9tXC7whE8EXiyC3mr1CrH");
-
-    std::string addr = params[0].get_str();
-    std::string previous = Bootstrap::GetActiveTrustedSnapshotPublisher();
-    std::string err;
-    if (!Bootstrap::SetTrustedSnapshotPublisher(addr, err)) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, err);
-    }
-    Object result;
-    result.push_back(Pair("previous", previous));
-    result.push_back(Pair("current", addr));
-    if (!err.empty())
-        result.push_back(Pair("warning", err));
-    return result;
-}
-
-Value gettrustedv2snapshotpublisher(const Array& params, bool fHelp)
-{
-    if (fHelp || params.size() != 0)
-        throw runtime_error(
-            "gettrustedv2snapshotpublisher\n"
-            "Returns the currently active trusted snapshot publisher.\n"
-            "Empty string means no runtime override is set; the built-in\n"
-            "fallback list (compiled in) is the source of truth.\n"
-            "\nResult:\n"
-            "{ active: 'T...', has_runtime_override: true|false }");
-
-    std::string active = Bootstrap::GetActiveTrustedSnapshotPublisher();
-    Object result;
-    result.push_back(Pair("active", active));
-    result.push_back(Pair("has_runtime_override", !active.empty()));
-    return result;
-}
-
-Value unsettrustedv2snapshotpublisher(const Array& params, bool fHelp)
-{
-    if (fHelp || params.size() != 0)
-        throw runtime_error(
-            "unsettrustedv2snapshotpublisher\n"
-            "Clear the runtime trusted snapshot publisher override.\n"
-            "The built-in fallback list (compiled in) becomes the source of truth again.\n"
-            "Removes <datadir>/snapshot-publisher.json.\n"
-            "\nResult:\n"
-            "{ unset: true, fallback_in_effect: true }");
-
-    std::string err;
-    if (!Bootstrap::UnsetTrustedSnapshotPublisher(err)) {
-        throw JSONRPCError(RPC_INTERNAL_ERROR, err);
-    }
-    Object result;
-    result.push_back(Pair("unset", true));
-    result.push_back(Pair("fallback_in_effect", true));
     return result;
 }
