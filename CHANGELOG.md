@@ -5,6 +5,51 @@ All notable changes to Triangles (TRI) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.9] - 2026-07-31
+
+### Fixed
+- **Staking deadlock on idle networks.** `IsStakingSafe()` refused to
+  stake whenever `IsInitialBlockDownload()` was true, and `IBD` flipped
+  true whenever the chain tip was older than 24h. After 24h of no blocks,
+  every node simultaneously refused to stake and the chain deadlocked.
+  The `staking: true` flag in `getstakinginfo` was misleading — it only
+  reflected a single search in the brief window after a restart. Narrowed
+  the gate to "refuse only when IBD is true AND local height is behind
+  the peer/checkpoint estimate" (`f69f087`). A node at the peer median
+  now clears the gate and keeps staking through idle periods, so the
+  chain self-heals. Genuinely-behind nodes still hold off. Block
+  validation, reorg rules, and checkpoint rules are unchanged. The
+  `-forcestaking` bootstrap escape hatch still works on nodes caught
+  up to the checkpoint.
+
+### Changed
+- CLI: `-conf=` (empty value) now falls back to the default config
+  path instead of erroring out (`41e3898`).
+- CLI: `-conf` / `-datadir` / `-rpcuser` / `-rpcpassword` are honored
+  in the documented order, with clearer error messages on bad input
+  (`64556dc`).
+- Build: reproducible build + signed release pipeline (PR #26 chain).
+
+## [6.1.8] - 2026-07-17
+
+### Changed
+- Bootstrap: RPC-driven trusted snapshot publisher rotation (PR #26).
+  Operators can rotate the snapshot publisher via RPC instead of
+  hard-coding it in the binary.
+- Consensus: removed local-finality, fixed `getheaders` fork recovery
+  (`935d1d5`).
+- Consensus: fail-closed reorg guard when the startup checkpoint
+  pointer is null (`6116cff`).
+- IBD: allow `getblocks`/`getheaders` on OneShot peers during IBD
+  (`c68a8cb`).
+- Build: bump revision 7 → 8.
+
+### ⚠️ Known issue
+- v6.1.8 introduced a staking deadlock on idle networks via the
+  `IsStakingSafe()` gate. Operators on v6.1.8 should set
+  `staking=1` and `forcestaking=1` in `triangles.conf` and restart
+  to unstick the chain. v6.1.9 fixes the root cause.
+
 ## [6.1.7] - 2026-07-08
 
 ### Changed
