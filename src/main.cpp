@@ -1650,8 +1650,16 @@ int GetNumBlocksOfPeers()
 
 bool IsStakingSafe(const CWallet* pwallet, const std::vector<CNode*>& vNodesSnapshot)
 {
-    // (1) Never stake during IBD.
-    if (IsInitialBlockDownload())
+    // (1) Never stake during IBD UNLESS we're caught up to peers. A node
+    // that is fully synced but idle (chain stalled >24h, so IBD flips
+    // true via the stale-tip heuristic) MUST keep staking so the network
+    // can self-heal. Without this carve-out, every node simultaneously
+    // refuses to stake after 24h of no blocks and the chain deadlocks.
+    //
+    // GetNumBlocksOfPeers() is the peer median height clamped to the
+    // checkpoint estimate, so this comparison is approximate: a node at
+    // the peer median clears it, a node behind does not.
+    if (IsInitialBlockDownload() && nBestHeight < GetNumBlocksOfPeers())
     {
         if (fDebug) printf("STAKING-GATE: refuse (IBD)\n");
         return false;
