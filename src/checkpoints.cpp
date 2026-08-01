@@ -64,14 +64,6 @@ namespace Checkpoints
     // mapCheckpoints / mapCheckpointsTestnet.
     static std::map<int, uint256> mapSnapshotHashes = {
         { 2206004, uint256("0x1419282dae817315ee1b955543f6248233fe5800f5e8488734a0ece5bd6781ea")},
-        // v6.2.1 — canonical snapshot at current chain tip 2,224,763, generated
-        // 2026-07-30 by the operator via `triangles-cli dumputxoset` on DNS2.
-        // SHA256 verified against manifest.json on SAMI-PC. Blockhash matches
-        // DNS2/DNS3 chain tip. Snapshot is signed by wallet
-        // TUJ8fne8yf4BEypsp6kENY2dCkivFuXhka per manifest.json. Use this to
-        // skip the 24-hour bootstrap.dat walk on SAMI-PC (the only node with
-        // a non-zero wallet balance) and unstick the chain.
-        { 2224763, uint256("0xa7ea62ad4e158faf07973e5cd1539c1895154c4e28685a3eb7af458a001037b7")},
     };
 
     static std::map<int, uint256> mapSnapshotHashesTestnet = {

@@ -25,7 +25,7 @@ modules:
       - install -Dm644 org.cryptographic_triangles.TrianglesQt.metainfo.xml /app/share/metainfo/org.cryptographic_triangles.TrianglesQt.metainfo.xml
     sources:
       - type: file
-        url: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v6.2.1/Cryptographic-Triangles-v6.2.1-linux-x64-qt
+        url: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v6.2.0/Cryptographic-Triangles-v6.2.0-linux-x64-qt
         sha256: ed220eb8d0b403f62cdac28988541fd1a27864491e233216f9c00a4c2537b4a3
         dest-filename: triangles-qt-linux
       - type: file
@@ -55,6 +55,6 @@ modules:
       - install -Dm755 trianglesd-linux /app/bin/trianglesd
     sources:
       - type: file
-        url: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v6.2.1/Cryptographic-Triangles-v6.2.1-linux-x64-daemon
+        url: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v6.2.0/Cryptographic-Triangles-v6.2.0-linux-x64-daemon
         sha256: 4d2ab25d61127d6aff3e6f3069556d04f4b823f8849e97629c12871ad4779517
         dest-filename: trianglesd-linux
