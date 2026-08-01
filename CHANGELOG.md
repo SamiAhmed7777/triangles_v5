@@ -5,7 +5,21 @@ All notable changes to Triangles (TRI) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.2.0] - 2026-08-01
+## [6.2.2] - 2026-08-01
+
+### Fixed
+- **Snapshot regeneration: full chain index, not just the last 2000.**
+  `UTXO_SNAPSHOT_DEFAULT_HEADERS` was 2000, which silently trimmed the
+  snapshot to the last 2000 blocks even though the v2+ format is designed
+  to carry the full chain index. The too-small snapshot caused
+  `GetKernelStakeModifier() : block not indexed` errors after a fresh
+  node loaded it — the kernel-stake-modifier walk in `CreateCoinStake`
+  needs blocks older than the last 2000 because `nStakeModifierSelectionInterval`
+  is multi-day. The block index was effectively unusable for the
+  StakeMiner on the recovered node. Default is now 0 (all headers); the
+  trim is bypassed when `nHeaders=0`. Callers may still pass an explicit
+  positive value for a small diagnostic snapshot.
+
 
 ### Fixed
 - **Build portability: v6.1.9 binary crashed with SIGILL on every

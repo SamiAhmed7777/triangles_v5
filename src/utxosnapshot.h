@@ -21,9 +21,15 @@ static const unsigned int UTXO_SNAPSHOT_MAGIC = 0x53585455; // "UTXS" little-end
 //     LoadBlockIndex only walks 500 blocks back from pindexBest.
 static const unsigned int UTXO_SNAPSHOT_VERSION = 3;
 
-// Number of block index entries to include in snapshot (covers difficulty,
-// median time, stake modifier, and reorg depth requirements)
-static const unsigned int UTXO_SNAPSHOT_DEFAULT_HEADERS = 2000;
+// Number of block index entries to include in snapshot. The v2+ design
+// collects ALL block index entries (genesis → tip) so a snapshot-loaded
+// node can address every block via mapBlockIndex — which is required for
+// the kernel-stake-modifier walk in StakeMiner / CheckStakeKernelHash to
+// succeed for any UTXO (not just the last 2000). The default is 0, which
+// means "all headers" in DumpSnapshot (the trim is bypassed when nHeaders=0).
+// Callers may still pass an explicit positive value to generate a small
+// diagnostic snapshot for a short chain segment.
+static const unsigned int UTXO_SNAPSHOT_DEFAULT_HEADERS = 0;
 
 namespace UtxoSnapshot {
 

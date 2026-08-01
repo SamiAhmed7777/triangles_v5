@@ -1300,8 +1300,12 @@ Value dumputxoset(const Array& params, bool fHelp)
     if (params.size() > 1)
         nHeaders = params[1].get_int();
 
-    if (nHeaders < 100)
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "nheaders must be at least 100");
+    // 0 = include all chain headers (the v2+ default). Positive values are
+    // a count of the most recent block index entries to embed (useful for
+    // chain segment diagnostics, but NOT for full bootstrap — kernel-stake
+    // walks need the full index).
+    if (nHeaders > 0 && nHeaders < 100)
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "nheaders must be 0 (all) or at least 100");
 
     std::filesystem::path destPath(filename);
     std::string strError;
