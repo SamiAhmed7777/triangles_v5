@@ -77,6 +77,26 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" AND NOT WIN32 AND NOT
         # build host. Combined with -march=x86-64-v2 above, the scheduler
         # picks instructions from the v2 subset only — no AVX-512 leaks.
         add_compile_options(-mtune=generic)
+        # Belt-and-suspenders: explicitly disable AVX-512 / AVX10 / SVE
+        # family ISAs that GCC 11+ can otherwise autovectorize into via
+        # inlined libstdc++ std::string / std::copy / memcpy paths even when
+        # -march=x86-64-v2 is set. Discovered 2026-08-01: v6.1.9 binary built
+        # on EPYC 7763 (AVX-512) contained 741 vpbroadcastq EVEX instructions
+        # which crash with SIGILL on every production node (KVM EPYC,
+        # Ryzen 3600, ARM64) that lacks AVX-512. -mno-avx512f alone is
+        # enough to suppress the SIGILL; the -mno-*avx10/sve* siblings
+        # future-proof against the next GCC version autovectorizing
+        # beyond AVX-512. See references/avx-512-sigill-build-fix.md
+        # for the full diagnosis recipe.
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "GNU")
+            add_compile_options(
+                -mno-avx512f -mno-avx512pf -mno-avx512er -mno-avx512cd
+                -mno-avx512vl -mno-avx512bw -mno-avx512dq -mno-avx512ifma
+                -mno-avx512vbmi -mno-avx512vbmi2 -mno-avx512vnni
+                -mno-avx512bitalg -mno-avx512vpopcntdq -mno-avx512-4fmaps
+                -mno-avx512-4vnniw -mno-avx512vp2intersect
+            )
+        endif()
     endif()
 endif()
 

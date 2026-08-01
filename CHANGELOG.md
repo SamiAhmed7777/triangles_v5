@@ -5,6 +5,25 @@ All notable changes to Triangles (TRI) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.2.0] - 2026-08-01
+
+### Fixed
+- **Build portability: v6.1.9 binary crashed with SIGILL on every
+  production node.** v6.1.9 was built on GitHub Actions' EPYC 7763
+  runner (AVX-512 capable). GCC 11.4 + libstdc++ inlining emitted 741
+  `vpbroadcastq` EVEX instructions into the daemon binary even though
+  the cmake `AddCompilerFlags.cmake` was setting `-march=x86-64-v2
+  -mtune=generic`. The resulting binary crashed on every production
+  CPU that lacks AVX-512: KVM-virtualized EPYC (DNS2), Ryzen 5 3600
+  (SAMI-PC), and any non-x86_64 node. v6.2.0 adds an explicit
+  `-mno-avx512f -mno-avx512*` block to the global compile options so
+  the build cannot leak AVX-512 regardless of what the build host
+  supports. Carries forward the v6.1.9 staking-selfheal fix unchanged.
+  See `references/avx-512-sigill-build-fix.md` for the full diagnosis.
+
+### Changed
+- Bump version 6.1.9 → 6.2.0 to reflect the build-system change.
+
 ## [6.1.9] - 2026-07-31
 
 ### Fixed

@@ -1,5 +1,5 @@
 PackageIdentifier: CryptographicTriangles.TrianglesQt
-PackageVersion: 6.1.7
+PackageVersion: 6.2.0
 PackageLocale: en-US
 Publisher: Cryptographic Triangles
 PublisherUrl: https://cryptographic-triangles.org
@@ -27,7 +27,7 @@ Installers:
       - RelativeFilePath: triangles-qt.exe
         PortableCommandAlias: triangles-qt
     ArchiveBinariesDependOnPath: true
-    InstallerUrl: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v6.1.7/Cryptographic-Triangles-6.1.7-win-x64.zip
+    InstallerUrl: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v6.2.0/Cryptographic-Triangles-6.2.0-win-x64.zip
     InstallerSha256: 6F002A669A7E92AAF3D8DD7B1AE80F06A086C99A15CA05CF107665009FFC06B7
 ManifestType: singleton
 ManifestVersion: 1.6.0
