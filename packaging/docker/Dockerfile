@@ -1,6 +1,6 @@
 FROM ubuntu:22.04 AS builder
 
-ARG VERSION=6.2.0
+ARG VERSION=6.2.1
 ARG DEB_URL=https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}/cryptographic-triangles-daemon_${VERSION}_amd64.deb
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -13,11 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ---------- Runtime ----------
 FROM ubuntu:22.04
 
-ARG VERSION=6.2.0
+ARG VERSION=6.2.1
 
 LABEL maintainer="Cryptographic Triangles Team"
 LABEL description="Cryptographic Triangles (TRI) headless daemon"
-LABEL version="6.2.0"
+LABEL version="6.2.1"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \

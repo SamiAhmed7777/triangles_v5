@@ -1,6 +1,6 @@
 name: triangles
 base: core22
-version: '6.2.0'
+version: '6.2.1'
 summary: Cryptographic Triangles (TRI) cryptocurrency wallet
 description: |
   Privacy-focused cryptocurrency featuring Proof-of-Stake consensus,
@@ -51,10 +51,10 @@ apps:
 parts:
   triangles:
     plugin: dump
-    source: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v6.2.0/Cryptographic-Triangles-v6.2.0-linux-x64-qt
+    source: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v6.2.1/Cryptographic-Triangles-v6.2.1-linux-x64-qt
     source-type: file
     organize:
-      Cryptographic-Triangles-v6.2.0-linux-x64-qt: bin/triangles-qt
+      Cryptographic-Triangles-v6.2.1-linux-x64-qt: bin/triangles-qt
     stage-packages:
       - libqt5widgets5
       - libqt5gui5
@@ -73,10 +73,10 @@ parts:
 
   trianglesd:
     plugin: dump
-    source: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v6.2.0/Cryptographic-Triangles-v6.2.0-linux-x64-daemon
+    source: https://github.com/SamiAhmed7777/triangles_v5/releases/download/v6.2.1/Cryptographic-Triangles-v6.2.1-linux-x64-daemon
     source-type: file
     organize:
-      Cryptographic-Triangles-v6.2.0-linux-x64-daemon: bin/trianglesd
+      Cryptographic-Triangles-v6.2.1-linux-x64-daemon: bin/trianglesd
 
   desktop-entry:
     plugin: dump
