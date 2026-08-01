@@ -101,13 +101,17 @@ if(CMAKE_X86_64_BASELINE)
     # the whole AVX-512 family so a CI runner's EPYC 7763 (or any
     # AVX-512-capable build host) cannot leak AVX-512 into a binary
     # that needs to run on KVM EPYC, Ryzen 3000, or ARM64.
+    # NB: -mno-avx512*4fmaps / -mno-avx512*4vnniw use NO dash between
+    # 'avx512' and the sub-feature (correct: -mno-avx5124fmaps). The
+    # -mno-avx512-4fmaps form (with a dash) is rejected by GCC and
+    # makes the whole build fail with "unrecognized command-line option".
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "GNU")
         add_compile_options(
             -mno-avx512f -mno-avx512pf -mno-avx512er -mno-avx512cd
             -mno-avx512vl -mno-avx512bw -mno-avx512dq -mno-avx512ifma
             -mno-avx512vbmi -mno-avx512vbmi2 -mno-avx512vnni
-            -mno-avx512bitalg -mno-avx512vpopcntdq -mno-avx512-4fmaps
-            -mno-avx512-4vnniw -mno-avx512vp2intersect
+            -mno-avx512bitalg -mno-avx512vpopcntdq
+            -mno-avx5124fmaps -mno-avx5124vnniw -mno-avx512vp2intersect
         )
     endif()
 endif()

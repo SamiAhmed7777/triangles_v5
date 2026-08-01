@@ -88,13 +88,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" AND NOT WIN32 AND NOT
         # future-proof against the next GCC version autovectorizing
         # beyond AVX-512. See references/avx-512-sigill-build-fix.md
         # for the full diagnosis recipe.
+        # NB: -mno-avx512*4fmaps / -mno-avx512*4vnniw use NO dash between
+        # 'avx512' and the sub-feature (correct: -mno-avx5124fmaps). The
+        # -mno-avx512-4fmaps form (with a dash) is rejected by GCC and
+        # makes the whole build fail with "unrecognized command-line option".
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "GNU")
             add_compile_options(
                 -mno-avx512f -mno-avx512pf -mno-avx512er -mno-avx512cd
                 -mno-avx512vl -mno-avx512bw -mno-avx512dq -mno-avx512ifma
                 -mno-avx512vbmi -mno-avx512vbmi2 -mno-avx512vnni
-                -mno-avx512bitalg -mno-avx512vpopcntdq -mno-avx512-4fmaps
-                -mno-avx512-4vnniw -mno-avx512vp2intersect
+                -mno-avx512bitalg -mno-avx512vpopcntdq
+                -mno-avx5124fmaps -mno-avx5124vnniw -mno-avx512vp2intersect
             )
         endif()
     endif()
