@@ -275,6 +275,108 @@ jobs:
           name: fuzz-artifacts
           path: build-fuzz/fuzz_artifacts/
 
+  test-fuzz-smoke-tx:
+    # libFuzzer smoke test for src/test/fuzz/transaction_deserialize_fuzz.cpp.
+    # Mirrors test-fuzz-smoke but exercises CTransaction deserialization
+    # instead of the script interpreter. Any crash is uploaded as an artifact
+    # and the job fails — fuzz regressions must block the PR.
+    # See src/test/fuzz/transaction_deserialize_fuzz.cpp for harness details.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      ASAN_OPTIONS: "detect_leaks=0:halt_on_error=1:abort_on_error=1:print_stacktrace=1"
+      UBSAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
+      SAN_FLAGS: "-fsanitize=address,undefined,fuzzer-no-link -fno-omit-frame-pointer -fno-sanitize-recover=undefined -fno-sanitize=alignment,signed-integer-overflow,vptr"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Install clang + dependencies
+        # libFuzzer ships with clang since v6; clang-15 is on the runner.
+        # libgflags-dev: fuzz link line references -lgflags (RocksDB builds
+        # expect gflags as a transitive dep). Without it the link step fails
+        # with "cannot find -lgflags". CI's ubuntu-22.04 runner does NOT ship
+        # it by default.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-15 cmake ninja-build \
+            libboost-all-dev libssl-dev libdb++-dev libleveldb-dev \
+            libevent-dev libminiupnpc-dev zlib1g-dev \
+            libsnappy-dev liblz4-dev libzstd-dev \
+            libgflags-dev
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 100
+
+      - name: Build RocksDB from source
+        run: sudo bash scripts/ci/build-rocksdb.sh
+
+      - name: Configure with fuzzing + sanitizers
+        # NB: do NOT pass -fsanitize=fuzzer in CMAKE_EXE_LINKER_FLAGS — that
+        # pulls libFuzzer's main() into CMake's compiler-probe linker test
+        # and trips "multiple definition of `main`". The transaction_deserialize_fuzz
+        # target's custom clang++ link step adds -fsanitize=fuzzer in src/CMakeLists.txt
+        # (see BUILD_FUZZ block).
+        # SECP256K1_ASM=OFF: clang-15+ register allocator is sometimes stricter
+        # than clang-14 about the x86_64 inline asm in scalar_4x64_impl.h.
+        run: |
+          cmake -B build-fuzz -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_FLAGS="$SAN_FLAGS" \
+            -DCMAKE_CXX_FLAGS="$SAN_FLAGS" \
+            -DCMAKE_EXE_LINKER_FLAGS="$SAN_FLAGS" \
+            -DBUILD_QT=OFF \
+            -DBUILD_DAEMON=ON \
+            -DBUILD_TESTS=ON \
+            -DBUILD_FUZZ=ON \
+            -DUSE_UPNP=OFF \
+            -DSECP256K1_ASM=OFF
+
+      - name: Build libtor (embedded Tor static lib)
+        # BUILD_FUZZ pulls in triangles_common + trianglesd_objects (OBJECT lib)
+        # via the fuzz target's CMake deps. The link line references libtor.a,
+        # which the Tor submodule script produces — CMake doesn't build it.
+        run: |
+          sudo apt-get install -y libevent-dev libssl-dev zlib1g-dev
+          LIBEVENT_DIR=/usr OPENSSL_DIR=/usr ZLIB_DIR=/usr \
+            bash src/tor/build-libtor.sh
+
+      - name: Build transaction_deserialize_fuzz
+        # CMake target is named `transaction_deserialize_fuzz` (matches
+        # add_custom_target(transaction_deserialize_fuzz ...) in src/CMakeLists.txt).
+        run: cmake --build build-fuzz --target transaction_deserialize_fuzz -j$(nproc)
+
+      - name: Run fuzzer for 5 minutes
+        # -max_total_time=300 hard-caps runtime. Crashes go to artifact
+        # prefix; we upload any artifacts and fail the job if any exist.
+        # The transaction_deserialize_fuzz target does not need a seed
+        # corpus — it accepts arbitrary bytes as a transaction payload.
+        run: |
+          mkdir -p build-fuzz/fuzz_artifacts_tx build-fuzz/fuzz_corpus_tx
+          set +e
+          ./build-fuzz/bin/transaction_deserialize_fuzz \
+            -max_total_time=300 \
+            -max_len=200000 \
+            -artifact_prefix=build-fuzz/fuzz_artifacts_tx/ \
+            build-fuzz/fuzz_corpus_tx/ \
+            2>&1 | tee build-fuzz/fuzz_log.txt
+          FUZZ_EXIT=${PIPESTATUS[0]}
+          set -e
+          if [ -n "$(ls -A build-fuzz/fuzz_artifacts_tx/ 2>/dev/null | grep -v '\.tmp$')" ]; then
+            echo "::error::Fuzzer produced crash/leak artifacts"
+            exit 1
+          fi
+          exit "$FUZZ_EXIT"
+
+      - name: Upload fuzzer artifacts on success
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-artifacts-tx
+          path: build-fuzz/fuzz_artifacts_tx/
+
   build-windows-qt:
     runs-on: windows-latest
     defaults:
