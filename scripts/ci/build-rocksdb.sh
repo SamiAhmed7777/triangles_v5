@@ -13,15 +13,30 @@
 # Triangles' CMake find_library probes /usr/local before /usr/lib so
 # the just-built copy is picked up first.
 #
-# Pinned version matches DNS2's system librocksdb (8.9.1) so test
-# coverage matches production.
+# Pin policy (2026-08-02): chase the LATEST stable 10.x. "Match
+# DNS2's system librocksdb" reasoning was abandoned: forward
+# compatibility mattered more than byte-for-byte soname parity.
 #
 # Usage:  sudo ./scripts/ci/build-rocksdb.sh
 set -euo pipefail
 
-ROCKSDB_VERSION="${ROCKSDB_VERSION:-8.9.1}"
+# 2026-08-02 (Sami directive: "why wouldn't we be using the latest RocksDB"):
+# Bumped 8.9.1 -> 10.10.1. Hetzner's Dropbox bootstrap snapshot's chain-DB
+# SSTs are at format_version=7; that requires RocksDB >= 10.4.0 to read.
+# 10.10.1 is the latest 10.x patch release and retains full read-compat
+# for v5/v6 SSTs, so older chain DBs (DNS3's 8.9.1 chain DB, the snapshot
+# fork) open cleanly on the new daemon. The daemon does not pin its own
+# writes to v7 — see CHANGELOG for why.
+# Pin policy: default version + commit are set together. Overriding
+# ROCKSDB_VERSION alone is allowed (e.g. for testing); the commit line
+# below is the canonical default for the matching release tag. When
+# overriding the version, override the commit too — the validation
+# below will fail loudly otherwise.
+ROCKSDB_VERSION="${ROCKSDB_VERSION:-10.10.1}"
 ROCKSDB_TAG="v${ROCKSDB_VERSION}"
-ROCKSDB_COMMIT="${ROCKSDB_COMMIT:-49ce8a1064dd1ad89117899839bf136365e49e79}"
+# v10.10.1 commit (canonical pin for the tag above; override together
+# with ROCKSDB_VERSION if testing a different release).
+ROCKSDB_COMMIT="${ROCKSDB_COMMIT:-4595a5e95ae8525c42e172a054435782b3479c57}"
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local}"
 JOBS="${JOBS:-$(nproc)}"
 

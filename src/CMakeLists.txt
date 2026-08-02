@@ -1016,15 +1016,15 @@ exec "$PROG" "${OBJS[@]}" "$@"
         "${CMAKE_BINARY_DIR}/lib/libleveldb_lib.a"
         "-lssl" "-lcrypto" "-ldb_cxx" "-levent" "-lsqlite3" "-lminiupnpc"
         "${CMAKE_BINARY_DIR}/lib/libsecp256k1.a"
-        # RocksDB: build-rocksdb.sh installs librocksdb.so.8.9.1 to
-        # /usr/local (CI) or the user has it via the distro package
-        # (DNS2 has librocksdb-dev). The library search path picks up
-        # either /usr/local/lib or /usr/lib automatically, so a bare
+        # RocksDB: build-rocksdb.sh installs librocksdb.so (currently
+        # librocksdb.so.10.10.1) to /usr/local on CI, or it comes from
+        # the distro package. The library search path picks up either
+        # /usr/local/lib or /usr/lib automatically, so a bare
         # "-lrocksdb" works on both. The previous generator expression
         # ($<IF:$<TARGET_EXISTS:RocksDB::rocksdb>,-lrocksdb,${ROCKSDB_LIBRARY}>)
         # failed on CI because:
         #   1. CMake's find_package(RocksDB CONFIG) does NOT find the .cmake
-        #      config RocksDB 8.9.1 ships, only the .pc file.
+        #      config RocksDB 10.10.1 ships, only the .pc file.
         #   2. The pkg-config path exposes PkgConfig::RocksDB (NOT
         #      RocksDB::rocksdb), so $<TARGET_EXISTS:RocksDB::rocksdb> is
         #      FALSE.

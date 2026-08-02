@@ -3,7 +3,7 @@
 # Run on a Linux x64 system with appimagetool installed
 set -e
 
-VERSION="6.2.3"
+VERSION="6.2.4"
 APPDIR="Triangles-x86_64.AppDir"
 RELEASE_URL="https://github.com/SamiAhmed7777/triangles_v5/releases/download/v${VERSION}"
 

@@ -143,6 +143,13 @@ static rocksdb::Options GetRocksOptions()
     int nCacheSizeMB = GetArg("-dbcache", 2048);
     table_opts.block_cache = rocksdb::NewLRUCache(static_cast<size_t>(nCacheSizeMB) * 1048576);
     table_opts.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, false));
+    // Default BlockBasedTableOptions.format_version left at RocksDB's own
+    // default (6 in 10.10.1). Mixed v6/v7 SSTs in the same DB are
+    // supported — pinning to 7 here would only matter if we wanted
+    // brand-new SSTs to land at v7 for a specific reason (e.g. matching
+    // a v7 snapshot), and the cost (irreversible downgrade boundary
+    // the first time a v7 SST is written by this build) outweighs the
+    // benefit given the snapshot is consumed at import time, not later.
     opts.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_opts));
 
     return opts;

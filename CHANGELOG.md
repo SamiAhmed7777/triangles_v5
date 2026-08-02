@@ -5,6 +5,37 @@ All notable changes to Triangles (TRI) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.2.4] - 2026-08-02
+
+### Changed
+- **RocksDB bumped 8.9.1 → 10.10.1** in CI (`scripts/ci/build-rocksdb.sh`).
+  Required to read the Hetzner Dropbox bootstrap snapshot's chain DB,
+  whose SST files are at format_version=7. RocksDB 10.10.1 still uses
+  `format_version=6` as its own default; the daemon does NOT pin a
+  different value, so newly written SSTs continue to land at v6. This
+  is deliberate: mixed v6/v7 SST files in the same DB are supported by
+  RocksDB, and v7 writes from this build would close the door on
+  downgrade to 6.2.3 (or any RocksDB < 10.4.0) without fixing anything.
+
+### Notes for operators upgrading from 6.2.3
+- The daemon's runtime dependency is `librocksdb.so.10.10.1`
+  (replacing the previous `librocksdb.so.8.9.1`). Install or build
+  rocksdb from source before rolling 6.2.4 onto a node; the .deb
+  from CI bundles the right SONAME and should just work on
+  Ubuntu 22.04 / 24.04.
+- If you imported the Hetzner Dropbox bootstrap snapshot's chain DB
+  into this node, that DB still contains v7 SSTs. Any daemon down to
+  RocksDB 10.4.0 will read it; RocksDB ≤ 10.3.x will reject the v7
+  SSTs with `Corrupt or unsupported format_version: 7`. After the
+  daemon compacts the imported chain DB, the v7 SSTs may be re-written
+  at v6 and the DB becomes readable by older rocksdb again — that
+  happens naturally as part of normal compaction, no extra action
+  required.
+- Package checksums in `packaging/flatpak`, `packaging/scoop`, and
+  `packaging/winget` are regenerated during the CI release workflow
+  after artifacts are produced; do not ship those package manifests
+  until their SHA-256 sums match the v6.2.4 release artifacts.
+
 ## [6.2.3] - 2026-08-01
 
 ### Changed
