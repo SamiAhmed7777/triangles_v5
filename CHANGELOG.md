@@ -17,6 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RocksDB, and v7 writes from this build would close the door on
   downgrade to 6.2.3 (or any RocksDB < 10.4.0) without fixing anything.
 
+### Fixed
+- **`scripts/ci/build-rocksdb.sh`** now strips `-std=c++XX` (regex covers
+  `-std=c++17` / `-std=c++20` / `-std=c++2b` / future values) from
+  `rocksdb.pc` Cflags instead of only the `-std=c++17` value. RocksDB
+  10.x writes `-std=c++20`, which `pkg-config` injects into every
+  Triangles translation unit. C++ translation units ignore the
+  redundant flag, but C units (e.g. `src/lz4/lz4.c`) hit a fatal
+  `error: invalid argument '-std=c++XX' not allowed with 'C'` from
+  clang. Previously, the daemon build tolerated this as a warning;
+  the fuzz build (`clang-15` + sanitizers) treated it as a hard
+  error and the `test-fuzz-smoke` / `test-fuzz-smoke-tx` jobs failed
+  in the 6.2.4 CI run #30744702062 at the `Build fuzz_script` /
+  `Build transaction_deserialize_fuzz` step.
+
 ### Notes for operators upgrading from 6.2.3
 - The daemon's runtime dependency is `librocksdb.so.10.10.1`
   (replacing the previous `librocksdb.so.8.9.1`). Install or build

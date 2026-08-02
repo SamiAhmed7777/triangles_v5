@@ -76,12 +76,28 @@ make install-shared PREFIX="${INSTALL_PREFIX}"
 # consumers see a path that actually exists on disk.
 PC_FILE="${INSTALL_PREFIX}/lib/pkgconfig/rocksdb.pc"
 if [ -f "${PC_FILE}" ]; then
+    # Strip the -std=c++XX flag RocksDB writes into Cflags. The flag is
+    # for the rocksdb .cc files themselves, but pkg-config injects it
+    # into every Triangles translation unit — including C files like
+    # src/lz4/lz4.c, which clang refuses to compile with
+    # "invalid argument '-std=c++XX' not allowed with 'C'".
+    # RocksDB 8.x wrote -std=c++17; 10.x bumped to -std=c++20; 11.x is
+    # expected to use -std=c++2b. The regex below strips the whole
+    # family so this fix survives future bumps.
     sed -i \
         -e "s|-isystem third-party/gtest-1.8.1/fused-src|-I${INSTALL_PREFIX}/include|g" \
         -e "s|-isystem \\\${prefix}/third-party/gtest-1.8.1/fused-src|-I${INSTALL_PREFIX}/include|g" \
-        -e 's|-std=c++17 ||g' \
-        -e 's|-std=c++17$||g' \
+        -e 's|-std=c++[0-9a-z]\+ ||g' \
+        -e 's|-std=c++[0-9a-z]\+$||g' \
         "${PC_FILE}"
+    # Sanity: any remaining -std=c++ token means a future RocksDB release
+    # wrote a new variant our regex didn't cover. Fail loudly so the CI
+    # fuzz job doesn't surprise us downstream — fix the regex here.
+    if grep -q -- '-std=c++' "${PC_FILE}"; then
+        echo "!!! rocksdb.pc still contains -std=c++ after stripping:" >&2
+        grep -- '-std=c++' "${PC_FILE}" >&2 || true
+        exit 1
+    fi
 fi
 
 ldconfig
