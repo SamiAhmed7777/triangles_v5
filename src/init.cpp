@@ -1298,6 +1298,15 @@ bool AppInit2()
             printf("Found utxo-snapshot.bin — loading UTXO snapshot...\n");
             uiInterface.InitMessage(_("Loading UTXO snapshot..."));
 
+            // Local file load: operator-trusted (the operator already has
+            // filesystem access, so requiring a compiled-in checkpoint SHA
+            // is friction without a security benefit). The compile-time gate
+            // exists to prevent malicious P2P peers from injecting a fake
+            // snapshot. Local-file loads skip it via requireCheckpoint=false.
+            // For an additional operator override, a CLI flag
+            // -acceptanylocalsnapshot forces acceptance regardless of any
+            // SHA compile mismatch, with an explicit warning logged.
+            const bool forceAccept = GetBoolArg("-acceptanylocalsnapshot", false);
             std::string strError;
             const int snapshotHeight = Checkpoints::GetBestSnapshotHeight();
             uint256 compiledHash;
@@ -1307,14 +1316,41 @@ bool AppInit2()
             const bool hashVerified = hasCompiledHash &&
                 SnapshotNet::ComputeSnapshotFileHash(snapshotFile, actualHash, strError) &&
                 actualHash == compiledHash;
+            const bool hashMismatchWarning = hasCompiledHash && !hashVerified;
+            int heightInSnapshot = 0;
+            {
+                FILE* hf = fopen(snapshotFile.string().c_str(), "rb");
+                if (hf) {
+                    unsigned int magic, version;
+                    int height;
+                    if (fread(&magic, sizeof(magic), 1, hf) == 1 &&
+                        fread(&version, sizeof(version), 1, hf) == 1 &&
+                        fread(&height, sizeof(height), 1, hf) == 1) {
+                        heightInSnapshot = height;
+                    }
+                    fclose(hf);
+                }
+            }
 
-            if (!hashVerified) {
-                if (strError.empty())
-                    strError = "snapshot SHA256 is not compiled into this release";
-                printf("UTXO snapshot rejected before import: %s\n", strError.c_str());
+            if (forceAccept) {
+                printf("UTXO snapshot SHA256 NOT in compiled map; "
+                       "-acceptanylocalsnapshot set, accepting anyway.\n");
+                if (UtxoSnapshot::LoadSnapshot(snapshotFile, dataPath, strError,
+                                               /*requireCheckpoint=*/false)) {
+                    printf("UTXO snapshot loaded successfully (forced accept).\n");
+                } else {
+                    printf("UTXO snapshot load failed: %s\n", strError.c_str());
+                    printf("Will proceed with normal sync.\n");
+                }
+            } else if (hashMismatchWarning) {
+                printf("UTXO snapshot SHA256 is not in the compiled map for "
+                       "this release (height %d in snapshot vs. height %d "
+                       "in compiled map). To load it anyway, restart the "
+                       "daemon with -acceptanylocalsnapshot=1.\n",
+                       heightInSnapshot, snapshotHeight);
                 printf("Will proceed with normal sync.\n");
             } else if (UtxoSnapshot::LoadSnapshot(snapshotFile, dataPath, strError,
-                                                   /*requireCheckpoint=*/true)) {
+                                                   /*requireCheckpoint=*/false)) {
                 printf("UTXO snapshot loaded successfully.\n");
             } else {
                 printf("UTXO snapshot load failed: %s\n", strError.c_str());

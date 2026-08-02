@@ -5,7 +5,25 @@ All notable changes to Triangles (TRI) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.2.3] - 2026-08-01
+
+### Changed
+- **Local snapshot loading no longer requires a compiled-in SHA match.**
+  Previously, loading `utxo-snapshot.bin` from the data dir rejected the
+  file unless its SHA256 was present in `Checkpoints::mapSnapshotHashes`
+  (which only knows about one or two canonical tips at compile time).
+  Local file loads are operator-trusted — the operator already has
+  filesystem access — so the SHA gate was friction without a security
+  benefit. The gate still exists for P2P-delivered snapshots via
+  `SnapshotNet` (requireCheckpoint=true there).
+
+### Added
+- `-acceptanylocalsnapshot` CLI flag: forces acceptance of a local
+  `utxo-snapshot.bin` whose SHA is not in the compiled map, with an
+  explicit warning log line. Use only with operator-signed snapshots.
+
 ## [6.2.2] - 2026-08-01
+
 
 ### Fixed
 - **Snapshot regeneration: full chain index, not just the last 2000.**
