@@ -6,7 +6,7 @@ if(POLICY CMP0167)
 endif()
 
 project(Triangles
-    VERSION 6.1.7
+    VERSION 6.2.5
     DESCRIPTION "Cryptographic Triangles Wallet"
     LANGUAGES C CXX
 )

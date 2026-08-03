@@ -5,6 +5,27 @@ All notable changes to Triangles (TRI) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.2.5] - 2026-08-03
+
+### Fixed
+- **Stake-age soft cap reverted** in `src/kernel.cpp::GetWeight`. The V5-fork
+  7-day soft cap (activated 2026-04-12) was the regression that capped
+  long-dormant coins at 7 days of weight, killing the diamond-hands
+  incentive. Restored to original Peercoin `min(nAge, nStakeMaxAge)`.
+  Chain was frozen at block 2,224,763 since 2026-07-18 with no blocks
+  ever produced under the soft cap, so reverting changes zero historical
+  block validation results.
+- **`ReadUtxo` lazy fallback** in `src/txdb-base.cpp`. The fallback to
+  `txindex.vSpent[]` exists in `HaveUtxo` but was missing in `ReadUtxo`,
+  so nodes with incomplete UTXO snapshots could not find pre-snapshot
+  unspent outputs (chain stalled at 2,224,763 since 2026-07-18).
+  Added: when UTXO DB misses an entry but `txindex.vSpent[n].IsNull()`,
+  read the transaction from disk and reconstruct the full CUtxoEntry
+  including exact block height via `mapBlockIndex` lookup.
+- **`DisconnectBlock` height reconstruction** in `src/main.cpp`. Reorg
+  path now recovers exact block height via `mapBlockIndex` instead of
+  leaving `nHeight = 0` on restored UTXOs.
+
 ## [6.2.4] - 2026-08-02
 
 ### Changed
