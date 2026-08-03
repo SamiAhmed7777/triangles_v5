@@ -224,11 +224,10 @@ static const int64_t STAKE_AGE_SOFT_CAP_TEST_SECS = STAKE_AGE_SOFT_CAP_DAYS * 24
 static const int64_t STAKE_AGE_SOFT_CAP_ACTIVATION_TEST = 1776000000;
 static const int64_t STAKE_AGE_MAX_TEST = 10 * 24 * 60 * 60;  // 10 days -- past the 7-day cap
 
-BOOST_AUTO_TEST_CASE(weight_v5_post_activation_capped_at_7_days)
+BOOST_AUTO_TEST_CASE(weight_v5_post_activation_capped_at_nStakeMaxAge)
 {
-    // V5 + post-activation: a 10-day-old stake should be capped at 7 days.
-    // This is the production code path for every stake on the live chain
-    // since 2026-04-20 -- the highest-value missing test.
+    // Post-revert: a 10-day-old stake is well above nStakeMaxAge (12h),
+    // so GetWeight returns nStakeMaxAge.
     CBlockIndex mockBest;
     mockBest.nHeight = FORK_HEIGHT_V5;  // 17651, just at the fork
     BestChainGuard guard(&mockBest);
@@ -237,13 +236,13 @@ BOOST_AUTO_TEST_CASE(weight_v5_post_activation_capped_at_7_days)
     int64_t tenDaysOld = now - nStakeMinAge - STAKE_AGE_MAX_TEST;
 
     int64_t weight = GetWeight(tenDaysOld, now);
-    BOOST_CHECK_EQUAL(weight, STAKE_AGE_SOFT_CAP_TEST_SECS);
+    BOOST_CHECK_EQUAL(weight, (int64_t)nStakeMaxAge);
 }
 
-BOOST_AUTO_TEST_CASE(weight_v5_post_activation_below_cap_is_linear)
+BOOST_AUTO_TEST_CASE(weight_v5_post_activation_above_cap_is_capped)
 {
-    // V5 + post-activation: a stake younger than the 7-day cap should
-    // return the raw nAge (capping only applies past the limit).
+    // Post-revert: a 3-day-old stake is above nStakeMaxAge (12h),
+    // so GetWeight returns nStakeMaxAge.
     CBlockIndex mockBest;
     mockBest.nHeight = FORK_HEIGHT_V5;
     BestChainGuard guard(&mockBest);
@@ -252,12 +251,13 @@ BOOST_AUTO_TEST_CASE(weight_v5_post_activation_below_cap_is_linear)
     int64_t threeDaysOld = now - nStakeMinAge - (3 * 24 * 60 * 60);
 
     int64_t weight = GetWeight(threeDaysOld, now);
-    BOOST_CHECK_EQUAL(weight, 3 * 24 * 60 * 60);
+    BOOST_CHECK_EQUAL(weight, (int64_t)nStakeMaxAge);
 }
 
-BOOST_AUTO_TEST_CASE(weight_v5_post_activation_exactly_7_days)
+BOOST_AUTO_TEST_CASE(weight_v5_post_activation_at_soft_cap_secs)
 {
-    // V5 + post-activation: exactly at the cap should return cap value.
+    // Post-revert: STAKE_AGE_SOFT_CAP_TEST_SECS (7 days) is well above
+    // nStakeMaxAge (12h), so GetWeight returns nStakeMaxAge.
     CBlockIndex mockBest;
     mockBest.nHeight = FORK_HEIGHT_V5;
     BestChainGuard guard(&mockBest);
@@ -266,13 +266,13 @@ BOOST_AUTO_TEST_CASE(weight_v5_post_activation_exactly_7_days)
     int64_t exactlySevenDays = now - nStakeMinAge - STAKE_AGE_SOFT_CAP_TEST_SECS;
 
     int64_t weight = GetWeight(exactlySevenDays, now);
-    BOOST_CHECK_EQUAL(weight, STAKE_AGE_SOFT_CAP_TEST_SECS);
+    BOOST_CHECK_EQUAL(weight, (int64_t)nStakeMaxAge);
 }
 
-BOOST_AUTO_TEST_CASE(weight_v5_post_activation_one_second_past_cap)
+BOOST_AUTO_TEST_CASE(weight_v5_post_activation_one_second_past_soft_cap)
 {
-    // V5 + post-activation: 1 second past the cap should still be capped
-    // (min() boundary semantics).
+    // Post-revert: 1 second past the old soft cap is still above
+    // nStakeMaxAge, so GetWeight returns nStakeMaxAge.
     CBlockIndex mockBest;
     mockBest.nHeight = FORK_HEIGHT_V5;
     BestChainGuard guard(&mockBest);
@@ -281,17 +281,14 @@ BOOST_AUTO_TEST_CASE(weight_v5_post_activation_one_second_past_cap)
     int64_t justPastCap = now - nStakeMinAge - STAKE_AGE_SOFT_CAP_TEST_SECS - 1;
 
     int64_t weight = GetWeight(justPastCap, now);
-    BOOST_CHECK_EQUAL(weight, STAKE_AGE_SOFT_CAP_TEST_SECS);
+    BOOST_CHECK_EQUAL(weight, (int64_t)nStakeMaxAge);
 }
 
-BOOST_AUTO_TEST_CASE(weight_v5_pre_activation_is_uncapped)
+BOOST_AUTO_TEST_CASE(weight_v5_pre_activation_is_capped_at_nStakeMaxAge)
 {
-    // V5 active (height >= 17651) but stake timestamp is BEFORE the
-    // activation gate. This is the "historical stakes validate under the
-    // rules they were created with" path. A 30-day-old stake with
-    // nIntervalEnd pre-activation should NOT be capped at 7 days or at
-    // nStakeMaxAge -- it returns the raw nAge. This is intentional:
-    // changing the cap retroactively would hard-fork historical blocks.
+    // After the soft-cap revert, GetWeight() always returns
+    // min(nAge, nStakeMaxAge) regardless of activation timestamp.
+    // A 30-day-old stake is well above nStakeMaxAge (12h), so it caps.
     CBlockIndex mockBest;
     mockBest.nHeight = FORK_HEIGHT_V5;
     BestChainGuard guard(&mockBest);
@@ -300,15 +297,13 @@ BOOST_AUTO_TEST_CASE(weight_v5_pre_activation_is_uncapped)
     int64_t thirtyDaysOld = now - nStakeMinAge - (30 * 24 * 60 * 60);
 
     int64_t weight = GetWeight(thirtyDaysOld, now);
-    BOOST_CHECK_EQUAL(weight, 30 * 24 * 60 * 60);  // raw nAge, no cap
+    BOOST_CHECK_EQUAL(weight, (int64_t)nStakeMaxAge);  // capped at nStakeMaxAge (12h)
 }
 
-BOOST_AUTO_TEST_CASE(weight_v5_exactly_at_activation_is_capped)
+BOOST_AUTO_TEST_CASE(weight_v5_at_activation_timestamp)
 {
-    // V5 + nIntervalEnd exactly equal to the activation timestamp.
-    // Boundary semantics: `>=` means AT the timestamp counts as activated,
-    // so the 7-day cap applies. (Confirmed against the source: line 47
-    // is `if (nIntervalEnd >= STAKE_AGE_SOFT_CAP_ACTIVATION) return min(...)`)
+    // Post-revert: at the activation timestamp, GetWeight still returns
+    // min(nAge, nStakeMaxAge). The activation gate is no longer consulted.)
     CBlockIndex mockBest;
     mockBest.nHeight = FORK_HEIGHT_V5;
     BestChainGuard guard(&mockBest);
@@ -317,14 +312,13 @@ BOOST_AUTO_TEST_CASE(weight_v5_exactly_at_activation_is_capped)
     int64_t tenDaysOld = now - nStakeMinAge - STAKE_AGE_MAX_TEST;
 
     int64_t weight = GetWeight(tenDaysOld, now);
-    BOOST_CHECK_EQUAL(weight, STAKE_AGE_SOFT_CAP_TEST_SECS);  // capped at 7 days
+    BOOST_CHECK_EQUAL(weight, (int64_t)nStakeMaxAge);  // capped at nStakeMaxAge (12h) under Peercoin rule
 }
 
-BOOST_AUTO_TEST_CASE(weight_v5_high_height_same_as_fork_height)
+BOOST_AUTO_TEST_CASE(weight_v5_high_height_capped)
 {
-    // V5 + post-activation at a height FAR past the fork (e.g. the live
-    // DNS2 chain at height ~2.2M). Cap should still apply identically --
-    // the soft cap doesn't weaken or strengthen with distance from fork.
+    // Post-revert: at a height far past the fork, GetWeight still returns
+    // min(nAge, nStakeMaxAge). No height-dependent behavior.
     CBlockIndex mockBest;
     mockBest.nHeight = 2500000;  // well past FORK_HEIGHT_V5 and FORK_HEIGHT_V5_4
     BestChainGuard guard(&mockBest);
@@ -333,7 +327,7 @@ BOOST_AUTO_TEST_CASE(weight_v5_high_height_same_as_fork_height)
     int64_t hundredDaysOld = now - nStakeMinAge - (100 * 24 * 60 * 60);
 
     int64_t weight = GetWeight(hundredDaysOld, now);
-    BOOST_CHECK_EQUAL(weight, STAKE_AGE_SOFT_CAP_TEST_SECS);  // still 7 days, not 100
+    BOOST_CHECK_EQUAL(weight, (int64_t)nStakeMaxAge);  // capped at nStakeMaxAge (12h) under Peercoin rule
 }
 
 BOOST_AUTO_TEST_CASE(weight_v5_min_age_floor_still_applies)
@@ -350,6 +344,22 @@ BOOST_AUTO_TEST_CASE(weight_v5_min_age_floor_still_applies)
 
     int64_t weight = GetWeight(tooYoung, now);
     BOOST_CHECK_EQUAL(weight, 0);
+}
+
+BOOST_AUTO_TEST_CASE(weight_below_nStakeMaxAge_is_linear)
+{
+    // A stake younger than nStakeMaxAge (12h) should return the raw nAge.
+    // This is the linear region of the min(nAge, nStakeMaxAge) function.
+    // 1 hour old stake: nAge = 3600, well below 43200.
+    CBlockIndex mockBest;
+    mockBest.nHeight = FORK_HEIGHT_V5;
+    BestChainGuard guard(&mockBest);
+
+    int64_t now = STAKE_AGE_SOFT_CAP_ACTIVATION_TEST + (30 * 24 * 60 * 60);
+    int64_t oneHourOld = now - nStakeMinAge - (60 * 60);
+
+    int64_t weight = GetWeight(oneHourOld, now);
+    BOOST_CHECK_EQUAL(weight, (int64_t)(60 * 60));  // raw nAge, below cap
 }
 
 // --- IsStakingSafe: continuous staking safety gate (fix/consensus-convergence) ---
