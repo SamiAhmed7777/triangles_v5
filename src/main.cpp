@@ -2174,11 +2174,24 @@ bool CBlock::DisconnectBlock(CTxDBBase& txdb, CBlockIndex* pindex)
                         const CTxOut& prevout = txPrev.vout[txin.prevout.n];
                         CUtxoEntry utxo;
                         utxo.nValue = prevout.nValue;
-                        utxo.nHeight = 0; // approximation; exact height not critical for restored UTXOs
                         utxo.scriptPubKey = prevout.scriptPubKey;
                         utxo.fCoinBase = txPrev.IsCoinBase();
                         utxo.fCoinStake = txPrev.IsCoinStake();
                         utxo.nTxTime = txPrev.nTime;
+
+                        // Reconstruct exact height via block index lookup.
+                        // Falls back to 0 if mapBlockIndex doesn't have the
+                        // tx's block yet (safe — ConnectInputs maturity
+                        // check then requires COINBASE_MATURITY confirmations).
+                        utxo.nHeight = 0;
+                        CBlock blockHeader;
+                        if (blockHeader.ReadFromDisk(txindex.pos.nFile, txindex.pos.nBlockPos, false))
+                        {
+                            auto bmi = mapBlockIndex.find(blockHeader.GetHash());
+                            if (bmi != mapBlockIndex.end())
+                                utxo.nHeight = bmi->second->nHeight;
+                        }
+
                         txdb.WriteUtxo(txin.prevout.hash, txin.prevout.n, utxo);
                     }
                 }
