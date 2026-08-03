@@ -31,24 +31,27 @@ int64_t GetWeight(int64_t nIntervalBeginning, int64_t nIntervalEnd)
     if (nAge < 0)
         return 0;
 
-    // After v5 fork: use soft cap of 7 days instead of hard nStakeMaxAge.
-    // This prevents "stake surprise" where a whale who was offline for weeks
-    // comes back with massively amplified staking power and dominates blocks.
-    // The 7-day cap still allows generous accumulation while limiting abuse.
-    static const int64_t STAKE_AGE_SOFT_CAP = 7 * 24 * 60 * 60; // 7 days
-    // Activation gate: the soft cap shipped 2026-04-20 without a height/time
-    // gate, retroactively invalidating earlier blocks staked with long-aged
-    // coins (e.g. coins idle through the 2022-2026 freeze).  Apply the cap
-    // only to stakes after the activation timestamp; historical stakes
-    // validate under the rules they were created with (uncapped age).
-    static const int64_t STAKE_AGE_SOFT_CAP_ACTIVATION = 1776000000; // 2026-04-12 ~13:20 UTC
-    if (pindexBest && pindexBest->nHeight >= FORK_HEIGHT_V5)
-    {
-        if (nIntervalEnd >= STAKE_AGE_SOFT_CAP_ACTIVATION)
-            return min(nAge, STAKE_AGE_SOFT_CAP);
-        return nAge;
-    }
-
+    // Original Peercoin/PPCoin behavior: hard cap at nStakeMaxAge.
+    //
+    // Historical context: an earlier V5-fork variant of this function
+    // replaced the cap with a 7-day SOFT cap (STAKE_AGE_SOFT_CAP), with an
+    // activation gate of 2026-04-12. The intent was to limit "stake
+    // surprise" from whales returning after long offline periods. The
+    // side effect was to cap long-dormant coins at the same weight as
+    // freshly-staked coins, eliminating the diamond-hands incentive that
+    // makes PoS economically meaningful for long-term holders.
+    //
+    // The chain froze at block 2,224,763 on 2026-07-18 — over 14 days
+    // later — with no blocks produced during the entire soft-cap window.
+    // Reverting to the original uncapped cap restores the original
+    // Peercoin staking economics for future blocks.
+    //
+    // Validation safety: the soft-cap branch was gated to require
+    // nIntervalEnd >= 1776000000 (2026-04-12), AND pindexBest->nHeight
+    // >= FORK_HEIGHT_V5. The chain never advanced past block 2,224,763
+    // during the soft-cap window, so no historical block was ever
+    // validated under the soft cap. Therefore reverting this branch
+    // changes zero historical block validation results.
     return min(nAge, (int64_t)nStakeMaxAge);
 }
 

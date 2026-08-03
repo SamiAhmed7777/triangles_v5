@@ -310,31 +310,40 @@ BOOST_AUTO_TEST_CASE(coin_age_weight_monotonic)
     }
 }
 
-// ─── Stake age soft cap (P1 — V5 fork economic rule) ──────────────────────
-// The V5 fork (FORK_HEIGHT_V5) replaced the hard nStakeMaxAge cap with a
-// 7-day soft cap. The cap only applies to stakes AFTER the activation
-// timestamp (1776000000 = 2026-04-12 13:20 UTC). This is a soft fork
-// rule — historical blocks staked before activation are unaffected.
+// ─── Stake age cap (reverted to original Peercoin behavior) ────────────────
+// As of the post-July-18-2026 chain freeze fix, GetWeight uses the
+// original `min(nAge, nStakeMaxAge)` formula with no soft cap. This test
+// verifies that:
+//   (1) nStakeMaxAge (12h default) caps weight for any age beyond it.
+//   (2) A coin aged exactly at nStakeMaxAge returns weight == nStakeMaxAge.
+//   (3) The function returns 0 for coins below nStakeMinAge.
 //
-// We test it in a way that does NOT depend on pindexBest (which is a
-// global state) by using a fixed "now" that's well past activation and
-// a height that's pre-V5. Pre-V5 path is in src/kernel.cpp:25-53.
-BOOST_AUTO_TEST_CASE(stake_age_soft_cap_does_not_apply_pre_v5)
+// Validation safety: no historical block (≤ 2,224,763) was ever minted
+// under the previous soft-cap rule, because the chain froze before any
+// post-2026-04-12 block was produced. Reverting GetWeight therefore
+// changes zero historical block validation results.
+BOOST_AUTO_TEST_CASE(stake_age_cap_uses_nStakeMaxAge_only)
 {
-    int64_t now = 1777000000;  // well past 1776000000 activation
-    // With pindexBest == nullptr, the pre-V5 path runs (line 52 in
-    // kernel.cpp): min(nAge, nStakeMaxAge). nStakeMaxAge is 12 hours.
-    int64_t veryOld = now - nStakeMinAge - (10 * 24 * 60 * 60);  // 10 days old
-    int64_t weight = GetWeight(veryOld, now);
-    // Pre-V5 cap is nStakeMaxAge = 43200 (12 hours).
-    BOOST_CHECK_EQUAL(weight, (int64_t)nStakeMaxAge);
+    int64_t now = 1777000000;
+    // 10-day-old coin should be capped at nStakeMaxAge (12h)
+    int64_t veryOld = now - nStakeMinAge - (10 * 24 * 60 * 60);
+    BOOST_CHECK_EQUAL(GetWeight(veryOld, now), (int64_t)nStakeMaxAge);
 
-    // Right at the cap boundary:
+    // Exactly at the cap boundary
     int64_t atMaxAge = now - nStakeMinAge - nStakeMaxAge;
     BOOST_CHECK_EQUAL(GetWeight(atMaxAge, now), (int64_t)nStakeMaxAge);
-    // One second past: also capped.
+
+    // One second past the cap: also capped
     int64_t justPastMax = now - nStakeMinAge - nStakeMaxAge - 1;
     BOOST_CHECK_EQUAL(GetWeight(justPastMax, now), (int64_t)nStakeMaxAge);
+
+    // Below nStakeMinAge: weight is 0
+    int64_t tooYoung = now - nStakeMinAge + 60;
+    BOOST_CHECK_EQUAL(GetWeight(tooYoung, now), (int64_t)0);
+
+    // Coin aged between min and max: weight = age exactly (no clamp applied)
+    int64_t midAge = now - nStakeMinAge - (60 * 60); // 1 hour
+    BOOST_CHECK_EQUAL(GetWeight(midAge, now), (int64_t)(60 * 60));
 }
 
 // ─── PoS validation fast path must be height-based (P0) ───────────────────
