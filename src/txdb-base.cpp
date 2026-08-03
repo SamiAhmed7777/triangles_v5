@@ -379,66 +379,6 @@ bool CTxDBBase::ReadUtxo(const uint256& hash, unsigned int n, CUtxoEntry& entry)
     }
 
     bool fFound = Read(make_pair(string("u"), make_pair(hash, n)), entry);
-    if (fFound)
-    {
-        {
-            LOCK(g_cs_utxoCache);
-            if (g_mapUtxoCache.size() < UTXO_CACHE_MAX_ENTRIES)
-                PutUtxoCacheEntry(outpoint, entry, fFound);
-        }
-        return true;
-    }
-
-    // Lazy fallback: same as HaveUtxo — check old CTxIndex vSpent. If the
-    // snapshot/UTXO DB doesn't have this output but the txindex says it was
-    // never spent, reconstruct the CUtxoEntry by reading the transaction
-    // from disk. This is the primary sync-recovery path for snapshot-loaded
-    // nodes whose UTXO set is incomplete (the chain has been frozen at
-    // 2,224,763 since 2026-07-18 because some pre-snapshot UTXOs were
-    // missing from the snapshot and FetchInputs' ReadUtxo could not find
-    // them, so blocks spending them were rejected).
-    //
-    // Validation safety: every block that ever validated pre-freeze did so
-    // via the UTXO DB entry written by ConnectBlock at the time. This
-    // fallback only activates when the UTXO DB entry is MISSING, which
-    // cannot happen for any block that successfully connected on the live
-    // chain. So this fallback does NOT change consensus validation of any
-    // block (0 to 2,224,763) — it only provides a recovery path for nodes
-    // whose UTXO set was reconstructed incompletely.
-    CTxIndex txindex;
-    if (ReadTxIndex(hash, txindex)
-        && n < txindex.vSpent.size()
-        && txindex.vSpent[n].IsNull())
-    {
-        CTransaction txPrev;
-        if (txPrev.ReadFromDisk(txindex.pos))
-        {
-            if (n < txPrev.vout.size())
-            {
-                const CTxOut& txout = txPrev.vout[n];
-                entry.nValue = txout.nValue;
-                entry.scriptPubKey = txout.scriptPubKey;
-                entry.fCoinBase = txPrev.IsCoinBase();
-                entry.fCoinStake = txPrev.IsCoinStake();
-                entry.nTxTime = txPrev.nTime;
-
-                // Reconstruct exact block height: read the block header
-                // at the txindex's disk position, hash it, look up in
-                // mapBlockIndex for the canonical height. Same pattern
-                // as the FetchInputs backfill (src/main.cpp ~line 1873).
-                entry.nHeight = 0;
-                CBlock blockHeader;
-                if (blockHeader.ReadFromDisk(txindex.pos.nFile, txindex.pos.nBlockPos, false))
-                {
-                    auto bmi = mapBlockIndex.find(blockHeader.GetHash());
-                    if (bmi != mapBlockIndex.end())
-                        entry.nHeight = bmi->second->nHeight;
-                }
-
-                fFound = true;
-            }
-        }
-    }
 
     {
         LOCK(g_cs_utxoCache);
@@ -499,15 +439,6 @@ bool CTxDBBase::HaveUtxo(const uint256& hash, unsigned int n)
 
     if (Exists(make_pair(string("u"), make_pair(hash, n))))
         return true;
-
-    // Lazy fallback: check old CTxIndex vSpent for databases upgrading from
-    // pre-UTXO format. vSpent[n] null = output not spent = UTXO exists.
-    CTxIndex txindex;
-    if (ReadTxIndex(hash, txindex))
-    {
-        if (n < txindex.vSpent.size() && txindex.vSpent[n].IsNull())
-            return true;
-    }
 
     return false;
 }

@@ -1755,7 +1755,15 @@ bool IsInitialBlockDownload()
     // stalled chain). Without this, a node that restarts on a frozen
     // chain thinks it's fully synced (tip < 24h old from restart) and
     // never requests blocks from peers — permanently stuck.
-    if (nBestHeight > 0 && nBestHeight < GetNumBlocksOfPeers() - 5)
+    //
+    // Use the raw peer median (not GetNumBlocksOfPeers(), which clamps to
+    // the hardcoded checkpoint height). On a stalled chain where we're past
+    // the last checkpoint, GetNumBlocksOfPeers() returns the checkpoint
+    // height (2,214,400), not the actual peer height (2,224,763). Without
+    // using the raw median, a node at 2,219,922 with peers at 2,224,763
+    // would not detect it's behind.
+    int nPeerMedian = cPeerBlockCounts.median();
+    if (nPeerMedian > 0 && nBestHeight < nPeerMedian - 5)
         return true;
     return false;
 }
@@ -1859,54 +1867,7 @@ bool CTransaction::FetchInputs(CTxDBBase& txdb, const MapPrevTx& mapPendingUtxos
             continue;
         }
 
-        // Lazy fallback: try old CTxIndex path (for databases upgrading from pre-UTXO format)
-        {
-            CTxIndex txindex;
-            if (txdb.ReadTxIndex(prevout.hash, txindex))
-            {
-                CTransaction txPrev;
-                if (txPrev.ReadFromDisk(txindex.pos))
-                {
-                    if (prevout.n < txPrev.vout.size())
-                    {
-                        CUtxoEntry backfill;
-                        backfill.nValue = txPrev.vout[prevout.n].nValue;
-                        backfill.scriptPubKey = txPrev.vout[prevout.n].scriptPubKey;
-                        backfill.fCoinBase = txPrev.IsCoinBase();
-                        backfill.fCoinStake = txPrev.IsCoinStake();
-                        backfill.nTxTime = txPrev.nTime;
-                        backfill.nHeight = 0; // conservative default
-
-                        // Try to recover exact block height from block index
-                        CBlock blockHeader;
-                        if (blockHeader.ReadFromDisk(txindex.pos.nFile, txindex.pos.nBlockPos, false))
-                        {
-    if (auto bmi = mapBlockIndex.find(blockHeader.GetHash()); bmi != mapBlockIndex.end())
-                                backfill.nHeight = bmi->second->nHeight;
-                        }
-
-                        // Check if this output was already spent (vSpent in old format)
-                        if (prevout.n < txindex.vSpent.size() && !txindex.vSpent[prevout.n].IsNull())
-                        {
-                            // Already spent — don't return it as available
-                        }
-                        else
-                        {
-                            // Backfill to UTXO DB for future lookups. Skip the
-                            // write when the handle is read-only (wallet/mempool
-                            // callers open "r"); ConnectBlock will persist it
-                            // later via the writable chain handle.
-                            if (!txdb.IsReadOnly())
-                                txdb.WriteUtxo(prevout.hash, prevout.n, backfill);
-                            inputsRet[prevout] = backfill;
-                            continue;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Not in UTXO DB or old index — check mempool
+        // Not in UTXO DB — check mempool
         {
             LOCK(mempool.cs);
             if (mempool.exists(prevout.hash))
