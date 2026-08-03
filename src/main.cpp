@@ -1750,6 +1750,13 @@ bool IsInitialBlockDownload()
     // handles the specific staking-broker scenario.
     if (GetTime() - nLastUpdate > 24 * 60 * 60)
         return true;
+    // Also enter IBD if we're significantly behind peer heights, even if
+    // the tip was recently updated (e.g. after a daemon restart on a
+    // stalled chain). Without this, a node that restarts on a frozen
+    // chain thinks it's fully synced (tip < 24h old from restart) and
+    // never requests blocks from peers — permanently stuck.
+    if (nBestHeight > 0 && nBestHeight < GetNumBlocksOfPeers() - 5)
+        return true;
     return false;
 }
 
