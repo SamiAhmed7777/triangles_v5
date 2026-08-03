@@ -1501,10 +1501,18 @@ bool AppInit2()
         
         while (pindex && !fRequestShutdown)
         {
+            // Skip genesis block - it doesn't follow normal PoW rules and has no spendable outputs
+            if (pindex->nHeight == 0)
+            {
+                pindex = pindex->pnext;
+                continue;
+            }
+            
             CBlock block;
             if (!block.ReadFromDisk(pindex))
             {
                 printf("ERROR: Failed to read block %d (%s)\n", pindex->nHeight, pindex->GetBlockHash().ToString().substr(0,20).c_str());
+                printf("DEBUG: nBits=%08x, IsPoW=%d, hash=%s\n", pindex->nBits, pindex->IsProofOfWork(), pindex->GetBlockHash().ToString().c_str());
                 return InitError(_("Failed to read block during UTXO rebuild"));
             }
             

@@ -3256,8 +3256,14 @@ bool CBlock::CheckBlock(bool fCheckPOW, bool fCheckMerkleRoot, bool fCheckSig) c
     if (vtx.empty() || vtx.size() > MAX_BLOCK_SIZE || ::GetSerializeSize(*this, SER_NETWORK, PROTOCOL_VERSION) > MAX_BLOCK_SIZE)
         return DoS(100, error("CheckBlock() : size limits failed"));
 
-    // Check proof of work matches claimed amount
-    if (fCheckPOW && IsProofOfWork() && !CheckProofOfWork(GetHash(), nBits))
+    // Check proof of work matches claimed amount.
+    // Genesis block is a hardcoded trust anchor — exempt from PoW check
+    // (same exemption as CBlock::ReadFromDisk). All other PoW blocks
+    // must pass CheckProofOfWork.
+    if (fCheckPOW && IsProofOfWork() &&
+        GetHash() != hashGenesisBlockOfficial &&
+        GetHash() != hashGenesisBlockTestNet &&
+        !CheckProofOfWork(GetHash(), nBits))
         return DoS(50, error("CheckBlock() : proof of work failed"));
 
     // Check timestamp: reject blocks obviously too far in the future.
