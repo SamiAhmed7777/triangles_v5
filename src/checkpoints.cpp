@@ -52,6 +52,10 @@ namespace Checkpoints
                 { 2213000, uint256("0x7bc9652d423676c52ba8b0a287e0b46e1eca6e8eecc51d3f30e0d665d3b236f5")},
                 { 2214000, uint256("0x17e61ceb45db36358aaabe91b094a77ecba32370a467185fa9af75eef6c8e414")},
                 { 2214400, uint256("0x8ebb818f7280850c5a3916b7c8a2bca603f7c4f9926d3cdc2262f726035d96ed")},
+                // Post-rebuild finality pin (v6.2.5.0). Closes the gap between
+                // the last hardcoded checkpoint and the live tip after -rebuildutxo.
+                // Hash from the canonical chain on DNS2 after fresh UTXO rebuild.
+                { 2219922, uint256("0x9ed3e1d38317950927f37f2867e3fc29e239fc1f4c57b182f55c6e04b73b52ec")},
             };
 
     // Published UTXO snapshot file SHA256, keyed by snapshot height.
@@ -64,6 +68,7 @@ namespace Checkpoints
     // mapCheckpoints / mapCheckpointsTestnet.
     static std::map<int, uint256> mapSnapshotHashes = {
         { 2206004, uint256("0x1419282dae817315ee1b955543f6248233fe5800f5e8488734a0ece5bd6781ea")},
+        { 2219922, uint256("0x6dd8d782a04bb8dc4ccd5e88a4bc7726fe26bdebaed96b79242de1e2949b6ee6")},
     };
 
     static std::map<int, uint256> mapSnapshotHashesTestnet = {

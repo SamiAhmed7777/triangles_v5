@@ -291,7 +291,22 @@ bool IntroDialog::pickDataDirectory()
                 QApplication::processEvents();
             };
 
-            bool success = Bootstrap::DownloadBootstrap(host, dataDirPath, progressFn, strError);
+            // Try the fast UTXO snapshot path first (matches daemon behavior in init.cpp).
+            // The legacy DownloadBootstrap() is hard-disabled in bootstrap.cpp — it always
+            // returns false with "Legacy file-list bootstrap is disabled". Calling it here
+            // would make the GUI wallet unable to bootstrap a fresh install.
+            std::string utxoError;
+            bool success = Bootstrap::DownloadUtxoSnapshot(host, dataDirPath, progressFn, utxoError);
+            if (!success) {
+                // Fall back to legacy bootstrap path (will fail with "disabled" error, but
+                // surfaces the real error if the snapshot path had a different failure).
+                std::string legacyError;
+                if (Bootstrap::DownloadBootstrap(host, dataDirPath, progressFn, legacyError)) {
+                    success = true;
+                } else {
+                    strError = "UTXO snapshot: " + utxoError + " | Legacy: " + legacyError;
+                }
+            }
             if (!success) {
                 QMessageBox::warning(0, "Triangles",
                     QString("Could not download blockchain snapshot:\n%1\n\n"
