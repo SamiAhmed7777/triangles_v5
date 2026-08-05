@@ -56,6 +56,28 @@ namespace Checkpoints
                 // the last hardcoded checkpoint and the live tip after -rebuildutxo.
                 // Hash from the canonical chain on DNS2 after fresh UTXO rebuild.
                 { 2219922, uint256("0x9ed3e1d38317950927f37f2867e3fc29e239fc1f4c57b182f55c6e04b73b52ec")},
+                // Live-tip finality pins (v6.2.6.0). Verified against DNS3 chain state
+                // on 2026-08-04. Closes the 4,841-block unchecked span between the
+                // last hardcoded pin (2,219,922) and the live tip (2,224,763).
+                // All hashes verified against the canonical chain on DNS3 (running
+                // v6.2.3.0-geb02f34) at block 2,224,763. Verification transcript
+                // (DNS3 getblockhash output) is archived in the v6.2.6.0 release
+                // notes on bootstrap.cryptographic-triangles.org.
+//
+// Note: the gap from 2,219,922 to 2,222,900 is 2,978 blocks (larger than the
+                // 1,000-block standard spacing), because block 2,220,000 etc. were
+                // not indexed in DNS3's local block index when this release was
+                // prepared. The 2,222,900+ pins restore the 1,000-block spacing
+                // guarantee from that point to the live tip.
+                { 2222900, uint256("0xe104c29d6a6ff983d9a02a9854a86c221a1f400f0116cb255cee2b8d5c7ced9f")},
+                { 2223000, uint256("0x41926ba6dc9147e361ffd1ffc1a0357d7d7b66550ed05864d1ae103c6332371a")},
+                { 2223500, uint256("0x998e65941f200359ca0c1f53ea128c27f83111e8bbb1db38b7ed2ed7a48b8e32")},
+                { 2223700, uint256("0x97d3a70d258c34429c15b430e654fa1270e4de635ecec3c72ace92a0d04679c3")},
+                { 2224000, uint256("0x4dddc0b555266a1207fef70af17db9a7b14ab5e1d7cf27882ea35cc77923841f")},
+                { 2224500, uint256("0xe0fea543829dd0e8c02b7c657468cff775c7993658c16c1feaf1418b4080ba27")},
+                { 2224700, uint256("0x2a8ea5ef954adb707286bc468fdf43d8d99d23a1d15cf4f17a35d58dd51b0944")},
+                { 2224750, uint256("0x0f117fe05befb6d8a93c6e45bc3b3d48889208e2785ba6a3d723c8ad7c9d649f")},
+                { 2224763, uint256("0x9d3575ac5428e64911e698ba0a8f773954b17b214a044d4b244fa2ec83c06674")}, // live tip
             };
 
     // Published UTXO snapshot file SHA256, keyed by snapshot height.
@@ -69,6 +91,10 @@ namespace Checkpoints
     static std::map<int, uint256> mapSnapshotHashes = {
         { 2206004, uint256("0x1419282dae817315ee1b955543f6248233fe5800f5e8488734a0ece5bd6781ea")},
         { 2219922, uint256("0x6dd8d782a04bb8dc4ccd5e88a4bc7726fe26bdebaed96b79242de1e2949b6ee6")},
+        // Live-tip snapshot (v6.2.6.0). Generated from DNS3 (Samihost) at the
+        // canonical tip 2,224,763, blockhash 9d3575ac...06674. Verified against
+        // the canonical chain on 2026-08-04.
+        { 2224763, uint256("0xa7ea62ad4e158faf07973e5cd1539c1895154c4e28685a3eb7af458a001037b7")},
     };
 
     static std::map<int, uint256> mapSnapshotHashesTestnet = {
