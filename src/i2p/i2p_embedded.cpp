@@ -471,6 +471,13 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
         conf << "address = 127.0.0.1\n";
         conf << "port = " << samPort << "\n";
         conf << "\n";
+        // Disable HTTP proxy (port 4444). Cycle-13 fix: the HTTPProxy runs by
+        // default in i2pd 2.60.0 and any HTTP request to its port causes a
+        // nullptr deref in i2p::i18n::Locale::GetString. Conf is dead code in
+        // the embedded library path; SetOption in InitI2P is the real override.
+        conf << "[httpproxy]\n";
+        conf << "enabled = false\n";
+        conf << "\n";
         // Disable HTTP webconsole (not needed for embedded use)
         conf << "[http]\n";
         conf << "enabled = false\n";
@@ -609,7 +616,14 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
             bool samEnabled = true;
             std::string samAddr = "127.0.0.1";
             uint16_t samPortVal = (uint16_t)samPort;
-            bool httpEnabled = false;
+            // Cycle-13 fix: HTTPProxy runs by default in i2pd 2.60.0 on
+            // port 4444 and any inbound HTTP request crashes the daemon via
+            // nullptr deref in i2p::i18n::Locale::GetString (m_Language is
+            // never initialized). The previous SetOption("http.enabled",...)
+            // targeted the i2pd WEBCONSOLE, not the HTTPProxy. Correct key
+            // is "httpproxy.enabled".
+            bool httpproxyEnabled = false;
+            bool httpWebconsoleEnabled = false;
             bool i2pcontrolEnabled = false;
             bool bobEnabled = false;
 
@@ -620,7 +634,9 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
             i2p::config::SetOption("sam.enabled", samEnabled);
             i2p::config::SetOption("sam.address", samAddr);
             i2p::config::SetOption("sam.port", samPortVal);
-            i2p::config::SetOption("http.enabled", httpEnabled);
+            // Cycle-13 fix: was "http.enabled" which targeted webconsole.
+            i2p::config::SetOption("httpproxy.enabled", httpproxyEnabled);
+            i2p::config::SetOption("http.enabled", httpWebconsoleEnabled);
             i2p::config::SetOption("i2pcontrol.enabled", i2pcontrolEnabled);
             i2p::config::SetOption("bob.enabled", bobEnabled);
         }
