@@ -5098,14 +5098,26 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
                     // Falling back to genesis when no overlap exists
                     // ensures the peer gets a recoverable header chain.
                     CBlockIndex* pCommon = locator.FindCommonAncestorInMainChain();
-                    if (pCommon && pCommon != pindexLastHardenedCheckpoint)
+                    if (pCommon)
                     {
+                        // Found a block in our main chain that the peer also has.
+                        // Serve headers starting from it. This handles BOTH cases:
+                        //   (a) peer is on our canonical chain past us (pCommon == our tip
+                        //       OR pCommon == pindexLastHardenedCheckpoint if peer tip is
+                        //       past our last checkpoint) — serve from pCommon so they get
+                        //       the headers they need without re-walking from genesis.
+                        //   (b) peer is on a divergent fork but shares our checkpoint
+                        //       hash in their locator — still serve from the checkpoint
+                        //       because they will validate against our chain. If the peer
+                        //       has actually reorged, they will disconnect from us anyway.
                         printf("getheaders: serving canonical headers from last common ancestor %d (peer may be on a fork)\n",
                             pCommon->nHeight);
                         pindex = pCommon;
                     }
                     else
                     {
+                        // No overlap at all — peer is on a completely different chain.
+                        // Serve from genesis so they can re-walk and discover our canonical.
                         printf("getheaders: peer locator has no common blocks — serving headers from genesis (peer on a long fork)\n");
                         pindex = pindexGenesisBlock;
                     }
