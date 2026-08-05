@@ -178,95 +178,19 @@ void ExitTimeout(void* parg)
 #endif
 }
 
-// Wait up to maxWaitSec for at least minPeers peers to have reported their
-// chain height via the version handshake. Returns the median peer height, or
-// -1 if we couldn't get enough peers (timeout, no peers, all nStartingHeight=-1).
-int WaitForPeerHeights(int minPeers, int maxWaitSec)
+// Automatic recovery is intentionally non-destructive. Older builds deleted the
+// chain DB and blk0001.dat when a node lagged its peers, which could turn a
+// transient peer-height report into permanent local data loss. A privacy coin
+// must never rewrite historical chain data automatically; recovery remains an
+// explicit operator action after wallet and chain-state backups.
+// Legacy hook retained only to surface that -autorerebuild no longer mutates
+// chain state.
+static void LogAutoRebuildDisabled(int thresholdBlocks)
 {
-    const int pollIntervalMs = 500;
-    const int64_t deadline = GetTimeMillis() + (int64_t)maxWaitSec * 1000;
-
-    while (GetTimeMillis() < deadline && !fRequestShutdown) {
-        std::vector<int> heights;
-        {
-            LOCK(cs_vNodes);
-            for (CNode* pnode : vNodes) {
-                if (pnode && pnode->nStartingHeight > 0)
-                    heights.push_back(pnode->nStartingHeight);
-            }
-        }
-        if ((int)heights.size() >= minPeers) {
-            std::sort(heights.begin(), heights.end());
-            int median = heights[heights.size() / 2];
-            printf("AutoRebuild: got %zu peer heights; median=%d\n", heights.size(), median);
-            return median;
-        }
-        MilliSleep(pollIntervalMs);
+    if (thresholdBlocks > 0) {
+        printf("AutoRebuild: -autorerebuild=%d ignored; automatic chain deletion is disabled.\n",
+               thresholdBlocks);
     }
-
-    std::vector<int> heights;
-    {
-        LOCK(cs_vNodes);
-        for (CNode* pnode : vNodes) {
-            if (pnode && pnode->nStartingHeight > 0)
-                heights.push_back(pnode->nStartingHeight);
-        }
-    }
-    if (heights.empty()) {
-        printf("AutoRebuild: no peers reported heights after %ds\n", maxWaitSec);
-        return -1;
-    }
-    std::sort(heights.begin(), heights.end());
-    int median = heights[heights.size() / 2];
-    printf("AutoRebuild: timed out with %zu peers; median=%d\n", heights.size(), median);
-    return median;
-}
-
-// If -autorerebuild is set and our local chain is more than that many blocks
-// behind the median peer height, wipe the chain DB (preserving wallet.dat +
-// onion + smsg state) and request shutdown. On restart, the daemon sees no
-// chain DB and the snapshot path takes over.
-void MaybeAutoRebuild(int thresholdBlocks)
-{
-    if (thresholdBlocks <= 0)
-        return;
-
-    if (nBestHeight < 0) {
-        printf("AutoRebuild: local nBestHeight unset — skipping\n");
-        return;
-    }
-
-    printf("AutoRebuild: enabled (threshold=%d blocks). Local chain tip: %d\n",
-           thresholdBlocks, nBestHeight);
-    int medianPeer = WaitForPeerHeights(/*minPeers=*/3, /*maxWaitSec=*/60);
-    if (medianPeer <= 0) {
-        printf("AutoRebuild: could not get peer heights — skipping rebuild\n");
-        return;
-    }
-
-    int lag = medianPeer - nBestHeight;
-    printf("AutoRebuild: peer median=%d, local=%d, lag=%d\n",
-           medianPeer, nBestHeight, lag);
-
-    if (lag < thresholdBlocks) {
-        printf("AutoRebuild: lag %d < threshold %d — no rebuild needed\n",
-               lag, thresholdBlocks);
-        return;
-    }
-
-    printf("\n*** AutoRebuild: chain is %d blocks behind — wiping chain DB ***\n", lag);
-    printf("*** Preserving wallet.dat, smsgDB, onion state. ***\n");
-    printf("*** Daemon will shutdown; restart to load signed UTXO snapshot. ***\n\n");
-
-    WipeChainDataDir();
-
-    fs::path blkPath = GetDataDir() / "blk0001.dat";
-    if (fs::exists(blkPath)) {
-        fs::remove(blkPath);
-        printf("AutoRebuild: removed stale %s\n", blkPath.string().c_str());
-    }
-
-    StartShutdown();
 }
 
 void StartShutdown()
@@ -655,7 +579,7 @@ std::string HelpMessage()
         "  -onionseed             " + _("Find peers using .onion seeds (default: 1 unless -connect)") + "\n" +
         "  -seedurl=<host>        " + _("HTTP seed list host (default: seeds.cryptographic-triangles.org)") + "\n" +
         "  -noseedurl             " + _("Disable HTTP seed list fetch on startup") + "\n" +
-        "  -autorerebuild=<n>     " + _("If our chain is more than <n> blocks behind peers, wipe chain DB and shutdown for clean restart (default: 0=disabled)") + "\n" +
+        "  -autorerebuild=<n>     " + _("Deprecated compatibility option; automatic chain deletion is disabled") + "\n" +
         "  -banscore=<n>          " + _("Threshold for disconnecting misbehaving peers (default: 100)") + "\n" +
         "  -bantime=<n>           " + _("Number of seconds to keep misbehaving peers from reconnecting (default: 86400)") + "\n" +
         "  -par=<n>               " + _("Set the number of script verification threads (default: auto, 0 = auto, 1 = single-threaded)") + "\n" +
@@ -1581,13 +1505,9 @@ bool AppInit2()
         uiInterface.InitMessage(_("UTXO rebuild complete"));
     }
 
-    // AutoRebuild: if -autorerebuild is set and we are behind peers, wipe chain DB
-    // and shutdown for clean restart.
-    MaybeAutoRebuild(GetArg("-autorerebuild", 0));
-    if (fRequestShutdown) {
-        printf("AutoRebuild: shutdown requested before chain load complete\n");
-        return false;
-    }
+    // Keep the legacy option parse for compatibility, but automatic recovery is
+    // diagnostic-only and never removes chain data.
+    LogAutoRebuildDisabled(GetArg("-autorerebuild", 0));
 
     // Block index loaded. With fast-import removed, the only supported sync path
     // is the UTXO snapshot (auto-downloaded from bootstrap or placed manually in datadir).

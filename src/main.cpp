@@ -118,12 +118,12 @@ void ThreadForkDetector(void*)
             printf("*** Possible fork or sync stall. Check peers: 'getpeerinfo' and chain: 'getblockhash %d' ***\n",
                    nOurHeight);
 
-            // If severe lag persists, suggest auto-rebuild
-            if (lag >= threshold * 3 && GetBoolArg("-autorerebuild", 0) > 0)
+            // Severe lag is diagnostic only. Recovery must be explicitly
+            // initiated by an operator after backups; never request an
+            // automatic shutdown that could lead to chain-state deletion.
+            if (lag >= threshold * 3 && GetBoolArg("-autorerebuild", false))
             {
-                printf("*** FORK DETECTOR: lag %d >= %d, triggering AutoRebuild ***\n",
-                       lag, threshold * 3);
-                StartShutdown();
+                printf("*** FORK DETECTOR: automatic rebuild is disabled; operator review required ***\n");
             }
         }
 
