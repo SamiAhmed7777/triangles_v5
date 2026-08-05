@@ -143,13 +143,13 @@ Value addnode(const Array& params, bool fHelp)
             "addnode <node> <add|remove|onetry>\n"
             "Attempts to add or remove a node from the addnode list,\n"
             "or try a connection to a node once.\n"
-            "<node> must be a .onion address (Tor-native network).");
+            "<node> must be a .onion or .b32.i2p address (Tor+I2P dual-network).");
 
     string strNode = params[0].get_str();
 
-    // Tor-native: require .onion addresses
-    if (strNode.find(".onion") == string::npos)
-        throw runtime_error("Only .onion addresses are supported on this network.");
+    // Triangles is dual-network Tor + I2P. Allow both .onion and .b32.i2p addresses.
+    if (strNode.find(".onion") == string::npos && strNode.find(".b32.i2p") == string::npos)
+        throw runtime_error("Only .onion or .b32.i2p addresses are supported on this network.");
 
     if (strCommand == "onetry")
     {
