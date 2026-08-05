@@ -401,6 +401,24 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
 {
     if (running.load()) return true;
 
+    // ----------------------------------------------------------------
+    // PHASE 0: validate input BEFORE any state mutation.
+    // If validation fails, we must leave the system in a clean state
+    // (running=false, no i2p data dir side effects, no InitI2P call).
+    // ----------------------------------------------------------------
+    if (socks < 1 || socks > 65535) {
+        lastError = strprintf("SOCKS proxy port %d out of range (1-65535)", socks);
+        return false;
+    }
+    if (sam < 1 || sam > 65535) {
+        lastError = strprintf("SAM bridge port %d out of range (1-65535)", sam);
+        return false;
+    }
+    if (server < 0 || server > 65535) {
+        lastError = strprintf("server tunnel port %d out of range (0-65535, 0=disable)", server);
+        return false;
+    }
+
     lastError.clear();
     socksPort = socks;
     samPort = sam;
@@ -409,8 +427,13 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
 
     // Prepare i2pd data directory under the wallet's data dir
     i2pDataDir = (::GetDataDir() / "i2p_data").string();
-    fs::create_directories(i2pDataDir);
-    fs::permissions(i2pDataDir, fs::perms::owner_all, fs::perm_options::replace);
+    try {
+        fs::create_directories(i2pDataDir);
+        fs::permissions(i2pDataDir, fs::perms::owner_all, fs::perm_options::replace);
+    } catch (const fs::filesystem_error& e) {
+        lastError = strprintf("Cannot create i2p data dir %s: %s", i2pDataDir.c_str(), e.what());
+        return false;
+    }
 
     printf("Embedded I2P: starting i2pd router...\n");
 
@@ -501,14 +524,36 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
         argvPtrs.push_back(&s[0]);
     argvPtrs.push_back(nullptr);
 
+    // The whole post-InitI2P section is wrapped in try/catch so that ANY
+    // failure after i2pd is initialized triggers TerminateI2P. Without this
+    // an exception from SetOption or std::thread construction would leave
+    // running=true but with no router thread to clean up — a leaked i2pd.
     try {
         // ----------------------------------------------------------------
-        // Phase 1 (synchronous, < 1s): config parse, crypto, router context
+        // Phase 1 (synchronous, < 1s): config parse, crypto, router context.
+        // InitI2P is wrapped in try/catch so a partial-init failure does
+        // not leave i2pd in a half-initialized state with running=true.
         // ----------------------------------------------------------------
-        i2p::api::InitI2P((int)(argvPtrs.size() - 1), argvPtrs.data(), "triangles-i2pd");
+        try {
+            i2p::api::InitI2P((int)(argvPtrs.size() - 1), argvPtrs.data(), "triangles-i2pd");
+        } catch (const std::exception& e) {
+            lastError = strprintf("InitI2P failed: %s", e.what());
+            // Best-effort cleanup: i2pd's InitI2P may have partially
+            // initialized global state. TerminateI2P is a no-op if no
+            // init happened; it cleans up otherwise.
+            try { i2p::api::TerminateI2P(); } catch (...) {}
+            return false;
+        } catch (...) {
+            lastError = "InitI2P failed: unknown exception";
+            try { i2p::api::TerminateI2P(); } catch (...) {}
+            return false;
+        }
         fflush(stdout);
 
         // Mark running immediately so Qt UI shows I2P as active.
+        // From this point on, any exception thrown by the code below is
+        // caught by the outer try/catch, which calls TerminateI2P to
+        // release the partially-initialized i2pd state.
         running.store(true);
 
         // ----------------------------------------------------------------
@@ -548,17 +593,11 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
         // but BEFORE the background thread calls i2p::client::context.Start
         // which calls ReadSocksProxy + ReadSAMBridge. SetOption calls
         // notify() internally, so the new values are visible to GetOption.
+        //
+        // NOTE: SOCKS/SAM port range validation happens in Start() Phase 0
+        // before any state mutation, so by this point socksPort and samPort
+        // are already known to be 1..65535. No re-validation needed here.
         // ----------------------------------------------------------------
-        if (socksPort < 1 || socksPort > 65535) {
-            lastError = strprintf("SOCKS proxy port %d out of range (1-65535)",
-                                  socksPort);
-            return false;
-        }
-        if (samPort < 1 || samPort > 65535) {
-            lastError = strprintf("SAM bridge port %d out of range (1-65535)",
-                                  samPort);
-            return false;
-        }
         printf("Embedded I2P: overriding socksproxy.port=%d sam.port=%d via SetOption\n",
                socksPort, samPort);
         fflush(stdout);
@@ -676,8 +715,24 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
                 fflush(stdout);
 
             } catch (const std::exception& e) {
+                // Background init failure: i2pd router context may be partially
+                // alive (transports listening, netDb half-built). Tear it down,
+                // reset running, and surface the error in lastError so callers
+                // can see the failure rather than seeing running=true forever.
                 printf("ERROR: Embedded I2P background init failed: %s\n", e.what());
                 fflush(stdout);
+                lastError = std::string("i2pd background init failed: ") + e.what();
+                try { i2p::api::TerminateI2P(); } catch (...) {}
+                running.store(false);
+            } catch (...) {
+                // Catch-all: any non-std::exception (e.g. structured exception
+                // on Windows) would otherwise invoke std::terminate, killing
+                // the daemon with no useful diagnostic.
+                printf("ERROR: Embedded I2P background init failed: unknown exception\n");
+                fflush(stdout);
+                lastError = "i2pd background init failed: unknown exception";
+                try { i2p::api::TerminateI2P(); } catch (...) {}
+                running.store(false);
             }
         });
 
@@ -689,6 +744,16 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
     } catch (const std::exception& e) {
         lastError = std::string("i2pd initialization failed: ") + e.what();
         printf("ERROR: Embedded I2P startup failed: %s\n", e.what());
+        // i2pd may be partially or fully initialized by the time we got here.
+        // TerminateI2P is a no-op if InitI2P never ran; otherwise it cleans
+        // up router context, transports, and netDb.
+        try { i2p::api::TerminateI2P(); } catch (...) {}
+        running.store(false);
+        return false;
+    } catch (...) {
+        lastError = "i2pd initialization failed: unknown exception";
+        printf("ERROR: Embedded I2P startup failed: unknown exception\n");
+        try { i2p::api::TerminateI2P(); } catch (...) {}
         running.store(false);
         return false;
     }
