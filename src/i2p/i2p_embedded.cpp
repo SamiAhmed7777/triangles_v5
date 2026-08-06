@@ -720,13 +720,116 @@ bool CI2PEmbedded::Start(int socks, int sam, int server)
                     }
                 }
 
-                // Populate .b32.i2p address
+                // ----------------------------------------------------------------
+                // Populate .b32.i2p address — use the SERVER TUNNEL destination,
+                // NOT the embedded router identity.
+                //
+                // The Triangles P2P layer listens on the local port via the
+                // server tunnel loaded from `triangles-p2p-keys.dat`. That tunnel
+                // publishes a LeaseSet whose destination is the ident hash of
+                // the keys file (a separate identity from the i2pd router
+                // itself). Peers that dial the address we advertise must hit
+                // THAT LeaseSet, or they get SOCKS code 4 / "LeaseSet not found"
+                // from the floodfill network.
+                //
+                // Strategy (preferred first):
+                //   1. Walk i2p::client::context.GetServerTunnels() and pick the
+                //      server tunnel whose keys file matches
+                //      triangles-p2p-keys.dat — presence in the registry confirms
+                //      the tunnel has registered, so the LeaseSet will be
+                //      published and reachable once the i2pd netDb has it.
+                //   2. Fall back to parsing triangles-p2p-keys.dat directly via
+                //      i2p::data::PrivateKeys::FromBuffer (binary blob format,
+                //      length == PrivateKeys::GetFullLen()) if the tunnel hasn't
+                //      registered yet (race during the same startup pass).
+                //   3. Last-resort error log if neither works — better to leave
+                //      i2pHostname empty than advertise the wrong identity.
+                // ----------------------------------------------------------------
+                bool advertised = false;
+                std::string serverKeysPath = (fs::path(i2pDataDir) / "triangles-p2p-keys.dat").string();
+
+                // Step 1+2 (combined): authoritative ident hash comes from the
+                // keys file the server tunnel was loaded from. The tunnel
+                // registry's GetServerTunnels() maps (IdentHash, port) → tunnel,
+                // so we just compare each registered tunnel's ident hash
+                // against what triangles-p2p-keys.dat actually contains. If
+                // any registered tunnel matches, that's our address. Otherwise
+                // we fall back to publishing the keys-file ident hash directly
+                // (the tunnel will register a moment later — the keys file is
+                // the source of truth either way).
+                //
+                // File format: binary blob, length = PrivateKeys::GetFullLen().
+                // i2pd reads it with FromBuffer() in libi2pd_client/ClientContext.cpp:285-313.
+                std::string keysFileIdentB32;
                 try {
-                    auto identHash = i2p::context.GetRouterInfo().GetIdentHash();
-                    i2pHostname = identHash.ToBase32() + ".b32.i2p";
-                    printf("Embedded I2P: router address = %s\n", i2pHostname.c_str());
+                    std::ifstream ks(serverKeysPath, std::ifstream::binary);
+                    if (ks.is_open()) {
+                        ks.seekg(0, std::ios::end);
+                        size_t len = ks.tellg();
+                        ks.seekg(0, std::ios::beg);
+                        if (len == 0 || len > 65536) {
+                            throw std::runtime_error("implausible keys file size: " +
+                                                     std::to_string(len));
+                        }
+                        std::vector<uint8_t> buf(len);
+                        ks.read(reinterpret_cast<char*>(buf.data()), len);
+                        if (!ks) {
+                            throw std::runtime_error("short read on keys file");
+                        }
+                        i2p::data::PrivateKeys pk;
+                        if (!pk.FromBuffer(buf.data(), len)) {
+                            throw std::runtime_error("PrivateKeys::FromBuffer failed");
+                        }
+                        auto pub = pk.GetPublic();
+                        if (!pub) {
+                            throw std::runtime_error("PrivateKeys::GetPublic returned null");
+                        }
+                        keysFileIdentB32 = pub->GetIdentHash().ToBase32();
+                    } else {
+                        printf("Embedded I2P: cannot open %s for server tunnel keys\n",
+                               serverKeysPath.c_str());
+                    }
+                } catch (const std::exception& e) {
+                    printf("Embedded I2P: keys-file ident hash load failed: %s\n", e.what());
                 } catch (...) {
-                    printf("Embedded I2P: .b32.i2p address not yet available, Qt timer will retry\n");
+                    printf("Embedded I2P: keys-file ident hash load failed: unknown exception\n");
+                }
+
+                // Try the live registry first — if a registered server tunnel
+                // matches the keys-file hash, the LeaseSet will be published and
+                // inbound peers can reach us via that destination.
+                if (!keysFileIdentB32.empty()) {
+                    try {
+                        for (const auto& kv : i2p::client::context.GetServerTunnels()) {
+                            const i2p::data::IdentHash& dest = kv.first.first;
+                            if (dest.ToBase32() == keysFileIdentB32) {
+                                i2pHostname = keysFileIdentB32 + ".b32.i2p";
+                                advertised = true;
+                                printf("Embedded I2P: server tunnel address (live registry) = %s\n",
+                                       i2pHostname.c_str());
+                                break;
+                            }
+                        }
+                    } catch (const std::exception& e) {
+                        printf("Embedded I2P: server tunnel registry read failed: %s\n", e.what());
+                    } catch (...) {
+                        printf("Embedded I2P: server tunnel registry read failed: unknown exception\n");
+                    }
+                }
+
+                // Fall back: trust the keys file even before the tunnel registers.
+                if (!advertised && !keysFileIdentB32.empty()) {
+                    i2pHostname = keysFileIdentB32 + ".b32.i2p";
+                    advertised = true;
+                    printf("Embedded I2P: server tunnel address (from keys file) = %s\n",
+                           i2pHostname.c_str());
+                }
+
+                // Step 3: explicit failure rather than advertise router identity.
+                if (!advertised) {
+                    i2pHostname.clear();
+                    printf("Embedded I2P: server tunnel destination not available yet, "
+                           "Qt timer will retry\n");
                 }
                 fflush(stdout);
 
