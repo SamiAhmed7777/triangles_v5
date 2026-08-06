@@ -1,6 +1,9 @@
 #include "introdialog.h"
 #include "util.h"
 #include "bootstrap.h"
+#include "utxosnapshot.h"
+#include "checkpoints.h"
+#include "snapshotnet.h"
 
 #include <QSettings>
 #include <QVBoxLayout>
@@ -16,6 +19,8 @@
 
 #include <filesystem>
 
+#include <cstdio>
+#include <ctime>
 #include <set>
 
 IntroDialog::IntroDialog(QWidget *parent) :
@@ -230,14 +235,21 @@ bool IntroDialog::pickDataDirectory()
     fs::path dataDirPath(dataDir.toStdString());
     bool needsBootstrap = Bootstrap::NeedsBootstrap(dataDirPath);
     bool userWantsBootstrap = false;
+    // Captured local-load error from the staged-snapshot probe below, surfaced
+    // in the HTTPS-failure dialog so users see why their snapshot was rejected.
+    std::string lastLocalLoadError;
 
     if (needsBootstrap)
     {
-        // No blockchain data — bootstrap automatically, just inform the user
+        // No blockchain data — bootstrap automatically, just inform the user.
+        // The actual mechanism (local snapshot vs HTTPS download vs network
+        // sync) is decided after probing the data directory; the dialog
+        // intentionally doesn't promise "downloading" because we may find a
+        // staged utxo-snapshot.bin and skip the network entirely.
         QMessageBox::information(0, "Triangles",
             "No blockchain data found.\n\n"
-            "Downloading the latest blockchain snapshot automatically.\n"
-            "This will only take a few minutes.");
+            "Setting up the wallet now — this only happens once.\n"
+            "If a local snapshot is available it will be loaded automatically.");
         userWantsBootstrap = true;
     }
     else if (!settings.value("bootstrapDontAsk", false).toBool())
@@ -263,59 +275,217 @@ bool IntroDialog::pickDataDirectory()
         userWantsBootstrap = (ret == QMessageBox::Yes);
     }
 
-        if (userWantsBootstrap)
-        {
-            std::string host = Bootstrap::DEFAULT_HOST;
-            std::string strError;
+    if (userWantsBootstrap)
+    {
+        std::string host = Bootstrap::DEFAULT_HOST;
+        std::string strError;
 
-            QProgressDialog progress("Downloading blockchain snapshot...", "Cancel",
-                                     0, 100, 0);
-            progress.setWindowTitle("Triangles - Bootstrap");
-            progress.setWindowModality(Qt::ApplicationModal);
-            progress.setMinimumDuration(0);
-            progress.setValue(0);
+        // First-run local-snapshot probe: if utxo-snapshot.bin is already in the
+        // data directory (placed there by the user, an installer, or a
+        // previous P2P fetch), load it directly. This avoids the HTTPS
+        // bootstrap path entirely on first run.
+        fs::path stagedSnap = dataDirPath / "utxo-snapshot.bin";
+        std::error_code stagedEc;
+        // Use the non-throwing error_code overload and probe symlink
+        // status separately. We reject symlinks: an auto-loaded snapshot
+        // is supposed to be a file the user placed in the data dir, not a
+        // symlink an attacker could redirect to anything; if the user
+        // genuinely wants to symlink, they can resolve it and copy the
+        // file. A symlink_status probe error (broken perms, ENOENT on a
+        // parent component) is treated as "not present" and falls through
+        // to HTTPS bootstrap.
+        fs::file_status symSt = fs::symlink_status(stagedSnap, stagedEc);
+        bool stagedPresent = (!stagedEc &&
+                              fs::is_symlink(symSt) == false &&
+                              fs::is_regular_file(symSt));
+        if (stagedEc) {
+            printf("IntroDialog: cannot probe staged snapshot path (%s); skipping local load\n",
+                   stagedEc.message().c_str());
+            stagedPresent = false;
+        }
+        if (stagedPresent) {
+            printf("IntroDialog: found staged utxo-snapshot.bin in data dir, attempting local load...\n");
 
-            auto progressFn = [&progress](int64_t bytesDownloaded, int64_t totalBytes) {
-                if (totalBytes > 0) {
-                    int pct = (int)((bytesDownloaded * 100) / totalBytes);
-                    progress.setValue(pct);
-                    progress.setLabelText(
-                        QString("Downloading blockchain snapshot... %1 MB / %2 MB")
-                        .arg(bytesDownloaded / (1024*1024))
-                        .arg(totalBytes / (1024*1024)));
+            // Validate the staged file against the compiled-in hash before
+            // touching the chain DB. This prevents loading a stale or wrong
+            // snapshot from a previous install into a fresh data dir.
+            int snapHeight = Checkpoints::GetBestSnapshotHeight();
+            uint256 expectedHash;
+            bool hashOk = (snapHeight > 0) &&
+                           Checkpoints::GetSnapshotHash(snapHeight, expectedHash);
+
+            std::string localErr;
+            bool loaded = false;
+            if (hashOk) {
+                uint256 actualHash;
+                std::string hashErr;
+                if (SnapshotNet::ComputeSnapshotFileHash(stagedSnap, actualHash, hashErr)) {
+                    if (actualHash != expectedHash) {
+                        // Staged file is for a different release or otherwise
+                        // doesn't match this build's compiled-in hash. Do NOT
+                        // delete it — the user may have staged it intentionally,
+                        // or it may belong to another release. Quarantine with
+                        // a unique suffix so a previously quarantined file is
+                        // never overwritten. If no free name can be found (or
+                        // the rename itself fails for perms/locks), leave the
+                        // original in place and report the exact error so the
+                        // user can recover manually.
+                        std::error_code rmEc;
+                        fs::path quarantine;
+                        bool foundFreeName = false;
+                        // Capture the timestamp once — repeated time() calls
+                        // inside the loop would just shift the suffix but add
+                        // nothing useful, and could overflow on busy systems.
+                        const std::string quarantinePrefix =
+                            stagedSnap.string() + ".rejected." +
+                            std::to_string(::time(nullptr)) + ".";
+                        // Collision-safe suffix: timestamp + a small loop
+                        // counter. Two rejections within the same second
+                        // (e.g. double-clicked bootstrap dialog) still get
+                        // distinct destinations. The loop caps at 1000 attempts;
+                        // if every candidate is occupied we refuse to rename
+                        // (overwriting an earlier quarantined file would lose
+                        // the user's data and is worse than just reporting the
+                        // conflict).
+                        for (int attempt = 0; attempt < 1000; ++attempt) {
+                            std::string name = quarantinePrefix +
+                                               std::to_string(attempt);
+                            quarantine = name;
+                            std::error_code probeEc;
+                            if (!fs::exists(quarantine, probeEc) && !probeEc) {
+                                foundFreeName = true;
+                                break;
+                            }
+                        }
+                        if (!foundFreeName) {
+                            // All 1000 candidate names were already taken.
+                            // This is extremely unlikely in normal operation
+                            // but if it happens, surface an honest error —
+                            // a "no space on device" message would be
+                            // misleading here.
+                            rmEc = std::make_error_code(std::errc::file_exists);
+                        } else {
+                            fs::rename(stagedSnap, quarantine, rmEc);
+                        }
+                        if (rmEc) {
+                            localErr = "staged utxo-snapshot.bin hash does not match this release "
+                                       "(expected " + expectedHash.ToString().substr(0, 16) +
+                                       ", got " + actualHash.ToString().substr(0, 16) +
+                                       "), AND quarantine failed (" + rmEc.message() +
+                                       "). Leave the original in place and review it manually: " +
+                                       stagedSnap.string();
+                        } else {
+                            localErr = "staged utxo-snapshot.bin hash does not match this release "
+                                       "(expected " + expectedHash.ToString().substr(0, 16) +
+                                       ", got " + actualHash.ToString().substr(0, 16) +
+                                       "). File moved to " + quarantine.filename().string() +
+                                       " — review or delete it manually.";
+                        }
+                        printf("IntroDialog: %s\n", localErr.c_str());
+                    } else {
+                        loaded = UtxoSnapshot::LoadSnapshot(stagedSnap, dataDirPath,
+                                                             localErr, /*requireCheckpoint=*/true);
+                    }
                 } else {
-                    progress.setLabelText(
-                        QString("Downloading blockchain snapshot... %1 MB")
-                        .arg(bytesDownloaded / (1024*1024)));
+                    localErr = "cannot hash staged snapshot: " + hashErr;
                 }
-                QApplication::processEvents();
-            };
-
-            // Try the fast UTXO snapshot path first (matches daemon behavior in init.cpp).
-            // The legacy DownloadBootstrap() is hard-disabled in bootstrap.cpp — it always
-            // returns false with "Legacy file-list bootstrap is disabled". Calling it here
-            // would make the GUI wallet unable to bootstrap a fresh install.
-            std::string utxoError;
-            bool success = Bootstrap::DownloadUtxoSnapshot(host, dataDirPath, progressFn, utxoError);
-            if (!success) {
-                // Fall back to legacy bootstrap path (will fail with "disabled" error, but
-                // surfaces the real error if the snapshot path had a different failure).
-                std::string legacyError;
-                if (Bootstrap::DownloadBootstrap(host, dataDirPath, progressFn, legacyError)) {
-                    success = true;
-                } else {
-                    strError = "UTXO snapshot: " + utxoError + " | Legacy: " + legacyError;
-                }
-            }
-            if (!success) {
-                QMessageBox::warning(0, "Triangles",
-                    QString("Could not download blockchain snapshot:\n%1\n\n"
-                            "The wallet will sync from the network instead.")
-                    .arg(QString::fromStdString(strError)));
             } else {
-                progress.setValue(100);
+                localErr = "no compiled-in snapshot hash available in this release";
+            }
+
+            if (loaded) {
+                printf("IntroDialog: loaded staged utxo-snapshot.bin successfully\n");
+                return true;
+            }
+
+            // Staged file failed to load — fall through to HTTPS bootstrap.
+            // Remember the local-load reason so we can show it to the user
+            // if HTTPS also fails (the failure dialog below concatenates it).
+            printf("IntroDialog: staged snapshot unusable (%s); falling back to network bootstrap\n",
+                   localErr.c_str());
+            lastLocalLoadError = localErr;
+        }
+
+        QProgressDialog progress("Downloading blockchain snapshot...", "Cancel",
+                                 0, 100, 0);
+        progress.setWindowTitle("Triangles - Bootstrap");
+        progress.setWindowModality(Qt::ApplicationModal);
+        progress.setMinimumDuration(0);
+        progress.setValue(0);
+
+        auto progressFn = [&progress](int64_t bytesDownloaded, int64_t totalBytes) {
+            if (totalBytes > 0) {
+                int pct = (int)((bytesDownloaded * 100) / totalBytes);
+                progress.setValue(pct);
+                progress.setLabelText(
+                    QString("Downloading blockchain snapshot... %1 MB / %2 MB")
+                    .arg(bytesDownloaded / (1024*1024))
+                    .arg(totalBytes / (1024*1024)));
+            } else {
+                progress.setLabelText(
+                    QString("Downloading blockchain snapshot... %1 MB")
+                    .arg(bytesDownloaded / (1024*1024)));
+            }
+            QApplication::processEvents();
+        };
+
+        // Try the fast UTXO snapshot path first (matches daemon behavior in init.cpp).
+        // The legacy DownloadBootstrap() is hard-disabled in bootstrap.cpp — it always
+        // returns false with "Legacy file-list bootstrap is disabled". Calling it here
+        // would make the GUI wallet unable to bootstrap a fresh install.
+        std::string utxoError;
+        bool success = Bootstrap::DownloadUtxoSnapshot(host, dataDirPath, progressFn, utxoError);
+        if (!success) {
+            // Fall back to legacy bootstrap path (will fail with "disabled" error, but
+            // surfaces the real error if the snapshot path had a different failure).
+            std::string legacyError;
+            if (Bootstrap::DownloadBootstrap(host, dataDirPath, progressFn, legacyError)) {
+                success = true;
+            } else {
+                strError = "UTXO snapshot: " + utxoError + " | Legacy: " + legacyError;
             }
         }
+        if (!success) {
+            // The TLS-detection strings are matched against the standard error
+            // messages produced by the bootstrap OpenSSL path; they cover
+            // the common GUI-bundled OpenSSL failure modes without dumping
+            // the raw error to the user.
+            bool isTlsError = (strError.find("TLS handshake failed") != std::string::npos ||
+                               strError.find("certificate verify failed") != std::string::npos ||
+                               strError.find("TLS certificate verification failed") != std::string::npos);
+            if (isTlsError) {
+                QString localNote;
+                if (!lastLocalLoadError.empty()) {
+                    localNote = QString("\n\nLocal snapshot note: %1")
+                        .arg(QString::fromStdString(lastLocalLoadError));
+                }
+                QMessageBox::warning(0, "Triangles",
+                    QString("Could not download blockchain snapshot automatically.\n\n"
+                            "The bundled network stack cannot validate the certificate of the\n"
+                            "bootstrap server. To skip this, place a file named\n"
+                            "    utxo-snapshot.bin\n"
+                            "in your Triangles data directory:\n"
+                            "    %1\n\n"
+                            "Then restart the wallet — the snapshot will load automatically.\n\n"
+                            "Otherwise, the wallet will sync from the network instead.%2")
+                        .arg(dataDir)
+                        .arg(localNote));
+            } else {
+                QString localNote;
+                if (!lastLocalLoadError.empty()) {
+                    localNote = QString("\n\nLocal snapshot note: %1")
+                        .arg(QString::fromStdString(lastLocalLoadError));
+                }
+                QMessageBox::warning(0, "Triangles",
+                    QString("Could not download blockchain snapshot:\n%1\n\n"
+                            "The wallet will sync from the network instead.%2")
+                        .arg(QString::fromStdString(strError))
+                        .arg(localNote));
+            }
+        } else {
+            progress.setValue(100);
+        }
+    }
 
     return true;
 }
