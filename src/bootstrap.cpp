@@ -1,42 +1,56 @@
 // Copyright (c) 2024 Triangles developers
 // Distributed under the MIT/X11 software license
 
+// On Windows we need winsock2.h BEFORE windows.h, otherwise windows.h
+// pulls in the legacy winsock.h with conflicting declarations. Define
+// WIN32_LEAN_AND_MEAN at the very top so any header that includes
+// windows.h (transitively or directly) skips the bloat. This must come
+// before any project header that might pull in windows.h.
+#ifdef WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
 #include "bootstrap.h"
+#include "bootstrap_roots.h"
 #include "utxosnapshot.h"
 #include "txdb.h"
 #include "checkpoints.h"
-
 #include <filesystem>
 #include <fstream>
-
 #include <zlib.h>
-
 #include "version.h"
 #include "uint256.h"
 #include "netbase.h"
 #include "net.h"
-
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/sha.h>
-
+#include <openssl/bio.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
 #include "key.h"
 #include "base58.h"
 #include "util.h"
 #include "json/nlohmann_json.hpp"
-
-extern const std::string strMessageMagic;
-
-#include <fstream>
 #include <sstream>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <cctype>
+#include <system_error>
+#include <vector>
+#include <algorithm>
+#include <cerrno>
+
+extern const std::string strMessageMagic;
 
 #ifdef WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
+// windows.h must come after winsock2.h; WIN32_LEAN_AND_MEAN was defined
+// at the top of the file so any transitive windows.h includes there are
+// also trimmed.
+#include <windows.h>
 #else
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -51,6 +65,38 @@ namespace Checkpoints { bool IsKnownCheckpoint(int nHeight, const uint256& hash)
 namespace fs = std::filesystem;
 
 namespace Bootstrap {
+
+// Wide-char-safe file reader: opens a file with _wfopen on Windows
+// (which accepts non-ASCII paths regardless of the ANSI code page) and
+// fopen elsewhere. Reads the entire file into `out`. Returns true on
+// success, false on any error (open failure, read error, flush/close
+// failure, or unreadable file). Distinguishes clean EOF from ferror so
+// partial reads don't masquerade as success.
+static bool ReadFileToMemory(const fs::path& path, std::string& out)
+{
+    out.clear();
+    FILE* f = nullptr;
+#ifdef WIN32
+    f = _wfopen(path.wstring().c_str(), L"rb");
+#else
+    f = fopen(path.string().c_str(), "rb");
+#endif
+    if (!f) return false;
+    char buf[8192];
+    size_t n;
+    bool readOk = true;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+        out.append(buf, n);
+    if (ferror(f)) readOk = false;
+    // fclose() can still surface buffered-write errors that ferror
+    // doesn't; treat close failure as a read failure too.
+    if (fclose(f) != 0) readOk = false;
+    if (!readOk) {
+        out.clear();
+        return false;
+    }
+    return true;
+}
 
 bool NeedsBootstrap(const fs::path& dataDir)
 {
@@ -137,8 +183,17 @@ struct HttpConn {
 
     bool Send(const char* data, size_t len) {
         while (len > 0) {
+            // MSG_NOSIGNAL is Linux/macOS only — Windows Winsock uses 0 to
+            // mean "no special flags" (the equivalent of MSG_NOSIGNAL on
+            // Windows would be SO_NOSIGPIPE, but that's a setsockopt, not a
+            // send flag, and Windows has no SIGPIPE to suppress anyway).
+#ifdef WIN32
+            constexpr int sendFlags = 0;
+#else
+            constexpr int sendFlags = MSG_NOSIGNAL;
+#endif
             int n = ssl ? SSL_write(ssl, data, (int)std::min(len, (size_t)65536))
-                        : send(sock, data, (int)std::min(len, (size_t)65536), MSG_NOSIGNAL);
+                        : send(sock, data, (int)std::min(len, (size_t)65536), sendFlags);
             if (n <= 0) return false;
             data += n;
             len -= n;
@@ -172,8 +227,242 @@ struct HttpConn {
             strError = "Failed to create SSL context";
             return false;
         }
-        if (SSL_CTX_set_default_verify_paths(ctx) != 1) {
-            strError = "Failed to load the system TLS trust store";
+        // Trust-store resolution (additive — each successful source EXPANDS the
+        // trust store; embedded roots are always added as belt-and-suspenders):
+        //   1. <exedir>/cacert.pem  (deploy-time bundle; covers Windows GUI
+        //      builds where libssl-3-x64.dll ships without a default cert path)
+        //   2. SSL_CERT_FILE env var (operator override; wide-char on Windows)
+        //   3. System default verify paths (Linux daemon: /etc/ssl/certs/...)
+        //   4. Embedded ISRG Root X1 + X2 (always added as belt-and-suspenders so
+        //      a stripped host without usable system anchors still validates LE
+        //      chains; no harm to operator-supplied bundles since adding anchors
+        //      only ever expands the set of valid chains)
+        fs::path exeDir;
+#ifdef WIN32
+        // Use a dynamic buffer for GetModuleFileNameW — the path can legally
+        // exceed MAX_PATH (260) on modern Windows, and GetModuleFileNameW
+        // returns the size WITHOUT the null terminator, so a return value
+        // equal to the buffer capacity indicates truncation. Loop until the
+        // returned size is strictly less than the buffer size.
+        std::wstring exePathW;
+        for (DWORD cap = MAX_PATH; ; cap *= 2) {
+            std::vector<wchar_t> buf(cap);
+            DWORD n = GetModuleFileNameW(nullptr, buf.data(), cap);
+            if (n == 0) break; // API failure
+            if (n < cap) {
+                exePathW.assign(buf.data(), n);
+                break;
+            }
+            // n == cap means truncation; try a larger buffer.
+            if (cap >= 32768) break; // 32K is a reasonable upper bound
+        }
+        if (!exePathW.empty()) {
+            // fs::path on Windows accepts a wide string directly, which
+            // preserves non-ASCII characters in the executable path. The
+            // previous std::wstring -> std::string -> fs::path conversion
+            // was lossy on UTF-8 paths.
+            exeDir = fs::path(exePathW).parent_path();
+        }
+#else
+        std::vector<char> linkPath(4096);
+        ssize_t n = readlink("/proc/self/exe", linkPath.data(), linkPath.size() - 1);
+        if (n > 0) {
+            linkPath[n] = '\0';
+            exeDir = fs::path(std::string(linkPath.data(), n)).parent_path();
+        }
+#endif
+        bool trustLoaded = false;
+        std::string lastLoadErr;
+        // Convert fs::path -> std::string in a way that preserves non-ASCII
+        // characters on Windows (where fs::path::string() uses the ANSI
+        // code page and silently mangles UTF-8 paths). On non-Windows
+        // platforms string() is already UTF-8 and we can call it directly.
+        auto pathToUtf8 = [](const fs::path& p) -> std::string {
+#ifdef WIN32
+            const auto& w = p.wstring();
+            if (w.empty()) return std::string();
+            int needed = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(),
+                                             nullptr, 0, nullptr, nullptr);
+            if (needed <= 0) return std::string();
+            std::string out(needed, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(),
+                                out.data(), needed, nullptr, nullptr);
+            return out;
+#else
+            return p.string();
+#endif
+        };
+        // Wide-char-safe file reader is defined at file scope (Bootstrap::ReadFileToMemory)
+        // so the same routine can be reused by DownloadFile, ReadFileToString,
+        // and Sha256OfFile without each one duplicating _wfopen / fopen logic.
+        // Parse all PEM certificates from a memory buffer and add each to
+        // the X509 store. Returns true if at least one certificate was
+        // successfully added. Used for cacert.pem loaded via the wide-char
+        // path so we never round-trip through OpenSSL's narrow path API.
+        auto loadPemBuffer = [&](const std::string& pemText, const std::string& label) -> bool {
+            BIO* bio = BIO_new_mem_buf(pemText.data(), (int)pemText.size());
+            if (!bio) return false;
+            X509_STORE* store = SSL_CTX_get_cert_store(ctx);
+            int added = 0;
+            int malformed = 0;
+            while (true) {
+                X509* cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+                if (!cert) {
+                    // Distinguish clean EOF from parse error. PEM_read_bio_X509
+                    // returns NULL on both; on EOF it pushes PEM_R_NO_START_LINE
+                    // (the "expected BEGIN, got nothing" error code after the
+                    // final cert is parsed), on parse failure it pushes other
+                    // PEM_R_* codes. Treat PEM_R_NO_START_LINE as clean EOF
+                    // AND verify the BIO is actually empty (no trailing junk).
+                    unsigned long e = ERR_peek_last_error();
+                    if (e == 0) {
+                        // genuine EOF without even a "no start line" error
+                        // — must also be at BIO end.
+                        if (BIO_ctrl_pending(bio) == 0) break;
+                        ++malformed;
+                        break;
+                    }
+                    int reason = ERR_GET_REASON(e);
+                    ERR_clear_error();
+                    if (reason == PEM_R_NO_START_LINE) {
+                        // PEM_R_NO_START_LINE after successful reads is the
+                        // normal "end of certs" signal, but only accept it
+                        // if the BIO is actually drained.
+                        if (BIO_ctrl_pending(bio) == 0) break;
+                    }
+                    ++malformed;
+                    break; // stop at first malformed PEM, don't trust the bundle
+                }
+                int rc = X509_STORE_add_cert(store, cert);
+                X509_free(cert);
+                if (rc == 1) {
+                    ++added;
+                } else {
+                    unsigned long e = ERR_get_error();
+                    if (ERR_GET_REASON(e) == X509_R_CERT_ALREADY_IN_HASH_TABLE) {
+                        ERR_clear_error();
+                        ++added; // count duplicates as success
+                        continue;
+                    }
+                    break;
+                }
+            }
+            BIO_free(bio);
+            if (added > 0 && malformed == 0) {
+                printf("Bootstrap: TLS trust loaded from %s (%d certs)\n",
+                       label.c_str(), added);
+                trustLoaded = true;
+                return true;
+            }
+            if (malformed > 0) {
+                printf("Bootstrap: %s had malformed PEM (loaded %d, rejected %d)\n",
+                       label.c_str(), added, malformed);
+            }
+            return false;
+        };
+        auto tryLoadFile = [&](const std::string& label, const std::string& file) -> bool {
+            if (SSL_CTX_load_verify_locations(ctx, file.c_str(), nullptr) == 1) {
+                printf("Bootstrap: TLS trust loaded from %s (%s)\n", label.c_str(), file.c_str());
+                trustLoaded = true;
+                return true;
+            }
+            unsigned long e = ERR_get_error();
+            char buf[256];
+            ERR_error_string_n(e, buf, sizeof(buf));
+            lastLoadErr = label + " (" + file + "): " + buf;
+            return false;
+        };
+        // Wide-char-safe path: read cacert.pem ourselves via the file-scope
+        // ReadFileToMemory (which uses _wfopen on Windows), then parse the
+        // PEMs with OpenSSL using a memory BIO. Avoids the narrow OpenSSL
+        // path API entirely.
+        auto tryLoadPath = [&](const std::string& label, const fs::path& file) -> bool {
+            std::string pem;
+            if (!ReadFileToMemory(file, pem)) {
+                lastLoadErr = label + ": cannot open " + pathToUtf8(file);
+                return false;
+            }
+            return loadPemBuffer(pem, label);
+        };
+        auto tryLoadEmbedded = [&](const std::string& label, const char* pem) -> bool {
+            BIO* bio = BIO_new_mem_buf(pem, -1);
+            if (!bio) return false;
+            X509* cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+            BIO_free(bio);
+            if (!cert) return false;
+            X509_STORE* store = SSL_CTX_get_cert_store(ctx);
+            int rc = X509_STORE_add_cert(store, cert);
+            X509_free(cert);
+            // X509_STORE_add_cert returns:
+            //   1   → cert was added
+            //   0   → failure (parse, OOM, etc.)
+            // We deliberately treat X509_R_CERT_ALREADY_IN_HASH_TABLE (rc=0
+            // with that specific error) as success: the cert is already in
+            // the store (e.g. from the system default paths or a previous
+            // embedded-root call), and "duplicate" is still a valid trust
+            // anchor for our purposes.
+            if (rc == 1) {
+                printf("Bootstrap: TLS trust loaded from embedded %s\n", label.c_str());
+                trustLoaded = true;
+                return true;
+            }
+            unsigned long e = ERR_get_error();
+            // X509_R_CERT_ALREADY_IN_HASH_TABLE == 101 (OpenSSL x509err.h).
+            // We accept the duplicate-cert code as success.
+            if (ERR_GET_REASON(e) == X509_R_CERT_ALREADY_IN_HASH_TABLE) {
+                ERR_clear_error();
+                printf("Bootstrap: TLS trust from embedded %s already present in store\n", label.c_str());
+                trustLoaded = true;
+                return true;
+            }
+            char buf[256];
+            ERR_error_string_n(e, buf, sizeof(buf));
+            lastLoadErr = "embedded " + label + ": " + buf;
+            return false;
+        };
+        // Trust resolution is genuinely additive — each successful source adds
+        // anchors to the store, and the embedded ISRG X1 + X2 are always
+        // layered on at the end as belt-and-suspenders. Order is:
+        //   (a) exedir/cacert.pem     (deploy-time bundle, covers Windows GUI)
+        //   (b) SSL_CERT_FILE          (operator override, wide-char on Windows)
+        //   (c) system default paths   (Linux daemon: /etc/ssl/certs/...)
+        //   (d) embedded ISRG X1 + X2 (always, on top of whatever loaded above)
+        if (!exeDir.empty()) {
+            tryLoadPath("exedir cacert.pem", exeDir / "cacert.pem");
+        }
+        // SSL_CERT_FILE: prefer _wgetenv on Windows so a non-ASCII
+        // override path works, then load via ReadFileToMemory + memory
+        // BIO (avoiding OpenSSL's narrow filename API).
+#ifdef WIN32
+        wchar_t* envCertW = _wgetenv(L"SSL_CERT_FILE");
+        if (envCertW && *envCertW) {
+            tryLoadPath("SSL_CERT_FILE", fs::path(std::wstring(envCertW)));
+        }
+#else
+        const char* envCert = std::getenv("SSL_CERT_FILE");
+        if (envCert && *envCert) {
+            tryLoadFile("SSL_CERT_FILE", envCert);
+        }
+#endif
+        if (SSL_CTX_set_default_verify_paths(ctx) == 1) {
+            // Mark the system store as a successful trust source
+            // independently of any embedded add. A system that has any
+            // usable CA bundle is configured correctly by this call alone.
+            printf("Bootstrap: TLS trust configured from system default paths\n");
+            trustLoaded = true;
+        } else {
+            unsigned long e = ERR_get_error();
+            char buf[256];
+            ERR_error_string_n(e, buf, sizeof(buf));
+            lastLoadErr = std::string("system default paths: ") + buf;
+        }
+        // Belt-and-suspenders: always add embedded ISRG roots regardless
+        // of which (if any) of the above succeeded. Adding anchors only
+        // expands the set of valid chains, never restricts it.
+        tryLoadEmbedded("ISRG Root X1", EMBEDDED_ISRG_ROOT_X1_PEM);
+        tryLoadEmbedded("ISRG Root X2", EMBEDDED_ISRG_ROOT_X2_PEM);
+        if (!trustLoaded) {
+            strError = "Failed to load any TLS trust store (last attempt: " + lastLoadErr + ")";
             return false;
         }
         SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
@@ -413,8 +702,13 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
             return false;
         }
 
-        // Open output file
-        FILE* file = fopen(destPath.string().c_str(), "wb");
+        // Open output file (use _wfopen on Windows for non-ASCII path support)
+        FILE* file = nullptr;
+#ifdef WIN32
+        file = _wfopen(destPath.wstring().c_str(), L"wb");
+#else
+        file = fopen(destPath.string().c_str(), "wb");
+#endif
         if (!file) {
             strError = "Cannot create file: " + destPath.string();
             return false;
@@ -455,7 +749,22 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
             }
         }
 
-        fclose(file);
+        // Flush + close the output file. fclose() can still report buffered-write
+        // errors that didn't surface from individual fwrite() calls (disk full,
+        // network filesystem dropped, etc.); treat that as a failed download.
+        if (fflush(file) != 0) {
+            int err = ferror(file);
+            fclose(file);
+            fs::remove(destPath);
+            strError = "Failed to flush download to disk (errno=" + std::to_string(err) + ")";
+            return false;
+        }
+        if (fclose(file) != 0) {
+            int err = errno;
+            fs::remove(destPath);
+            strError = "Failed to close downloaded file (errno=" + std::to_string(err) + ")";
+            return false;
+        }
         // conn destructor handles socket + SSL cleanup
 
         // Verify download size if Content-Length was provided
@@ -474,696 +783,55 @@ bool DownloadFile(const std::string& host, const std::string& urlPath,
     }
 }
 
-bool FetchFileList(const std::string& host,
-                   std::vector<std::string>& files,
-                   std::string& strError,
-                   bool noProxy)
-{
-    // Download filelist.txt to a temp file
-    fs::path tmpPath = fs::temp_directory_path() / "triangles_bootstrap_filelist.txt";
 
-    std::string urlPath = std::string(BASE_PATH) + "filelist.txt";
-    if (!DownloadFile(host, urlPath, tmpPath, nullptr, strError, noProxy,
-                      -1, 1024 * 1024))
-        return false;
 
-    // Read lines
-    std::ifstream in(tmpPath.string().c_str());
-    if (!in.is_open()) {
-        strError = "Cannot read downloaded file list";
-        return false;
-    }
-
-    files.clear();
-    std::string line;
-    while (std::getline(in, line)) {
-        line = TrimString(line);
-        if (!line.empty() && line[0] != '#')
-            files.push_back(line);
-    }
-    in.close();
-    fs::remove(tmpPath);
-
-    if (files.empty()) {
-        strError = "File list is empty";
-        return false;
-    }
-
-    return true;
-}
-
-// --- tar.gz bootstrap support ---
-
-bool ParseManifest(const fs::path& manifestPath,
-                   SnapshotManifest& manifest,
-                   std::string& strError)
-{
-    std::ifstream in(manifestPath.string().c_str());
-    if (!in.is_open()) {
-        strError = "Cannot open " + manifestPath.string();
-        return false;
-    }
-
-    manifest.format = 0;
-    manifest.network.clear();
-    manifest.height = -1;
-    manifest.hash.clear();
-    manifest.dbversion = 0;
-
-    std::string line;
-    while (std::getline(in, line)) {
-        line = TrimString(line);
-        if (line.empty() || line[0] == '#')
-            continue;
-
-        size_t eq = line.find('=');
-        if (eq == std::string::npos)
-            continue;
-
-        std::string key = line.substr(0, eq);
-        std::string val = line.substr(eq + 1);
-        key = TrimString(key);
-        val = TrimString(val);
-
-        if (key == "format")
-            manifest.format = std::atoi(val.c_str());
-        else if (key == "network")
-            manifest.network = val;
-        else if (key == "height")
-            manifest.height = std::atoi(val.c_str());
-        else if (key == "hash")
-            manifest.hash = val;
-        else if (key == "dbversion")
-            manifest.dbversion = std::atoi(val.c_str());
-        else if (key == "signature")
-            manifest.signature = val;
-    }
-    in.close();
-
-    if (manifest.format == 0) {
-        strError = "Manifest missing 'format' field";
-        return false;
-    }
-    if (manifest.network.empty()) {
-        strError = "Manifest missing 'network' field";
-        return false;
-    }
-    if (manifest.height < 0) {
-        strError = "Manifest missing or invalid 'height' field";
-        return false;
-    }
-    if (manifest.hash.empty()) {
-        strError = "Manifest missing 'hash' field";
-        return false;
-    }
-    if (manifest.dbversion == 0) {
-        strError = "Manifest missing 'dbversion' field";
-        return false;
-    }
-
-    return true;
-}
-
-bool VerifyManifest(const SnapshotManifest& manifest,
-                    std::string& strError)
-{
-    if (manifest.format != 1) {
-        strError = "Unsupported manifest format: " + std::to_string(manifest.format);
-        return false;
-    }
-
-    std::string expectedNetwork = fTestNet ? "test" : "main";
-    if (manifest.network != expectedNetwork) {
-        strError = "Network mismatch: manifest says '" + manifest.network
-                 + "', expected '" + expectedNetwork + "'";
-        return false;
-    }
-
-    if (manifest.dbversion != DATABASE_VERSION) {
-        strError = "DB version mismatch: manifest says "
-                 + std::to_string(manifest.dbversion)
-                 + ", binary expects " + std::to_string(DATABASE_VERSION);
-        return false;
-    }
-
-    uint256 manifestHash(manifest.hash);
-    if (manifestHash == 0) {
-        strError = "Invalid hash in manifest: " + manifest.hash;
-        return false;
-    }
-
-    if (!Checkpoints::IsKnownCheckpoint(manifest.height, manifestHash)) {
-        strError = "Height " + std::to_string(manifest.height)
-                 + " / hash " + manifest.hash
-                 + " is not a known checkpoint";
-        return false;
-    }
-
-    // ─── Signature verification (#11) ─────────────────────────────────────
-    // Legacy pre-built indexes are never accepted without authentication.
-    // This format is disabled below, but keep its verifier fail-closed so a
-    // future caller cannot silently revive the old trust behavior.
-    if (!manifest.signature.empty()) {
-        // Build the message that was signed: "height||hash" (ASCII)
-        std::string message = std::to_string(manifest.height) + "||" + manifest.hash;
-
-        // Decode the hex-encoded signature (64 bytes for Ed25519)
-        std::vector<unsigned char> sigBytes;
-        if (manifest.signature.size() != 128) {  // 64 bytes hex = 128 chars
-            strError = "Invalid signature length in manifest (expected 128 hex chars, got "
-                     + std::to_string(manifest.signature.size()) + ")";
-            return false;
-        }
-        for (size_t i = 0; i < manifest.signature.size(); i += 2) {
-            auto hexVal = [](char c) -> int {
-                if (c >= '0' && c <= '9') return c - '0';
-                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-                return -1;
-            };
-            int hi = hexVal(manifest.signature[i]);
-            int lo = hexVal(manifest.signature[i + 1]);
-            if (hi < 0 || lo < 0) {
-                strError = "Invalid hex in manifest signature";
-                return false;
-            }
-            sigBytes.push_back((hi << 4) | lo);
-        }
-
-        // Snapshot signing public key (Ed25519, 32 bytes).
-        // This is the public half of the key used to sign snapshots on the
-        // bootstrap server. The private key never leaves the build machine.
-        // To rotate: generate new keypair, update this constant, re-sign
-        // all snapshots, update manifest files.
-        static const unsigned char snapshotPubkey[32] = {
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-        };  // Placeholder: replace with actual pubkey when signing is deployed
-
-        // Use OpenSSL Ed25519 verification
-        EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
-        if (!mdctx) {
-            strError = "Failed to allocate EVP context for signature verification";
-            return false;
-        }
-
-        EVP_PKEY* pkey = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr,
-                                                      snapshotPubkey, 32);
-        if (!pkey) {
-            EVP_MD_CTX_free(mdctx);
-            strError = "Failed to load snapshot signing public key";
-            return false;
-        }
-
-        int rc = EVP_DigestVerifyInit(mdctx, nullptr, nullptr, nullptr, pkey);
-        if (rc != 1) {
-            EVP_PKEY_free(pkey);
-            EVP_MD_CTX_free(mdctx);
-            strError = "Failed to init signature verification";
-            return false;
-        }
-
-        rc = EVP_DigestVerify(mdctx,
-                              sigBytes.data(), sigBytes.size(),
-                              (const unsigned char*)message.data(), message.size());
-
-        EVP_PKEY_free(pkey);
-        EVP_MD_CTX_free(mdctx);
-
-        if (rc == 1) {
-            printf("Snapshot manifest signature VERIFIED\n");
-        } else if (rc == 0) {
-            strError = "Snapshot manifest signature INVALID — possible tampering detected";
-            return false;
-        } else {
-            strError = "Snapshot manifest signature verification error";
-            return false;
-        }
-    } else {
-        strError = "Snapshot manifest has no signature";
-        return false;
-    }
-
-    return true;
-}
-
-bool DownloadBootstrap(const std::string& host,
-                       const fs::path& dataDir,
-                       ProgressCallback progressFn,
-                       std::string& strError)
-{
-    (void)host;
-    (void)dataDir;
-    (void)progressFn;
-    strError = "Legacy file-list bootstrap is disabled; use a compiled-hash UTXO snapshot or sync from genesis";
-    return false;
-
-#if 0
-    bool gotBlockFile = false;
-
-    // FastImport removed (commit bdb7253). v2 UTXO snapshot is the ONLY
-    // supported sync path. Skip the legacy tarball fallback entirely so we
-    // never hit /triangles-bootstrap.tar.gz (404 since 2026-06-19 cleanup)
-    // or /tri-bootstrap.tar.gz (also gone; was the URL in the old filelist.txt).
-    // The remaining path below reads filelist.txt → downloads utxo-snapshot.bin.
-    const bool noProxy = true;
-
-    if (!gotBlockFile) {
-        // Try filelist.txt — should contain only utxo-snapshot.bin (v2).
-        std::string fallbackError;
-        std::vector<std::string> files;
-        if (!FetchFileList(host, files, fallbackError, noProxy)) {
-            strError = "filelist.txt unavailable: " + fallbackError;
-            return false;
-        }
-
-        for (size_t i = 0; i < files.size(); i++) {
-            fs::path destPath = dataDir / files[i];
-            fs::create_directories(destPath.parent_path());
-
-            std::string urlPath = std::string(BASE_PATH) + files[i];
-            if (!DownloadFile(host, urlPath, destPath, progressFn, strError, noProxy))
-                return false;
-        }
-
-        gotBlockFile = fs::exists(dataDir / "blk0001.dat");
-    }
-
-    if (!gotBlockFile) {
-        strError = "No blk0001.dat after download";
-        return false;
-    }
-
-    // Check if the archive included a trusted pre-built index for the active
-    // backend with a valid snapshot.manifest. If verified, keep it to skip the
-    // multi-hour rebuild (fast-import removed; UTXO snapshot is the only sync path).
-    fs::path chainDbPath = GetChainDataDir();
-    fs::path database  = dataDir / "database";
-    fs::path manifestPath = dataDir / "snapshot.manifest";
-
-    bool keepIndex = false;
-
-    if (fs::exists(manifestPath) && fs::exists(chainDbPath)) {
-        SnapshotManifest manifest;
-        std::string manifestError;
-
-        if (ParseManifest(manifestPath, manifest, manifestError)) {
-            printf("Bootstrap: snapshot.manifest found (format=%d, network=%s, "
-                   "height=%d, dbversion=%d)\n",
-                   manifest.format, manifest.network.c_str(),
-                   manifest.height, manifest.dbversion);
-
-            if (VerifyManifest(manifest, manifestError)) {
-                printf("Bootstrap: manifest verified - keeping pre-built index "
-                       "(height %d, checkpoint match)\n", manifest.height);
-                keepIndex = true;
-            } else {
-                printf("Bootstrap: manifest verification failed: %s\n",
-                       manifestError.c_str());
-            }
-        } else {
-            printf("Bootstrap: cannot parse snapshot.manifest: %s\n",
-                   manifestError.c_str());
-        }
-    }
-
-    if (!keepIndex) {
-        // No valid manifest or verification failed - delete the index.
-        // The block index will be rebuilt from the UTXO snapshot on next startup.
-        printf("Bootstrap: removing extracted %s/ (will rebuild index from blk0001.dat)\n",
-               GetChainDataDir().filename().string().c_str());
-        if (fs::exists(chainDbPath))
-            fs::remove_all(chainDbPath);
-    }
-
-    // Always remove BDB database/ dir (wallet environment from another machine)
-    if (fs::exists(database))
-        fs::remove_all(database);
-
-    // Clean up manifest file (not needed after verification)
-    if (fs::exists(manifestPath))
-        fs::remove(manifestPath);
-
-    return true;
-#endif
-}
-
-#if 0
-namespace {
-
-// Try to find the canonical UTXO snapshot entry in the bootstrap server's
-// manifest.json. Looks for an entry of type "utxo_snapshot" and extracts
-// its filename + expected SHA256. Returns true on success.
-//
-// We deliberately do a simple substring scan rather than full JSON parsing:
-// the manifest is operator-controlled, the format is stable, and adding a
-// JSON dependency for ~50 lines of code isn't worth it.
-//
-// On failure, the caller falls back to the legacy "utxo-snapshot.bin" URL,
-// which the bootstrap server symlinks to the canonical file.
-// Trusted signer addresses for snapshot manifests. A snapshot is accepted
-// iff its manifest's signing_address matches one of these AND its signature
-// verifies under Triangles' compact-message protocol.
-//
-// Design A: single-slot runtime override via RPC. The previous publisher
-// is dropped atomically on every set. The built-in fallback below is
-// always consulted if no runtime override is set, so a fresh daemon still
-// verifies old snapshots without operator intervention.
-
-// Built-in fallback (read-only, compiled in).
-static const char* BUILTIN_TRUSTED_SNAPSHOT_SIGNERS[] = {
-    "TG8f76yktTxDrT7JJymY3wVAusXiD3fVvX",  // Sami's legacy snapshot publisher key
-};
-static const size_t NUM_BUILTIN_TRUSTED_SNAPSHOT_SIGNERS =
-    sizeof(BUILTIN_TRUSTED_SNAPSHOT_SIGNERS) / sizeof(BUILTIN_TRUSTED_SNAPSHOT_SIGNERS[0]);
-
-// Runtime override. Empty string = no override, use built-in fallback.
-static std::string g_activeTrustedSnapshotPublisher;
-static std::mutex g_trustedPublisherMutex;
-static const char* SNAPSHOT_PUBLISHER_FILE = "snapshot-publisher.json";
-
-} // anonymous namespace (helpers above are file-private)
-
-// PUBLIC API — declared in bootstrap.h inside namespace Bootstrap.
-// These MUST NOT be inside an anonymous namespace or the linker can't
-// resolve Bootstrap::GetActiveTrustedSnapshotPublisher calls from
-// rpcblockchain.cpp / init.cpp. (PR #26 bug: left the anon-namespace
-// open across these definitions.)
-
-std::string GetActiveTrustedSnapshotPublisher()
-{
-    std::lock_guard<std::mutex> lock(g_trustedPublisherMutex);
-    return g_activeTrustedSnapshotPublisher;
-}
-
-static void SetActiveTrustedSnapshotPublisherUnlocked(const std::string& addr)
-{
-    g_activeTrustedSnapshotPublisher = addr;
-}
-
-// Load runtime override from <datadir>/snapshot-publisher.json.
-// Called once at startup from init.cpp.
-void LoadTrustedSnapshotPublisher()
-{
-    fs::path filePath = GetDataDir(true) / SNAPSHOT_PUBLISHER_FILE;
-    if (!fs::exists(filePath))
-        return;
-
-    std::ifstream f(filePath.string().c_str());
-    if (!f) return;
-
-    std::stringstream ss; ss << f.rdbuf();
-    std::string json = ss.str();
-
-    // Minimal JSON parse: "address":"<addr>"
-    size_t keyPos = json.find("\"address\"");
-    if (keyPos == std::string::npos) return;
-    size_t colonPos = json.find(':', keyPos);
-    if (colonPos == std::string::npos) return;
-    size_t q1 = json.find('"', colonPos);
-    if (q1 == std::string::npos) return;
-    size_t q2 = json.find('"', q1 + 1);
-    if (q2 == std::string::npos) return;
-
-    std::string addr = json.substr(q1 + 1, q2 - q1 - 1);
-    if (addr.size() != 34 || addr[0] != 'T') {
-        printf("Bootstrap: snapshot-publisher.json contains invalid address '%s', ignoring\n",
-               addr.c_str());
-        return;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(g_trustedPublisherMutex);
-        SetActiveTrustedSnapshotPublisherUnlocked(addr);
-    }
-    printf("Bootstrap: loaded trusted snapshot publisher override: %s\n", addr.c_str());
-}
-
-static bool PersistTrustedSnapshotPublisher(const std::string& addr)
-{
-    fs::path filePath = GetDataDir(true) / SNAPSHOT_PUBLISHER_FILE;
-    std::ofstream f(filePath.string().c_str(), std::ios::trunc);
-    if (!f) return false;
-    f << "{\n"
-      << "  \"address\": \"" << addr << "\",\n"
-      << "  \"set_at\": " << GetTime() << ",\n"
-      << "  \"note\": \"Set via triangles-cli settrustedv2snapshotpublisher. "
-      << "Replace atomically; previous publisher is dropped.\"\n"
-      << "}\n";
-    return f.good();
-}
-
-bool SetTrustedSnapshotPublisher(const std::string& addr, std::string& strError)
-{
-    if (addr.size() != 34 || addr[0] != 'T') {
-        strError = "settrustedv2snapshotpublisher: invalid address format (expected 34-char T-address)";
-        return false;
-    }
-    {
-        std::lock_guard<std::mutex> lock(g_trustedPublisherMutex);
-        SetActiveTrustedSnapshotPublisherUnlocked(addr);
-    }
-    if (!PersistTrustedSnapshotPublisher(addr)) {
-        strError = "settrustedv2snapshotpublisher: warning, could not persist to "
-                   "snapshot-publisher.json (in-memory change is live for this session)";
-        return true;
-    }
-    return true;
-}
-
-bool UnsetTrustedSnapshotPublisher(std::string& strError)
-{
-    {
-        std::lock_guard<std::mutex> lock(g_trustedPublisherMutex);
-        SetActiveTrustedSnapshotPublisherUnlocked(std::string());
-    }
-    fs::path filePath = GetDataDir(true) / SNAPSHOT_PUBLISHER_FILE;
-    fs::remove(filePath);
-    return true;
-}
-#endif
-
-// Re-enter anonymous namespace for the remaining file-private helpers.
-// (IsTrustedSnapshotSigner / VerifySignedMessage / ExtractJsonString are
-// not declared in bootstrap.h, so they don't need Bootstrap:: linkage.)
 
 namespace {
 
-#if 0
-bool IsTrustedSnapshotSigner(const std::string& addr)
-{
-    // 1. Runtime override (set via RPC).
-    {
-        std::lock_guard<std::mutex> lock(g_trustedPublisherMutex);
-        if (!g_activeTrustedSnapshotPublisher.empty() &&
-            addr == g_activeTrustedSnapshotPublisher)
-            return true;
-    }
-    // 2. Built-in fallback (compiled in, read-only).
-    for (size_t i = 0; i < NUM_BUILTIN_TRUSTED_SNAPSHOT_SIGNERS; ++i)
-        if (addr == BUILTIN_TRUSTED_SNAPSHOT_SIGNERS[i])
-            return true;
-    return false;
-}
-
-// Verify a Triangles signed-message compact signature. Returns true iff:
-//   - The address is valid
-//   - The signature is valid base64
-//   - The compact signature recovers to a public key whose hash160 matches
-//     the address's keyID
-//   - The hash being verified is Hash(strMessageMagic || message)
-//
-// Mirrors verifymessage RPC. Caller separately checks trust.
-bool VerifySignedMessage(const std::string& strAddress,
-                         const std::string& strSignatureB64,
-                         const std::string& strMessage,
-                         std::string& strError)
-{
-    CTrianglesAddress addr(strAddress);
-    if (!addr.IsValid()) {
-        strError = "Invalid signer address: " + strAddress;
-        return false;
-    }
-    CKeyID keyID;
-    if (!addr.GetKeyID(keyID)) {
-        strError = "Address does not refer to a key: " + strAddress;
-        return false;
-    }
-
-    bool fInvalid = false;
-    std::vector<unsigned char> vchSig = DecodeBase64(strSignatureB64.c_str(), &fInvalid);
-    if (fInvalid) {
-        strError = "Malformed base64 in signature";
-        return false;
-    }
-
-    CDataStream ss(SER_GETHASH, 0);
-    ss << strMessageMagic;
-    ss << strMessage;
-
-    CKey key;
-    if (!key.SetCompactSignature(Hash(ss.begin(), ss.end()), vchSig)) {
-        strError = "Signature does not verify (recovered key mismatch or malformed sig)";
-        return false;
-    }
-    if (key.GetPubKey().GetID() != keyID) {
-        strError = "Signature recovered to a different key than the claimed signer";
-        return false;
-    }
-    return true;
-}
-
-// Extract a string field value from a small JSON object (subset).
-std::string ExtractJsonString(const std::string& json, const std::string& field)
-{
-    std::string key = "\"" + field + "\"";
-    size_t pos = json.find(key);
-    if (pos == std::string::npos) return "";
-    pos += key.size();
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == ':' || json[pos] == '\t'))
-        pos++;
-    if (pos >= json.size() || json[pos] != '\"') return "";
-    pos++;
-    size_t end = json.find('\"', pos);
-    if (end == std::string::npos) return "";
-    return json.substr(pos, end - pos);
-}
-
-bool FindCanonicalSnapshotInManifest(const std::string& manifestText,
-                                     std::string& outFilename,
-                                     std::string& outSha256,
-                                     std::string& outManifestFilename,
-                                     std::string& strError)
-{
-    // Look for the "utxo_snapshot" file entry, e.g.:
-    //   "utxo-snapshot-2207680.utx": {
-    //     ...
-    //     "type": "utxo_snapshot",
-    //     "sha256": "eeefe107...",
-    //     ...
-    //   }
-    size_t typePos = manifestText.find("\"utxo_snapshot\"");
-    if (typePos == std::string::npos) {
-        strError = "manifest.json has no utxo_snapshot entry";
-        return false;
-    }
-
-    // Walk backwards from the typePos to find the start of this file's block.
-    // Format: "filename": { ... "type": "utxo_snapshot" ...
-    // We scan for the nearest preceding '"' followed by ':' that introduces a
-    // top-level file entry. Simple heuristic: find the line containing the
-    // type marker, then search backwards for the file key.
-    size_t entryStart = manifestText.rfind('"', typePos);
-    if (entryStart == std::string::npos || entryStart == 0) {
-        strError = "malformed manifest.json (no filename before utxo_snapshot entry)";
-        return false;
-    }
-    // Skip the opening quote
-    size_t filenameStart = entryStart + 1;
-    size_t filenameEnd = manifestText.find('"', filenameStart);
-    if (filenameEnd == std::string::npos) {
-        strError = "malformed manifest.json (unterminated filename)";
-        return false;
-    }
-    outFilename = manifestText.substr(filenameStart, filenameEnd - filenameStart);
-
-    // Within this block, extract the sha256.
-    // Walk forward from the typePos to find the matching closing brace of the
-    // entry. (Manifest is shallow, so a naive brace-count is fine.)
-    size_t braceStart = manifestText.find('{', filenameEnd);
-    if (braceStart == std::string::npos) {
-        strError = "malformed manifest.json (no body after filename)";
-        return false;
-    }
-    int depth = 0;
-    size_t bodyEnd = braceStart;
-    for (size_t i = braceStart; i < manifestText.size(); ++i) {
-        if (manifestText[i] == '{') depth++;
-        else if (manifestText[i] == '}') {
-            depth--;
-            if (depth == 0) { bodyEnd = i; break; }
-        }
-    }
-    if (depth != 0) {
-        strError = "malformed manifest.json (unbalanced braces in entry)";
-        return false;
-    }
-    std::string entry = manifestText.substr(braceStart, bodyEnd - braceStart);
-
-    size_t shaPos = entry.find("\"sha256\"");
-    if (shaPos == std::string::npos) {
-        strError = "manifest entry has no sha256 field";
-        return false;
-    }
-    size_t valStart = entry.find('"', shaPos + 8);
-    if (valStart == std::string::npos) {
-        strError = "malformed manifest.json (no sha256 value)";
-        return false;
-    }
-    valStart++;
-    size_t valEnd = entry.find('"', valStart);
-    if (valEnd == std::string::npos) {
-        strError = "malformed manifest.json (unterminated sha256 value)";
-        return false;
-    }
-    outSha256 = entry.substr(valStart, valEnd - valStart);
-
-    // Extract manifest filename (optional).
-    outManifestFilename.clear();
-    size_t manPos = entry.find("\"manifest\"");
-    if (manPos != std::string::npos) {
-        size_t mvStart = entry.find('\"', manPos + 10);
-        if (mvStart != std::string::npos) {
-            mvStart++;
-            size_t mvEnd = entry.find('\"', mvStart);
-            if (mvEnd != std::string::npos)
-                outManifestFilename = entry.substr(mvStart, mvEnd - mvStart);
-        }
-    }
-
-    return true;
-}
-#endif
 
 // Read an entire file into a string. Empty string on error.
+// Uses Bootstrap::ReadFileToMemory (file-scope, _wfopen on Windows) so
+// non-ASCII paths are handled correctly on Windows.
 std::string ReadFileToString(const fs::path& path)
 {
-    FILE* f = fopen(path.string().c_str(), "rb");
-    if (!f) return "";
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    if (sz < 0) { fclose(f); return ""; }
-    fseek(f, 0, SEEK_SET);
-    std::string s(sz, '\0');
-    size_t nread = fread(&s[0], 1, sz, f);
-    s.resize(nread);
-    fclose(f);
+    std::string s;
+    if (!ReadFileToMemory(path, s)) return "";
     return s;
 }
 
 // Compute the SHA256 of a file, return as lowercase hex string.
+// Streams the file in 64 KiB chunks so we never need to hold the whole
+// snapshot in memory (snapshots can be up to 4 GiB). Uses _wfopen on
+// Windows for non-ASCII path support. Returns empty string on any error
+// (open, read, or close failure).
 std::string Sha256OfFile(const fs::path& path)
 {
-    FILE* f = fopen(path.string().c_str(), "rb");
+    FILE* f = nullptr;
+#ifdef WIN32
+    f = _wfopen(path.wstring().c_str(), L"rb");
+#else
+    f = fopen(path.string().c_str(), "rb");
+#endif
     if (!f) return "";
     SHA256_CTX ctx;
     SHA256_Init(&ctx);
     unsigned char buf[64 * 1024];
     size_t n;
+    bool readOk = true;
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
         SHA256_Update(&ctx, buf, n);
-    fclose(f);
+    if (ferror(f)) readOk = false;
+    if (fclose(f) != 0) readOk = false;
+    if (!readOk) return "";
     unsigned char out[SHA256_DIGEST_LENGTH];
     SHA256_Final(out, &ctx);
     static const char hex[] = "0123456789abcdef";
-    std::string s(SHA256_DIGEST_LENGTH * 2, '0');
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
-        s[2*i]     = hex[(out[i] >> 4) & 0xF];
-        s[2*i + 1] = hex[out[i] & 0xF];
+    std::string hexStr(SHA256_DIGEST_LENGTH * 2, '0');
+    for (size_t i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
+        hexStr[2*i]     = hex[(out[i] >> 4) & 0x0F];
+        hexStr[2*i + 1] = hex[out[i] & 0x0F];
     }
-    return s;
+    return hexStr;
 }
 
 } // anonymous namespace

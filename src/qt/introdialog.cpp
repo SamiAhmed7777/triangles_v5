@@ -17,11 +17,27 @@
 #include <QCheckBox>
 #include <QApplication>
 
-#include <filesystem>
-
 #include <cstdio>
 #include <ctime>
 #include <set>
+
+#include <filesystem>
+
+namespace fs = std::filesystem;
+
+// Convert QString to fs::path preserving non-ASCII characters on Windows.
+// On Windows, QString::toStdString() returns UTF-8 but std::filesystem::path
+// constructed from a narrow string then uses the ANSI code page, which
+// mangles UTF-8 paths. QString::toStdWString() + fs::path(std::wstring)
+// preserves them. On non-Windows platforms the UTF-8 path is correct.
+static fs::path qstringToPath(const QString& s)
+{
+#ifdef WIN32
+    return fs::path(std::wstring(s.toStdWString()));
+#else
+    return fs::path(s.toStdString());
+#endif
+}
 
 IntroDialog::IntroDialog(QWidget *parent) :
     QDialog(parent)
@@ -157,7 +173,7 @@ void IntroDialog::on_defaultRadio_toggled(bool checked)
 void IntroDialog::updateFreeSpace()
 {
     QString path = getDataDirectory();
-    std::filesystem::path fsPath(path.toStdString());
+    std::filesystem::path fsPath = qstringToPath(path);
 
     // Walk up to find an existing parent
     try {
@@ -216,14 +232,18 @@ bool IntroDialog::pickDataDirectory()
     }
 
     // If the saved path is the default, don't set -datadir (let normal defaults work)
-    QString defaultDir = QString::fromStdString(GetDefaultDataDir().string());
+    QString defaultDir = QString::fromStdString(
+        std::string(GetDefaultDataDir().u8string()));
     if (dataDir != defaultDir) {
-        mapArgs["-datadir"] = dataDir.toStdString();
+        // Pass the data dir to the daemon as UTF-8 bytes so a non-ASCII path
+        // on Windows isn't mangled by the ANSI code page (path::string() does
+        // that). The daemon side uses fs::u8path() to convert back.
+        mapArgs["-datadir"] = std::string(qstringToPath(dataDir).u8string());
     }
 
     // Ensure the directory exists
     try {
-        fs::create_directories(fs::path(dataDir.toStdString()));
+        fs::create_directories(qstringToPath(dataDir));
     } catch (const fs::filesystem_error &) {
         QMessageBox::critical(0, "Triangles",
             QString("Error: Could not create data directory \"%1\".").arg(dataDir));
@@ -232,7 +252,7 @@ bool IntroDialog::pickDataDirectory()
 
     // Auto-bootstrap: if no blockchain data exists, download automatically.
     // If data exists, offer optional re-download (unless user checked "don't ask again").
-    fs::path dataDirPath(dataDir.toStdString());
+    fs::path dataDirPath = qstringToPath(dataDir);
     bool needsBootstrap = Bootstrap::NeedsBootstrap(dataDirPath);
     bool userWantsBootstrap = false;
     // Captured local-load error from the staged-snapshot probe below, surfaced
@@ -429,21 +449,17 @@ bool IntroDialog::pickDataDirectory()
             QApplication::processEvents();
         };
 
-        // Try the fast UTXO snapshot path first (matches daemon behavior in init.cpp).
-        // The legacy DownloadBootstrap() is hard-disabled in bootstrap.cpp — it always
-        // returns false with "Legacy file-list bootstrap is disabled". Calling it here
-        // would make the GUI wallet unable to bootstrap a fresh install.
+        // Try the fast UTXO snapshot path. The GUI has already probed the data
+        // dir for a staged utxo-snapshot.bin above; if that didn't find one,
+        // DownloadUtxoSnapshot is the canonical HTTPS path to the bootstrap
+        // server. TLS validation is now handled in bootstrap.cpp's StartTLS
+        // via a layered trust store (exedir cacert.pem → system → embedded
+        // ISRG roots), so this should succeed on Windows GUI builds where the
+        // Qt-bundled libssl-3-x64.dll ships without a default cert path.
         std::string utxoError;
         bool success = Bootstrap::DownloadUtxoSnapshot(host, dataDirPath, progressFn, utxoError);
         if (!success) {
-            // Fall back to legacy bootstrap path (will fail with "disabled" error, but
-            // surfaces the real error if the snapshot path had a different failure).
-            std::string legacyError;
-            if (Bootstrap::DownloadBootstrap(host, dataDirPath, progressFn, legacyError)) {
-                success = true;
-            } else {
-                strError = "UTXO snapshot: " + utxoError + " | Legacy: " + legacyError;
-            }
+            strError = utxoError;
         }
         if (!success) {
             // The TLS-detection strings are matched against the standard error
@@ -509,8 +525,8 @@ bool IntroDialog::migrateDataDirectory(const QString& oldPath, const QString& ne
 {
     namespace fs = std::filesystem;
 
-    fs::path srcDir(oldPath.toStdString());
-    fs::path dstDir(newPath.toStdString());
+    fs::path srcDir = qstringToPath(oldPath);
+    fs::path dstDir = qstringToPath(newPath);
 
     if (!fs::exists(srcDir) || !fs::is_directory(srcDir))
         return false;
