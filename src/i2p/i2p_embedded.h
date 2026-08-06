@@ -7,6 +7,8 @@
 
 #include <string>
 #include <atomic>
+#include <mutex>
+#include <thread>
 
 // Cross-platform socket handle for SAM v3 streaming API.
 // On Windows this is the native SOCKET type; on POSIX it is int (fd).
@@ -92,11 +94,40 @@ private:
     int samPort;            // i2pd SAM bridge port (for SAM v3 protocol)
     int serverPort;         // Triangles P2P listen port (for incoming I2P connections)
     std::string i2pDataDir; // i2pd data directory (under wallet datadir)
+    // Hostname and discovery-error cache are read by the Qt UI thread
+    // (qt/trianglesgui.cpp:1875 updateI2PAddress) on every 5s timerI2P
+    // tick and written by the bootstrap thread. Mutex-guarded to avoid
+    // a C++ data race on the std::string itself.
+    mutable std::mutex hostnameMutex;
     std::string i2pHostname; // Our .b32.i2p address (available after router startup)
     std::string lastError;
     // I2P bootstrap runs in a background thread; we keep the handle so Stop()
     // can join it. (A detached thread that is still running blocks process exit.)
     std::thread routerThread;
+
+    // Server-tunnel destination discovery.
+    //
+    // Scans the live server tunnel registry (i2p::client::context
+    // ::GetServerTunnels()) for an entry whose ident hash matches the
+    // public key in triangles-p2p-keys.dat. Sets i2pHostname to the
+    // corresponding ".b32.i2p" address on success; leaves i2pHostname
+    // empty otherwise. Thread-safe: the registry scan is mutex-guarded
+    // inside libi2pd_client; we only read the resulting map.
+    //
+    // This is a no-op when serverPort == 0 (no inbound server tunnel
+    // configured — pure outbound SOCKS I2P mode).
+    //
+    // Idempotent. Called from the bootstrap thread AND from
+    // GetI2PAddress() when i2pHostname is empty, so the Qt timerI2P
+    // (qt/trianglesgui.cpp:384-387) picks up the result on its next
+    // 5s tick once the tunnel registers.
+    void DiscoverServerTunnelDestination();
+
+    // Cache the most recent discovery failure reason (parsed keys-file
+    // hash, registry-read error, etc.). Visible only to GetStartupError()
+    // callers in the header — no public accessor for lastDiscoveryError
+    // is needed today.
+    std::string lastDiscoveryError;
 
 public:
     static CI2PEmbedded* GetInstance();
@@ -121,8 +152,11 @@ public:
     int GetServerPort() const { return serverPort; }
     const std::string& GetDataDir() const { return i2pDataDir; }
 
-    // Get our .b32.i2p destination address
-    std::string GetI2PAddress() const { return i2pHostname; }
+    // Get our .b32.i2p destination address. Triggers a discovery retry
+    // if the hostname is empty (e.g. first attempt raced the tunnel
+    // registration). Idempotent and cheap when the hostname is already
+    // populated.
+    std::string GetI2PAddress();
     std::string GetStartupError() const { return lastError; }
     void SetStartupError(const std::string& value) { lastError = value; }
 
