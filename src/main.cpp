@@ -2667,19 +2667,25 @@ bool static Reorganize(CTxDBBase& txdb, CBlockIndex* pindexNew)
     // the pointer is NULL. In that state we still know the *height* of
     // the checkpoint from the compiled map directly — every node built
     // from the same binary sees the same value — and we use it as the
-    // fail-closed floor. Without this second path, an IBD-time reorg
-    // attempt below the compiled checkpoint height would silently slip
-    // through the guard.
+    // fail-closed floor.
+    //
+    // Boundary: reject only when pfork->nHeight < nHardenedCheckpointHeight.
+    // A reorg whose fork point EQUALS the checkpoint height preserves the
+    // checkpoint block (which both chains share) and only replaces blocks
+    // AFTER the checkpoint. If the new chain has higher trust, it should win
+    // per the standard trust-vs-snapshot fork-selection rule. Rejecting such
+    // a reorg would cause honest nodes that observed different height-2,172,038
+    // blocks to remain split forever even when they agree on the checkpoint.
     int nHardenedCheckpointHeight = -1;
     if (pindexLastHardenedCheckpoint)
         nHardenedCheckpointHeight = pindexLastHardenedCheckpoint->nHeight;
     else
         nHardenedCheckpointHeight = Checkpoints::GetLastCheckpointHeight();
-    if (nHardenedCheckpointHeight >= 0 && pfork->nHeight <= nHardenedCheckpointHeight)
+    if (nHardenedCheckpointHeight >= 0 && pfork->nHeight < nHardenedCheckpointHeight)
     {
-        printf("REORGANIZE: REJECTED — fork point %d is at or below shared hardened checkpoint %d\n",
+        printf("REORGANIZE: REJECTED — fork point %d is below shared hardened checkpoint %d\n",
             pfork->nHeight, nHardenedCheckpointHeight);
-        return error("Reorganize() : fork point %d at or below shared hardened checkpoint %d",
+        return error("Reorganize() : fork point %d below shared hardened checkpoint %d",
             pfork->nHeight, nHardenedCheckpointHeight);
     }
 

@@ -680,11 +680,11 @@ BOOST_AUTO_TEST_CASE(reorg_guard_fails_closed_when_checkpoint_pointer_null)
     BOOST_CHECK(src.find("nHardenedCheckpointHeight = Checkpoints::GetLastCheckpointHeight()")
                 != std::string::npos);
 
-    // (c) The guard fires for any fork point at or below the resolved
+    // (c) The guard fires for any fork point strictly below the resolved
     //     checkpoint height — independent of whether the resolution came
     //     from the pointer or the compiled map. The literal pattern that
-    //     matters is `pfork->nHeight <= nHardenedCheckpointHeight`.
-    BOOST_CHECK(src.find("pfork->nHeight <= nHardenedCheckpointHeight")
+    //     matters is `pfork->nHeight < nHardenedCheckpointHeight`.
+    BOOST_CHECK(src.find("pfork->nHeight < nHardenedCheckpointHeight")
                 != std::string::npos);
 
     // (d) The old guard pattern that short-circuited on the null pointer
@@ -699,40 +699,49 @@ BOOST_AUTO_TEST_CASE(reorg_guard_fails_closed_when_checkpoint_pointer_null)
 // ─── Off-by-one hardening: guard operator + bootstrap boundary semantics ──
 // Adversarial review (Codex round 3 on 6116cff) flagged that the source-grep
 // test reorg_guard_fails_closed_when_checkpoint_pointer_null could let through
-// a future refactor that weakens the boundary (e.g., changing `<=` to `<`)
+// a future refactor that weakens the boundary (e.g., changing `<` to `<=`)
 // or splits the guard across files. This test pins:
-//   (i) the operator used by the guard (must be `<=`),
+//   (i) the operator used by the guard (must be `<`),
 //  (ii) the runtime return value of Checkpoints::GetLastCheckpointHeight()
 //       against the actual compiled map (must equal the highest compiled
 //       checkpoint height),
-// (iii) that the literal RejectReason message uses the "at or below" wording
-//       (matches `<=`).
+// (iii) that the literal RejectReason message uses the "below" wording
+//       (matches `<`).
+//
+// Cycle-33 update: the operator is now strict `<` (not `<=`). Reason: a fork
+// whose common ancestor EQUALS the checkpoint height preserves the checkpoint
+// block (which both chains share) and only replaces blocks AFTER the
+// checkpoint. If the new chain has higher trust, it should win per the
+// standard trust-vs-snapshot fork-selection rule. Rejecting such a reorg
+// would cause honest nodes that observed different height-(checkpoint+1) blocks
+// to remain split forever even when they agree on the checkpoint.
 BOOST_AUTO_TEST_CASE(reorg_guard_offbyone_hardening)
 {
-    // (i) The guard predicate uses `<=`, NOT `<` or `>=`.
-    //     A regression that introduced `pfork->nHeight < nHardenedCheckpointHeight`
-    //     would let a fork exactly at the checkpoint height through.
+    // (i) The guard predicate uses `<`, NOT `<=` or `>=`.
+    //     A regression that introduced `pfork->nHeight <= nHardenedCheckpointHeight`
+    //     would cause a permanent chain split when honest nodes see different
+    //     height-(checkpoint+1) blocks.
     std::string src = readEntireFile("src/main.cpp");
     BOOST_REQUIRE(!src.empty());
-    BOOST_CHECK(src.find("pfork->nHeight <= nHardenedCheckpointHeight")
-                != std::string::npos);
     BOOST_CHECK(src.find("pfork->nHeight < nHardenedCheckpointHeight")
+                != std::string::npos);
+    BOOST_CHECK(src.find("pfork->nHeight <= nHardenedCheckpointHeight")
                 == std::string::npos);
     BOOST_CHECK(src.find("pfork->nHeight >= nHardenedCheckpointHeight")
                 == std::string::npos);
 
-    // (iii) The reject message wording matches `<=` ("at or below").
-    BOOST_CHECK(src.find("\"REORGANIZE: REJECTED — fork point %d is at or below")
+    // (iii) The reject message wording matches `<` ("below").
+    BOOST_CHECK(src.find("\"REORGANIZE: REJECTED — fork point %d is below")
                 != std::string::npos);
 
     // (ii) Runtime: GetLastCheckpointHeight() returns the highest compiled
     //      checkpoint height on mainnet. Verified against the actual binary.
     int nCompiled = Checkpoints::GetLastCheckpointHeight();
     BOOST_CHECK(nCompiled > 0);  // sanity: compiled map populated
-    // Must equal the highest key in the compiled map (2224763 as of v6.2.6.0;
+    // Must equal the highest key in the compiled map (2172037 as of cycle-33;
     // this assertion locks the value at the time the binary was built, so
     // a regression that drops a checkpoint would also fail here).
-    BOOST_CHECK_EQUAL(nCompiled, 2224763);
+    BOOST_CHECK_EQUAL(nCompiled, 2172037);
 }
 
 // ─── Duplicate-guard detection: variable referenced only in allowed files ─

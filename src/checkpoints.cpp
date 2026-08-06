@@ -35,49 +35,28 @@ namespace Checkpoints
                 // Recent finality pin (PoS era). Closes the long unchecked span from
                 // 17650 to the live tip so stale-bootstrap / low-trust forks below
                 // this height are rejected outright. Hash from the canonical chain.
-                { 2205000, uint256("0x6bdd3c5e5a32e1dd9a70e705f1a28d1dd84929f89579bd2696d41bc87f39446f")},
-                { 2206004, uint256("0xb34e8e6a7bb7f52167d81aaad4d26f87a876898fdd0fce860916fc1aaf9a2a46")},
-                // Continuous finality pins: every 1000 blocks from 2206500 onward so the
-                // gap between the last hardcoded checkpoint and the live tip stays bounded.
-                // Without these, a fresh node syncing from zero (no snapshot) has 8,400+
-                // unverified blocks at tip — a peer feeding fork blocks at those heights
-                // could trick an IBD node into accepting a divergent chain. With these
-                // pins, any divergence >1000 blocks is rejected at AcceptBlock time.
-                // All hashes verified against the canonical chain on 2026-07-01.
-                { 2206500, uint256("0x707ea288242227e9b36ceeeecd5a16a6c918f8b6f7e6375128cba908ebfcbf27")},
-                { 2207000, uint256("0x7af1cc23fdffb3a9ed2eb9aa5a8697e8af2f98c67c4f6baa9f4d7899cbfaf4ca")},
-                { 2210000, uint256("0xe2dc2e55c6e1b3d2ea9d8a1f2b274bf64053ddd6a61335dc6896aa9c056956be")},
-                { 2211000, uint256("0x61c8a179c928a1f0bbffa029b4f1aea67b04a98227a6d02e6137280404ed29dc")},
-                { 2212000, uint256("0xf4df2b5d0d1de326b97ed5a3eeefef307a51791e03af401373e142f00453a9a8")},
-                { 2213000, uint256("0x7bc9652d423676c52ba8b0a287e0b46e1eca6e8eecc51d3f30e0d665d3b236f5")},
-                { 2214000, uint256("0x17e61ceb45db36358aaabe91b094a77ecba32370a467185fa9af75eef6c8e414")},
-                { 2214400, uint256("0x8ebb818f7280850c5a3916b7c8a2bca603f7c4f9926d3cdc2262f726035d96ed")},
-                // Post-rebuild finality pin (v6.2.5.0). Closes the gap between
-                // the last hardcoded checkpoint and the live tip after -rebuildutxo.
-                // Hash from the canonical chain on DNS2 after fresh UTXO rebuild.
-                { 2219922, uint256("0x9ed3e1d38317950927f37f2867e3fc29e239fc1f4c57b182f55c6e04b73b52ec")},
-                // Live-tip finality pins (v6.2.6.0). Verified against DNS3 chain state
-                // on 2026-08-04. Closes the 4,841-block unchecked span between the
-                // last hardcoded pin (2,219,922) and the live tip (2,224,763).
-                // All hashes verified against the canonical chain on DNS3 (running
-                // v6.2.3.0-geb02f34) at block 2,224,763. Verification transcript
-                // (DNS3 getblockhash output) is archived in the v6.2.6.0 release
-                // notes on bootstrap.cryptographic-triangles.org.
-//
-// Note: the gap from 2,219,922 to 2,222,900 is 2,978 blocks (larger than the
-                // 1,000-block standard spacing), because block 2,220,000 etc. were
-                // not indexed in DNS3's local block index when this release was
-                // prepared. The 2,222,900+ pins restore the 1,000-block spacing
-                // guarantee from that point to the live tip.
-                { 2222900, uint256("0xe104c29d6a6ff983d9a02a9854a86c221a1f400f0116cb255cee2b8d5c7ced9f")},
-                { 2223000, uint256("0x41926ba6dc9147e361ffd1ffc1a0357d7d7b66550ed05864d1ae103c6332371a")},
-                { 2223500, uint256("0x998e65941f200359ca0c1f53ea128c27f83111e8bbb1db38b7ed2ed7a48b8e32")},
-                { 2223700, uint256("0x97d3a70d258c34429c15b430e654fa1270e4de635ecec3c72ace92a0d04679c3")},
-                { 2224000, uint256("0x4dddc0b555266a1207fef70af17db9a7b14ab5e1d7cf27882ea35cc77923841f")},
-                { 2224500, uint256("0xe0fea543829dd0e8c02b7c657468cff775c7993658c16c1feaf1418b4080ba27")},
-                { 2224700, uint256("0x2a8ea5ef954adb707286bc468fdf43d8d99d23a1d15cf4f17a35d58dd51b0944")},
-                { 2224750, uint256("0x0f117fe05befb6d8a93c6e45bc3b3d48889208e2785ba6a3d723c8ad7c9d649f")},
-                { 2224763, uint256("0x9d3575ac5428e64911e698ba0a8f773954b17b214a044d4b244fa2ec83c06674")}, // live tip
+                // Operator rollback canonical (cycle-32, 2026-08-06): the chain was
+                // rolled back to height 2,172,037 (hash 52b12f09...) so the entire
+                // span 2,172,038..2,224,763 no longer exists on the canonical chain.
+                // All pins from 2,205,000..2,224,763 have been REMOVED from the map
+                // (NOT preserved). Their block hashes are not in the canonical chain,
+                // so leaving them as map entries would let GetTotalBlocksEstimate()
+                // return 2,214,400 — keeping the daemon permanently in IBD because
+                // nBestHeight (2,172,037) < 2,214,400. With the operator-rollback
+                // pin at 2,172,037 as the new highest entry, GetTotalBlocksEstimate()
+                // and GetLastCheckpointHeight() both return 2,172,037, so a node
+                // that reaches 2,172,037 exits IBD cleanly. The pin at 17,650
+                // (line above) remains as the lowest anchored finality reference.
+                // Operator-rollback finality pin (cycle-33, 2026-08-06): the new
+                // canonical tip after the operator rollback to 2,172,037. Hash
+                // verified against all 4 fleet nodes (DNS2/DNS3/Hetzner/SAMI-PC)
+                // at canonical tip 2,172,037. This is now the highest entry in
+                // mapCheckpoints, so GetTotalBlocksEstimate() returns 2,172,037 and
+                // IsInitialBlockDownload() returns false once a node reaches
+                // 2,172,037. Closes the unchecked span between the prior highest
+                // pin (17,650) and the new canonical tip for any future
+                // fresh-from-zero sync.
+                { 2172037, uint256("0x52b12f0970191505d9982449875822b78f075d7d76307abed45e7132f5fa2f16")}, // new canonical tip
             };
 
     // Published UTXO snapshot file SHA256, keyed by snapshot height.
@@ -89,12 +68,17 @@ namespace Checkpoints
     // here. The corresponding (height, blockhash) must already exist in
     // mapCheckpoints / mapCheckpointsTestnet.
     static std::map<int, uint256> mapSnapshotHashes = {
-        { 2206004, uint256("0x1419282dae817315ee1b955543f6248233fe5800f5e8488734a0ece5bd6781ea")},
-        { 2219922, uint256("0x6dd8d782a04bb8dc4ccd5e88a4bc7726fe26bdebaed96b79242de1e2949b6ee6")},
-        // Live-tip snapshot (v6.2.6.0). Generated from DNS3 (Samihost) at the
-        // canonical tip 2,224,763, blockhash 9d3575ac...06674. Verified against
-        // the canonical chain on 2026-08-04.
-        { 2224763, uint256("0xa7ea62ad4e158faf07973e5cd1539c1895154c4e28685a3eb7af458a001037b7")},
+        // Historical snapshots preserved as documentation only. The canonical
+        // chain is now at 2,172,037 (operator rollback 2026-08-06). Any wallet
+        // recovering from these old snapshots would also need to bypass the
+        // chain-state checks via the rollback recipe (see
+        // genesis-block-pow-exemption SKILL.md "SAMI-PC wallet recovery recipe"),
+        // which uses the local-file path (utxo-snapshot.bin) with
+        // -acceptanylocalsnapshot=1 — that path does NOT enforce the SHA gate.
+        // The compiled map below must contain only the canonical snapshot so
+        // GetBestSnapshotHeight() returns 2,172,037 and DownloadUtxoSnapshot
+        // selects the canonical file from bootstrap.cryptographic-triangles.org.
+        { 2172037, uint256("0xfc3b2035525564156f2489e8929e132b75e9be285d9129ad21bc89ecdc4c7977")}, // canonical
     };
 
     static std::map<int, uint256> mapSnapshotHashesTestnet = {
