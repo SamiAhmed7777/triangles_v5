@@ -27,6 +27,7 @@
 #include <memory>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 
 
 using namespace std;
@@ -4145,14 +4146,31 @@ bool LoadExternalBlockFile(FILE* fileIn)
 
 bool FastImportBlockFile()
 {
-    // Fast block import: reads blk0001.dat and builds the block index
-    // directly without re-writing block data. LevelDB writes are batched
-    // every 200K blocks for speed. Only used for trusted bootstrap data
-    // (blocks below the hardcoded checkpoint).
+    // Explicit recovery importer: read the single raw block file used by this
+    // storage format and reconstruct all derived chain state without writing
+    // to blk0001.dat. The caller gates this behind -reindex.
 
     fs::path blkPath = GetDataDir() / "blk0001.dat";
     if (!fs::exists(blkPath))
         return false;
+
+    // LoadBlockIndex normally initializes these before opening the database.
+    // Reindex bypasses its genesis-creation path, so initialize the same
+    // network-specific framing and consensus parameters here.
+    if (fTestNet)
+    {
+        pchMessageStart[0] = 0x6f;
+        pchMessageStart[1] = 0x3e;
+        pchMessageStart[2] = 0x04;
+        pchMessageStart[3] = 0x13;
+        bnProofOfStakeLimit = bnProofOfStakeLimitTestNet;
+        bnProofOfWorkLimit = bnProofOfWorkLimitTestNet;
+        nStakeMinAge = 10 * 60;
+        nStakeMaxAge = 30 * 60;
+        nModifierInterval = 60;
+        nCoinbaseMaturity = 10;
+        nTargetSpacing = 60;
+    }
 
     printf("FastImportBlockFile: starting from %s\n", blkPath.string().c_str());
     int64_t nStart = GetTimeMillis();
@@ -4160,73 +4178,181 @@ bool FastImportBlockFile()
     FILE* fileIn = fopen(blkPath.string().c_str(), "rb");
     if (!fileIn)
         return false;
+    std::unique_ptr<FILE, int(*)(FILE*)> fileGuard(fileIn, &fclose);
 
     // Get file size for progress
-    fseek(fileIn, 0, SEEK_END);
+    if (fseek(fileIn, 0, SEEK_END) != 0)
+        return error("FastImportBlockFile: cannot seek to end of blk0001.dat");
     int64_t nFileSize = ftell(fileIn);
-    fseek(fileIn, 0, SEEK_SET);
+    if (nFileSize <= 0 || nFileSize > (int64_t)std::numeric_limits<unsigned int>::max() ||
+        fseek(fileIn, 0, SEEK_SET) != 0)
+        return error("FastImportBlockFile: blk0001.dat size is invalid or exceeds the 32-bit disk-position format");
 
     int nLoaded = 0;
-    int64_t nLastProgressReport = 0;
+    int nRootBlocks = 0;
+    int64_t nLastRecordEnd = 0;
+    const uint256 expectedGenesis = fTestNet ? hashGenesisBlockTestNet : hashGenesisBlockOfficial;
 
     {
         LOCK(cs_main);
-        CAutoFile blkdat(fileIn, SER_DISK, CLIENT_VERSION);
 
-        auto txdb_holder = MakeChainDB(); CTxDBBase& txdb = *txdb_holder;
-        txdb.TxnBegin();
+        auto txdb_holder = MakeChainDB("cr+"); CTxDBBase& txdb = *txdb_holder;
+        if (!txdb.TxnBegin())
+            return error("FastImportBlockFile: failed to begin database transaction");
 
-        unsigned int nPos = 0;
-        while (nPos != (unsigned int)-1 && blkdat.good() && !fRequestShutdown)
+        try
         {
-            // Find message start bytes (same scan as LoadExternalBlockFile)
-            unsigned char pchData[65536];
-            do {
-                fseek(blkdat, nPos, SEEK_SET);
-                int nRead = fread(pchData, 1, sizeof(pchData), blkdat);
-                if (nRead <= 8)
-                {
-                    nPos = (unsigned int)-1;
-                    break;
-                }
-                void* nFind = memchr(pchData, pchMessageStart[0], nRead+1-sizeof(pchMessageStart));
-                if (nFind)
-                {
-                    if (memcmp(nFind, pchMessageStart, sizeof(pchMessageStart))==0)
-                    {
-                        nPos += ((unsigned char*)nFind - pchData) + sizeof(pchMessageStart);
-                        break;
-                    }
-                    nPos += ((unsigned char*)nFind - pchData) + 1;
-                }
-                else
-                    nPos += sizeof(pchData) - sizeof(pchMessageStart) + 1;
-            } while(!fRequestShutdown);
+            // The entire import runs inside this try block. The catch below
+            // guarantees the in-flight transaction is explicitly aborted on
+            // any exception (allocation, database, validation, or otherwise)
+            // before propagating, so a partial commit cannot leak even if the
+            // inner error paths miss a TxnAbort. Each inner error path also
+            // aborts explicitly for clarity.
 
-            if (nPos == (unsigned int)-1)
-                break;
-
-            fseek(blkdat, nPos, SEEK_SET);
-            unsigned int nSize;
-            blkdat >> nSize;
-
-            if (nSize == 0 || nSize > MAX_BLOCK_SIZE)
+            unsigned int nPos = 0;
+            while ((int64_t)nPos < nFileSize && !fRequestShutdown)
+        {
+            // Strict contiguous framing: every record must begin exactly at
+            // nPos with network magic + declared payload size. Do not scan
+            // forward through garbage; recovery must prove the whole file.
+            if (nFileSize - nPos < (int64_t)(sizeof(pchMessageStart) + sizeof(uint32_t)))
             {
-                nPos += 4 + nSize;
-                continue;
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: truncated record header at file offset %u", nPos);
+            }
+            unsigned char recordMagic[sizeof(pchMessageStart)];
+            if (fseek(fileIn, nPos, SEEK_SET) != 0 ||
+                fread(recordMagic, 1, sizeof(recordMagic), fileIn) != sizeof(recordMagic) ||
+                memcmp(recordMagic, pchMessageStart, sizeof(recordMagic)) != 0)
+            {
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: invalid record magic at file offset %u", nPos);
             }
 
-            // nBlockPos = file position where the block data starts
-            // (after 4-byte message start + 4-byte size)
-            unsigned int nBlockPos = nPos + 4;
+            uint32_t nSize = 0;
+            if (fread(&nSize, sizeof(nSize), 1, fileIn) != 1)
+            {
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: cannot read block size at file offset %u", nPos);
+            }
+            if (nSize == 0 || nSize > MAX_BLOCK_SIZE)
+            {
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: invalid block size %u at file offset %u", nSize, nPos);
+            }
+            const int64_t payloadPos = (int64_t)nPos + sizeof(pchMessageStart) + sizeof(nSize);
+            if (payloadPos + nSize > nFileSize)
+            {
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: truncated block record at file offset %u", nPos);
+            }
 
+            std::vector<char> payload(nSize);
+            if (fread(payload.data(), 1, nSize, fileIn) != nSize)
+            {
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: short payload read at file offset %u", nPos);
+            }
+
+            const unsigned int nBlockPos = (unsigned int)payloadPos;
             CBlock block;
-            blkdat >> block;
+            try
+            {
+                CDataStream record(payload.data(), payload.data() + payload.size(),
+                                   SER_DISK, CLIENT_VERSION);
+                record >> block;
+                if (!record.empty())
+                {
+                    txdb.TxnAbort();
+                    return error("FastImportBlockFile: block payload has %" PRIszu " trailing bytes at file offset %u",
+                                 record.size(), nPos);
+                }
+            }
+            catch (const std::exception& e)
+            {
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: malformed block payload at file offset %u: %s",
+                             nPos, e.what());
+            }
+            catch (...)
+            {
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: unknown deserialization failure at file offset %u",
+                             nPos);
+            }
+
+            const unsigned int nRecordEnd = (unsigned int)(payloadPos + nSize);
+
+            // Reindex is optimized for trusted local history but must still
+            // apply every context-free block/transaction invariant before it
+            // can write derived state. Context-dependent chain validity is
+            // anchored below by exact genesis, parent continuity, cumulative
+            // trust selection, and all compiled hardened checkpoints.
+            //
+            // PoS block-signature verification follows the runtime rule:
+            //   - blocks above the newest compiled checkpoint must be
+            //     individually signed and chain-trust valid;
+            //   - blocks at or below the newest compiled checkpoint are
+            //     covered by the historical assume-valid fast path, which
+            //     is the same rule the daemon uses at runtime. We must NOT
+            //     apply the per-block signature check unconditionally,
+            //     because that policy change was deliberately added in
+            //     v6.x to prevent chain splits over the pre-checkpoint era.
+            if (!block.CheckBlock(true, true, false))
+            {
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: block failed context-free validation at file offset %u",
+                             nPos);
+            }
+            if (block.IsProofOfStake() && pindexBest->nHeight > Checkpoints::GetLastCheckpointHeight() &&
+                !block.CheckBlockSignature())
+            {
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: post-checkpoint block signature failure at file offset %u",
+                             nPos);
+            }
 
             uint256 hash = block.GetHash();
+            if (block.hashPrevBlock == 0)
+            {
+                // The expected network genesis is the very first record in the
+                // file (offset 0). The runtime rule is "blocks whose parent is
+                // zero are only the genesis", and any other record with a zero
+                // parent would corrupt the active chain, so reject anything
+                // that hashes to the genesis hash anywhere other than offset 0.
+                ++nRootBlocks;
+                if (hash == expectedGenesis)
+                {
+                    if (nPos != 0 || nRootBlocks != 1)
+                    {
+                        txdb.TxnAbort();
+                        return error("FastImportBlockFile: unexpected or duplicate genesis block %s at file offset %u",
+                                     hash.ToString().c_str(), nPos);
+                    }
+                }
+                else if (nPos == 0)
+                {
+                    txdb.TxnAbort();
+                    return error("FastImportBlockFile: first record is not the expected genesis block %s",
+                                 hash.ToString().c_str());
+                }
+                else
+                {
+                    // Stray root record (previous broken -reindex runs may have
+                    // appended a fresh genesis record to blk0001.dat). Skip it:
+                    // it has no parent, no chain trust, and would otherwise be
+                    // a false duplicate of genesis. Advance strictly so the
+                    // exact-file-consumed invariant still holds.
+                    nPos = nRecordEnd;
+                    nLastRecordEnd = nPos;
+                    nLoaded++;
+                    continue;
+                }
+            }
             if (mapBlockIndex.count(hash))
             {
-                nPos += 4 + nSize;
+                nPos = nRecordEnd;
+                nLastRecordEnd = nPos;
                 continue; // already indexed
             }
 
@@ -4242,6 +4368,31 @@ bool FastImportBlockFile()
                 pindexNew->pprev = miPrev->second;
                 pindexNew->nHeight = pindexNew->pprev->nHeight + 1;
             }
+            else if (block.hashPrevBlock != 0)
+            {
+                delete pindexNew;
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: parent %s missing before block %s",
+                             block.hashPrevBlock.ToString().c_str(), hash.ToString().c_str());
+            }
+
+            if (!Checkpoints::CheckHardened(pindexNew->nHeight, hash))
+            {
+                const int badHeight = pindexNew->nHeight;
+                delete pindexNew;
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: hardened checkpoint mismatch at height %d",
+                             badHeight);
+            }
+            if (pindexNew->nHeight > Checkpoints::GetLastCheckpointHeight() &&
+                !block.CheckBlockSignature())
+            {
+                const int badHeight = pindexNew->nHeight;
+                delete pindexNew;
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: post-checkpoint block signature failure at height %d",
+                             badHeight);
+            }
 
             // Chain trust
             pindexNew->nChainTrust = (pindexNew->pprev ? pindexNew->pprev->nChainTrust : 0) + pindexNew->GetBlockTrust();
@@ -4249,19 +4400,24 @@ bool FastImportBlockFile()
             // Stake entropy bit
             pindexNew->SetStakeEntropyBit(block.GetStakeEntropyBit());
 
-            // Stake modifier (minimal for blocks far below checkpoint)
-            int nCheckpointHeight = Checkpoints::GetTotalBlocksEstimate();
-            if (pindexNew->nHeight >= nCheckpointHeight - 1000)
+            // Recompute the exact historical stake-modifier chain. Every
+            // block must participate: using placeholder zero modifiers for
+            // older blocks leaves mature wallet UTXOs unable to resolve the
+            // later modifier required by CheckStakeKernelHash(). Reindex is
+            // an explicit recovery operation, so correctness takes priority
+            // over the old shortcut's speed.
+            uint64_t nStakeModifier = 0;
+            bool fGeneratedStakeModifier = false;
+            if (!ComputeNextStakeModifier(pindexNew->pprev,
+                                          nStakeModifier,
+                                          fGeneratedStakeModifier))
             {
-                uint64_t nStakeModifier = 0;
-                bool fGeneratedStakeModifier = false;
-                ComputeNextStakeModifier(pindexNew->pprev, nStakeModifier, fGeneratedStakeModifier);
-                pindexNew->SetStakeModifier(nStakeModifier, fGeneratedStakeModifier);
+                delete pindexNew;
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: failed to compute stake modifier for block %s",
+                             hash.ToString().c_str());
             }
-            else
-            {
-                pindexNew->SetStakeModifier(0, pindexNew->nHeight == 0);
-            }
+            pindexNew->SetStakeModifier(nStakeModifier, fGeneratedStakeModifier);
             pindexNew->nStakeModifierChecksum = GetStakeModifierChecksum(pindexNew);
 
             // PoS stake seen set
@@ -4272,9 +4428,9 @@ bool FastImportBlockFile()
             auto mi = mapBlockIndex.insert(make_pair(hash, pindexNew)).first;
             pindexNew->phashBlock = &mi->first;
 
-            // Link pnext for previous block
-            if (pindexNew->pprev)
-                pindexNew->pprev->pnext = pindexNew;
+            // pnext is rebuilt after best-chain selection. File order also
+            // contains side branches, so assigning it here would let the last
+            // imported child hijack stake-modifier forward walks.
 
             // NOTE: tx-index, UTXO-set and money-supply application are
             // DEFERRED to a second pass over the active (best-trust) chain
@@ -4285,7 +4441,12 @@ bool FastImportBlockFile()
             // That was the root cause of UTXO-set / supply inflation on every
             // reindex. Here we only build the block index for all blocks so
             // best-chain selection by trust still works.
-            txdb.WriteBlockIndex(CDiskBlockIndex(pindexNew));
+            if (!txdb.WriteBlockIndex(CDiskBlockIndex(pindexNew)))
+            {
+                txdb.TxnAbort();
+                return error("FastImportBlockFile: failed to write block index %s",
+                             hash.ToString().c_str());
+            }
 
             // Update best chain
             if (pindexNew->nChainTrust > nBestChainTrust)
@@ -4303,14 +4464,27 @@ bool FastImportBlockFile()
                 pindexGenesisBlock = pindexNew;
 
             nLoaded++;
-            nPos += 4 + nSize;
+            nPos = nRecordEnd;
+            nLastRecordEnd = nPos;
 
             // Batch commit every 200K blocks for LevelDB efficiency
             if (nLoaded % 200000 == 0)
             {
-                txdb.WriteHashBestChain(hashBestChain);
-                txdb.TxnCommit();
-                txdb.TxnBegin();
+                if (!txdb.WriteHashBestChain(hashBestChain))
+                {
+                    txdb.TxnAbort();
+                    return error("FastImportBlockFile: index batch WriteHashBestChain failed after %d blocks", nLoaded);
+                }
+                if (!txdb.TxnCommit())
+                {
+                    txdb.TxnAbort();
+                    return error("FastImportBlockFile: index batch TxnCommit failed after %d blocks", nLoaded);
+                }
+                if (!txdb.TxnBegin())
+                {
+                    txdb.TxnAbort();
+                    return error("FastImportBlockFile: index batch TxnBegin failed after %d blocks", nLoaded);
+                }
             }
 
             // Report progress every 5000 blocks to keep GUI responsive.
@@ -4324,6 +4498,42 @@ bool FastImportBlockFile()
             }
         }
 
+        if (fRequestShutdown)
+        {
+            txdb.TxnAbort();
+            return error("FastImportBlockFile: interrupted after %d blocks; reindex is incomplete", nLoaded);
+        }
+        if (nRootBlocks < 1 || nLastRecordEnd != nFileSize)
+        {
+            txdb.TxnAbort();
+            return error("FastImportBlockFile: block file was not consumed exactly (roots=%d end=%" PRId64 " size=%" PRId64 ")",
+                         nRootBlocks, nLastRecordEnd, nFileSize);
+        }
+        if (!pindexBest || !pindexGenesisBlock ||
+            pindexGenesisBlock->GetBlockHash() != expectedGenesis)
+        {
+            txdb.TxnAbort();
+            return error("FastImportBlockFile: no complete active chain found");
+        }
+
+        const int requiredCheckpointHeight = Checkpoints::GetLastCheckpointHeight();
+        CBlockIndex* requiredCheckpoint = Checkpoints::GetLastCheckpoint(mapBlockIndex);
+        if (requiredCheckpointHeight < 0 || !requiredCheckpoint ||
+            requiredCheckpoint->nHeight != requiredCheckpointHeight)
+        {
+            txdb.TxnAbort();
+            return error("FastImportBlockFile: selected chain does not reach the newest compiled checkpoint at height %d",
+                         requiredCheckpointHeight);
+        }
+        CBlockIndex* checkpointAncestor = pindexBest;
+        while (checkpointAncestor && checkpointAncestor->nHeight > requiredCheckpointHeight)
+            checkpointAncestor = checkpointAncestor->pprev;
+        if (checkpointAncestor != requiredCheckpoint)
+        {
+            txdb.TxnAbort();
+            return error("FastImportBlockFile: newest compiled checkpoint is not on selected active chain");
+        }
+
         // ---- Pass 2: apply tx-index, UTXO set and money supply along the
         // ACTIVE (best-trust) chain ONLY. The file-order pass above indexed
         // every block including orphaned side-chain blocks; replaying only
@@ -4335,6 +4545,15 @@ bool FastImportBlockFile()
             for (CBlockIndex* p = pindexBest; p; p = p->pprev)
                 vMain.push_back(p);
             std::reverse(vMain.begin(), vMain.end());
+
+            // File order includes side branches. Build pnext exclusively from
+            // the selected best-trust chain so kernel-modifier forward walks
+            // cannot follow whichever side-chain child appeared last.
+            for (const auto& item : mapBlockIndex)
+                item.second->pnext = nullptr;
+            for (size_t i = 1; i < vMain.size(); ++i)
+                vMain[i - 1]->pnext = vMain[i];
+
             printf("FastImportBlockFile: applying UTXO/supply along %d main-chain blocks...\n", (int)vMain.size());
             uiInterface.InitMessage(_("Building UTXO set (main chain)..."));
 
@@ -4342,6 +4561,13 @@ bool FastImportBlockFile()
             int nApplied = 0;
             for (CBlockIndex* pindex : vMain)
             {
+                if (fRequestShutdown)
+                {
+                    txdb.TxnAbort();
+                    return error("FastImportBlockFile: interrupted during active-chain replay at height %d",
+                                 pindex->nHeight);
+                }
+
                 // Genesis (height 0) is a hardcoded special block that is not
                 // re-read from disk this way; it contributes nothing to supply
                 // and the genesis-walk audit skips it identically. Carry the
@@ -4350,13 +4576,20 @@ bool FastImportBlockFile()
                 {
                     pindex->nMint = 0;
                     pindex->nMoneySupply = nRunningSupply; // still 0 here
-                    txdb.WriteBlockIndex(CDiskBlockIndex(pindex));
+                    if (!txdb.WriteBlockIndex(CDiskBlockIndex(pindex)))
+                    {
+                        txdb.TxnAbort();
+                        return error("FastImportBlockFile: failed to write genesis index");
+                    }
                     continue;
                 }
 
                 CBlock blockMain;
                 if (!blockMain.ReadFromDisk(pindex))
+                {
+                    txdb.TxnAbort();
                     return error("FastImportBlockFile: ReadFromDisk failed at height %d", pindex->nHeight);
+                }
 
                 int64_t nBlockValueIn = 0;
                 int64_t nBlockValueOut = 0;
@@ -4366,7 +4599,12 @@ bool FastImportBlockFile()
                 {
                     uint256 hashTx = tx.GetHash();
                     CDiskTxPos posThisTx(1, pindex->nBlockPos, nTxPos2);
-                    txdb.UpdateTxIndex(hashTx, CTxIndex(posThisTx, tx.vout.size()));
+                    if (!txdb.UpdateTxIndex(hashTx, CTxIndex(posThisTx, tx.vout.size())))
+                    {
+                        txdb.TxnAbort();
+                        return error("FastImportBlockFile: failed to write txindex %s",
+                                     hashTx.ToString().c_str());
+                    }
                     nTxPos2 += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
 
                     nBlockValueOut += tx.GetValueOut();
@@ -4375,9 +4613,20 @@ bool FastImportBlockFile()
                         for (const CTxIn& txin : tx.vin)
                         {
                             CUtxoEntry uprev;
-                            if (txdb.ReadUtxo(txin.prevout.hash, txin.prevout.n, uprev))
-                                nBlockValueIn += uprev.nValue;
-                            txdb.EraseUtxo(txin.prevout.hash, txin.prevout.n);
+                            if (!txdb.ReadUtxo(txin.prevout.hash, txin.prevout.n, uprev))
+                            {
+                                txdb.TxnAbort();
+                                return error("FastImportBlockFile: missing spent UTXO %s:%u at height %d",
+                                             txin.prevout.hash.ToString().c_str(), txin.prevout.n,
+                                             pindex->nHeight);
+                            }
+                            nBlockValueIn += uprev.nValue;
+                            if (!txdb.EraseUtxo(txin.prevout.hash, txin.prevout.n))
+                            {
+                                txdb.TxnAbort();
+                                return error("FastImportBlockFile: failed to erase spent UTXO %s:%u",
+                                             txin.prevout.hash.ToString().c_str(), txin.prevout.n);
+                            }
                         }
                     }
                     for (unsigned int k = 0; k < tx.vout.size(); k++)
@@ -4391,16 +4640,40 @@ bool FastImportBlockFile()
                         utxo.fCoinBase = tx.IsCoinBase();
                         utxo.fCoinStake = tx.IsCoinStake();
                         utxo.nTxTime = tx.nTime;
-                        txdb.WriteUtxo(hashTx, k, utxo);
+                        if (!txdb.WriteUtxo(hashTx, k, utxo))
+                        {
+                            txdb.TxnAbort();
+                            return error("FastImportBlockFile: failed to write UTXO %s:%u",
+                                         hashTx.ToString().c_str(), k);
+                        }
                     }
                 }
 
                 pindex->nMint = nBlockValueOut - nBlockValueIn;
                 nRunningSupply += (nBlockValueOut - nBlockValueIn);
                 pindex->nMoneySupply = nRunningSupply;
-                txdb.WriteBlockIndex(CDiskBlockIndex(pindex));
+                if (!txdb.WriteBlockIndex(CDiskBlockIndex(pindex)))
+                {
+                    txdb.TxnAbort();
+                    return error("FastImportBlockFile: failed to update active block index at height %d",
+                                 pindex->nHeight);
+                }
 
-                if (++nApplied % 200000 == 0) { txdb.TxnCommit(); txdb.TxnBegin(); }
+                if (++nApplied % 200000 == 0)
+                {
+                    if (!txdb.TxnCommit())
+                    {
+                        txdb.TxnAbort();
+                        return error("FastImportBlockFile: active-chain batch TxnCommit failed at height %d",
+                                     pindex->nHeight);
+                    }
+                    if (!txdb.TxnBegin())
+                    {
+                        txdb.TxnAbort();
+                        return error("FastImportBlockFile: active-chain batch TxnBegin failed at height %d",
+                                     pindex->nHeight);
+                    }
+                }
                 if (nApplied % 5000 == 0)
                 {
                     int pct2 = (int)((int64_t)nApplied * 100 / (vMain.empty() ? 1 : vMain.size()));
@@ -4411,14 +4684,43 @@ bool FastImportBlockFile()
         }
 
         // Final commit
-        if (pindexBest)
+        if (fRequestShutdown)
         {
-            txdb.WriteHashBestChain(hashBestChain);
-
-            // Write sync checkpoint
-            Checkpoints::WriteSyncCheckpoint(hashBestChain);
+            txdb.TxnAbort();
+            return error("FastImportBlockFile: interrupted before final commit");
         }
-        txdb.TxnCommit();
+        if (!txdb.WriteHashBestChain(hashBestChain))
+        {
+            txdb.TxnAbort();
+            return error("FastImportBlockFile: failed to persist best-chain hash");
+        }
+
+        // Write sync checkpoint
+        if (!Checkpoints::WriteSyncCheckpoint(hashBestChain))
+        {
+            txdb.TxnAbort();
+            return error("FastImportBlockFile: failed to persist sync checkpoint");
+        }
+
+        if (!txdb.TxnCommit())
+        {
+            txdb.TxnAbort();
+            return error("FastImportBlockFile: final database commit failed");
+        }
+        } // end try { ... FastImportBlockFile inner LOCK }
+        catch (const std::exception& e)
+        {
+            // Any exception escaping the import (allocation failure, database
+            // throw, unexpected validation throw) MUST NOT leak a partial
+            // commit. Abort the in-flight transaction before propagating.
+            txdb.TxnAbort();
+            return error("FastImportBlockFile: uncaught exception during import: %s", e.what());
+        }
+        catch (...)
+        {
+            txdb.TxnAbort();
+            return error("FastImportBlockFile: unknown exception during import");
+        }
     }
 
     nTransactionsUpdated++;

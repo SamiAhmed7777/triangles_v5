@@ -35,6 +35,7 @@
 #include <thread>
 #include <vector>
 #include <cerrno>
+#include <cstdio>
 
 // Forward declaration: InitError / InitWarning are defined further down
 // in this file but referenced by AppInit (line ~423) before the definition.
@@ -44,6 +45,12 @@ static bool InitWarning(const std::string& str);
 #include <fstream>
 #include <algorithm>
 #include <openssl/crypto.h>
+
+#ifdef WIN32
+// _get_osfhandle lives in <io.h>; FlushFileBuffers / HANDLE live in <windows.h>,
+// which is transitively included via util.h on Windows builds.
+#include <io.h>
+#endif
 
 #ifndef WIN32
 #include <signal.h>
@@ -100,6 +107,49 @@ bool LockDataDirectory(const std::filesystem::path& pathLockFile)
     }
     return true; // fd held until process exit
 #endif
+}
+
+bool SyncReindexMarker(const fs::path& markerPath)
+{
+    // POSIX systems guarantee parent-directory durability via fsync(dirfd).
+    // Windows does not expose an equivalent primitive for directory metadata;
+    // `_commit` flushes the file's data to disk and the underlying NTFS
+    // journal commits the directory entry on close. Both paths below flush
+    // before close to maximise durability; Windows users get file-data
+    // durability equivalent to POSIX, with directory metadata committed by
+    // the journal.
+    FILE* marker = std::fopen(markerPath.string().c_str(), "wb");
+    if (!marker)
+        return false;
+    static const char text[] = "Reindex must complete successfully before normal startup.\n";
+    bool ok = std::fwrite(text, 1, sizeof(text) - 1, marker) == sizeof(text) - 1 &&
+              std::fflush(marker) == 0;
+#ifdef WIN32
+    // FlushFileBuffers on the file handle commits data durably to NTFS.
+    intptr_t osHandle = _get_osfhandle(_fileno(marker));
+    if (osHandle == -1 || FlushFileBuffers(reinterpret_cast<HANDLE>(osHandle)) == FALSE)
+        ok = false;
+#else
+    if (ok)
+        ok = ::fsync(fileno(marker)) == 0;
+#endif
+    if (std::fclose(marker) != 0)
+        ok = false;
+#ifdef WIN32
+    // No directory-fsync primitive on Windows. The journal commit on close
+    // (and the FlushFileBuffers above) is the strongest durability available.
+    // See comment block above.
+#else
+    if (ok)
+    {
+        int dirFd = ::open(markerPath.parent_path().string().c_str(), O_RDONLY | O_DIRECTORY);
+        if (dirFd < 0)
+            return false;
+        ok = ::fsync(dirFd) == 0;
+        ::close(dirFd);
+    }
+#endif
+    return ok;
 }
 
 #ifndef WIN32
@@ -631,7 +681,8 @@ std::string HelpMessage()
         "  -checkblocks=<n>       " + _("How many blocks to check at startup (default: 2500, 0 = all)") + "\n" +
         "  -checklevel=<n>        " + _("How thorough the block verification is (0-6, default: 1)") + "\n" +
         "  -loadblock=<file>      " + _("Imports blocks from external blk000?.dat file") + "\n" +
-        "  -rebuildutxo           " + _("Rebuild UTXO set from full block chain (slow, for recovery)") + "\n" +
+        "  -reindex              " + _("Rebuild the derived chain database from the existing blk0001.dat without modifying the raw block file") + "\n" +
+        "  -rebuildutxo          " + _("Rebuild UTXO set from full block chain (slow, for recovery)") + "\n" +
 
         "\n" + _("Block creation options:") + "\n" +
         "  -blockminsize=<n>      "   + _("Set minimum block size in bytes (default: 0)") + "\n" +
@@ -1348,22 +1399,66 @@ bool AppInit2()
     }
 
     // Handle -reindex: delete the chain DB so it gets rebuilt from the raw
-    // blk*.dat files. This recalculates money
+    // blk0001.dat file used by this storage format. This recalculates money
     // supply, tx index, and UTXO set from scratch. Backend-agnostic via
     // WipeChainDataDir(), which resolves the directory per the configured
     // -chaindb backend.
-    if (GetBoolArg("-reindex", false))
+    const bool fReindex = GetBoolArg("-reindex", false);
+    fs::path reindexMarker = GetDataDir() / "REINDEX_INCOMPLETE";
+
+    // Validate the immutable source before removing any derived state. A marker
+    // survives crashes/interruption so ordinary startup cannot trust a partial
+    // database left by an earlier recovery attempt.
+    if (fReindex)
     {
+        fs::path blkPath = GetDataDir() / "blk0001.dat";
+        if (!fs::exists(blkPath) || !fs::is_regular_file(blkPath))
+            return InitError(_("Reindex requested but blk0001.dat is missing or not a regular file"));
+        if (!SyncReindexMarker(reindexMarker))
+            return InitError(_("Cannot durably create REINDEX_INCOMPLETE marker in the data directory"));
+
         printf("Reindex requested: removing chain database...\n");
         uiInterface.InitMessage(_("Removing chain database for reindex..."));
         WipeChainDataDir();
+        if (fs::exists(GetChainDataDir()))
+            return InitError(_("Reindex could not remove the existing chain database"));
+    }
+    else if (fs::exists(reindexMarker))
+    {
+        return InitError(_("A previous reindex was interrupted. Restart with -reindex to rebuild derived chain state."));
     }
 
     uiInterface.InitMessage(_("Loading block index..."));
     printf("Loading block index...\n");
     nStart = GetTimeMillis();
-    if (!LoadBlockIndex())
+    // Normal startup loads the existing derived index. An explicit -reindex
+    // must NOT call LoadBlockIndex() first: on an empty database that routine
+    // creates and appends a new genesis record to blk0001.dat. Reindex instead
+    // rebuilds directly from the already-existing raw history, keeping the
+    // source block file byte-for-byte unchanged.
+    if (fReindex)
+    {
+        fs::path blkPath = GetDataDir() / "blk0001.dat";
+        if (!fs::exists(blkPath))
+            return InitError(_("Reindex requested but blk0001.dat is missing"));
+
+        printf("Reindex: rebuilding chain database from existing %s (raw block file will not be modified)\n",
+               blkPath.string().c_str());
+        uiInterface.InitMessage(_("Reindexing blocks from blk0001.dat..."));
+        int64_t nReindexStart = GetTimeMillis();
+        if (!FastImportBlockFile())
+            return InitError(_("Reindex failed while rebuilding from blk0001.dat"));
+        StartupPerfLog("reindex_fast_import", GetTimeMillis() - nReindexStart,
+                       strprintf("bestheight=%d indexsize=%" PRIszu,
+                                 nBestHeight, mapBlockIndex.size()));
+        std::error_code markerError;
+        if (!fs::remove(reindexMarker, markerError) || markerError)
+            return InitError(_("Reindex completed but REINDEX_INCOMPLETE marker could not be removed"));
+    }
+    else if (!LoadBlockIndex())
+    {
         return InitError(_("Error loading blkindex.dat"));
+    }
 
     // pindexLastHardenedCheckpoint is initialized from the hardened checkpoint
     // map on startup, BEFORE the daemon opens any peer connections or
@@ -1509,8 +1604,8 @@ bool AppInit2()
     // diagnostic-only and never removes chain data.
     LogAutoRebuildDisabled(GetArg("-autorerebuild", 0));
 
-    // Block index loaded. With fast-import removed, the only supported sync path
-    // is the UTXO snapshot (auto-downloaded from bootstrap or placed manually in datadir).
+    // Block index loaded. Normal bootstrap uses the UTXO snapshot; explicit
+    // -reindex is the operator-only recovery path from local blk0001.dat.
 
     // as LoadBlockIndex can take several minutes, it's possible the user
     // requested to kill triangles-qt during the last operation. If so, exit.

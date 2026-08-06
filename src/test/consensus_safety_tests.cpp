@@ -873,4 +873,46 @@ BOOST_AUTO_TEST_CASE(hardened_checkpoint_no_rogue_guard_in_other_files)
         "trusting its PASS.");
 }
 
+BOOST_AUTO_TEST_CASE(reindex_reconstruction_is_explicit_and_fail_closed)
+{
+    // Pin the startup bridge and the fail-closed invariants structurally. The
+    // end-to-end test separately reconstructs the production blk0001.dat;
+    // these checks prevent a refactor from silently returning to the old
+    // "wipe DB, create genesis, never import" behavior.
+    const std::filesystem::path here(__FILE__);
+    const std::filesystem::path root = here.parent_path().parent_path().parent_path();
+
+    std::ifstream initFile(root / "src" / "init.cpp");
+    std::ifstream mainFile(root / "src" / "main.cpp");
+    BOOST_REQUIRE(initFile.good());
+    BOOST_REQUIRE(mainFile.good());
+
+    const std::string initSrc((std::istreambuf_iterator<char>(initFile)),
+                              std::istreambuf_iterator<char>());
+    const std::string mainSrc((std::istreambuf_iterator<char>(mainFile)),
+                              std::istreambuf_iterator<char>());
+
+    BOOST_CHECK(initSrc.find("const bool fReindex = GetBoolArg(\"-reindex\", false)") != std::string::npos);
+    BOOST_CHECK(initSrc.find("if (!FastImportBlockFile())") != std::string::npos);
+    BOOST_CHECK(initSrc.find("else if (!LoadBlockIndex())") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("if (fRequestShutdown)") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("reindex is incomplete") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("interrupted during active-chain replay") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("unexpected or duplicate genesis block") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("invalid record magic") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("malformed block payload") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("trailing bytes at file offset") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("block file was not consumed exactly") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("block failed context-free validation") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("hardened checkpoint mismatch") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("selected chain does not reach the newest compiled checkpoint") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("nFileSize > (int64_t)std::numeric_limits") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("std::unique_ptr<FILE") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("item.second->pnext = nullptr") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("failed to persist best-chain hash") != std::string::npos);
+    BOOST_CHECK(mainSrc.find("final database commit failed") != std::string::npos);
+    BOOST_CHECK(initSrc.find("REINDEX_INCOMPLETE") != std::string::npos);
+    BOOST_CHECK(initSrc.find("SyncReindexMarker") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
