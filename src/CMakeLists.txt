@@ -670,7 +670,16 @@ if(BUILD_TESTS)
         Boost::unit_test_framework
     )
 
+    # WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}: the consensus_safety_tests
+    # `reindex_reconstruction_is_explicit_and_fail_closed` test reads
+    # src/init.cpp + src/main.cpp via __FILE__-relative path traversal
+    # (3x parent_path() calls). When ctest runs from build/src/ (the
+    # default CMAKE_CURRENT_BINARY_DIR for src/CMakeLists.txt), the
+    # resolved path is build/src/src/init.cpp which doesn't exist.
+    # Pinning WORKING_DIRECTORY to "${CMAKE_SOURCE_DIR}" makes the test
+    # source paths resolve correctly from any environment.
     add_test(NAME triangles_unit_tests COMMAND test_triangles --log_level=test_suite)
+    set_tests_properties(triangles_unit_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
     # ── Standalone chaindb equivalence tests ─────────────────────────────────
     # Runs without the TestingSetup global fixture (which would otherwise
