@@ -4424,15 +4424,19 @@ bool FastImportBlockFile()
                              hash.ToString().c_str());
             }
             pindexNew->SetStakeModifier(nStakeModifier, fGeneratedStakeModifier);
+
+            // Insert into mapBlockIndex and set phashBlock BEFORE calling
+            // GetStakeModifierChecksum, which calls GetBlockHash() which
+            // dereferences phashBlock. Without this ordering, phashBlock is
+            // null and the checksum call segfaults.
+            auto mi = mapBlockIndex.insert(make_pair(hash, pindexNew)).first;
+            pindexNew->phashBlock = &mi->first;
+
             pindexNew->nStakeModifierChecksum = GetStakeModifierChecksum(pindexNew);
 
             // PoS stake seen set
             if (pindexNew->IsProofOfStake())
                 setStakeSeen.insert(make_pair(pindexNew->prevoutStake, pindexNew->nStakeTime));
-
-            // Insert into mapBlockIndex
-            auto mi = mapBlockIndex.insert(make_pair(hash, pindexNew)).first;
-            pindexNew->phashBlock = &mi->first;
 
             // pnext is rebuilt after best-chain selection. File order also
             // contains side branches, so assigning it here would let the last
