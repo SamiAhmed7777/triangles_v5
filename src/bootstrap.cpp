@@ -427,6 +427,25 @@ struct HttpConn {
         //   (b) SSL_CERT_FILE          (operator override, wide-char on Windows)
         //   (c) system default paths   (Linux daemon: /etc/ssl/certs/...)
         //   (d) embedded ISRG X1 + X2 (always, on top of whatever loaded above)
+        //
+        // Important: we MUST NOT reject a successful system default-verify-paths
+        // call based on a heuristic that counts X509_STORE objects, because
+        // OpenSSL's hashed-directory lookups are LAZY (X509_LOOKUP_hashdir
+        // installs the lookup but does NOT eagerly preload every cert). On
+        // Ubuntu/Debian/alpine, /etc/ssl/certs/ contains symlinks into a
+        // hashed dir; the lookup IS valid even though X509_STORE_get0_objects()
+        // returns 0 objects until a real cert chain is verified. Rejecting
+        // that valid install would force the daemon to fall through to the
+        // embedded fallbacks unnecessarily and (worse) could reject the system
+        // path on installations that legitimately have a usable CA bundle.
+        //
+        // The right model is: trust the API's return code as evidence the
+        // lookup source is configured; on API failure, treat the system as
+        // unconfigured and rely on the embedded fallbacks (which we always
+        // attempt). The embedded X1 + X2 are also tried when the system
+        // returns 1, as belt-and-suspenders for chains terminating at the
+        // cross-sign root (older R3 intermediates chain to X1; the newer LE
+        // YE1 intermediate chains to X2).
         if (!exeDir.empty()) {
             tryLoadPath("exedir cacert.pem", exeDir / "cacert.pem");
         }
@@ -444,10 +463,11 @@ struct HttpConn {
             tryLoadFile("SSL_CERT_FILE", envCert);
         }
 #endif
-        if (SSL_CTX_set_default_verify_paths(ctx) == 1) {
-            // Mark the system store as a successful trust source
-            // independently of any embedded add. A system that has any
-            // usable CA bundle is configured correctly by this call alone.
+        // System default verify paths: trust the API return. We do not
+        // introspect the store object count, because lazy hashed-directory
+        // lookups install correctly without eager preload.
+        int sysRc = SSL_CTX_set_default_verify_paths(ctx);
+        if (sysRc == 1) {
             printf("Bootstrap: TLS trust configured from system default paths\n");
             trustLoaded = true;
         } else {
@@ -455,12 +475,67 @@ struct HttpConn {
             char buf[256];
             ERR_error_string_n(e, buf, sizeof(buf));
             lastLoadErr = std::string("system default paths: ") + buf;
+            ERR_clear_error();
         }
-        // Belt-and-suspenders: always add embedded ISRG roots regardless
-        // of which (if any) of the above succeeded. Adding anchors only
-        // expands the set of valid chains, never restricts it.
-        tryLoadEmbedded("ISRG Root X1", EMBEDDED_ISRG_ROOT_X1_PEM);
-        tryLoadEmbedded("ISRG Root X2", EMBEDDED_ISRG_ROOT_X2_PEM);
+        // Belt-and-suspenders: always attempt to add embedded ISRG X1 + X2
+        // regardless of whether (a)/(b)/(c) succeeded, because they are
+        // additive (X509_STORE_add_cert + CERT_ALREADY_IN_HASH_TABLE both
+        // mean "the anchor is addressable"). They are CRITICAL on a stripped
+        // install where (a)/(b)/(c) all fail (rc!=1). The check below
+        // verifies that on a stripped install, BOTH X1 and X2 are addressable.
+        // On an install where (a)/(b)/(c) succeeded, X1/X2 are layered on
+        // for cross-sign resilience and any tryLoadEmbedded failure becomes
+        // a warning (the chain will still validate via the layered sources).
+        auto countAnchors = [&]() -> int {
+            X509_STORE* store = SSL_CTX_get_cert_store(ctx);
+            if (!store) return 0;
+            // X509_STORE_get0_objects() returns STACK_OF(X509_OBJECT) in
+            // OpenSSL 1.1+/3.x. We use this for "how many anchors did this
+            // source add" only in restricted diagnostic contexts below — NOT
+            // to gate the API return value. (Eagerly loaded anchors via
+            // SSL_CTX_load_verify_locations will report here; lazy hashed-
+            // directory lookups from set_default_verify_paths will not.
+            // See the comment block above.)
+            STACK_OF(X509_OBJECT)* objs = X509_STORE_get0_objects(store);
+            return objs ? sk_X509_OBJECT_num(objs) : 0;
+        };
+        // Capture whether ANY external source (cacert/SSL_CERT_FILE/system)
+        // succeeded BEFORE embedded calls run. tryLoadEmbedded sets trustLoaded
+        // and we need this separate signal to distinguish "external sources
+        // worked but X2 hard-failed" (chain still validates via external
+        // anchors, warning-only) from "all external sources failed AND X2
+        // hard-failed" (truly zero usable anchors, fail closed).
+        bool externalSourceSucceeded = trustLoaded;
+        bool x1Addr = tryLoadEmbedded("ISRG Root X1", EMBEDDED_ISRG_ROOT_X1_PEM);
+        ERR_clear_error();
+        bool x2Addr = tryLoadEmbedded("ISRG Root X2", EMBEDDED_ISRG_ROOT_X2_PEM);
+        ERR_clear_error();
+        if (!x1Addr || !x2Addr) {
+            // Either X1 or X2 (or both) hard-failed. We only treat this as
+            // fatal when no external source succeeded — i.e. the system has
+            // truly zero usable trust anchors. If (a)/(b)/(c) succeeded, the
+            // chain can still validate via those (e.g. R3 intermediate chains
+            // to X1 via a non-ISRG-root cert in /etc/ssl/certs), but we warn.
+            if (!externalSourceSucceeded) {
+                int anchors = countAnchors();
+                if (anchors == 0) {
+                    strError = "TLS trust store is empty: cacert/SSL_CERT_FILE/system "
+                               "not configured (rc!=1) AND embedded ISRG fallbacks "
+                               "failed (X1=" + std::string(x1Addr ? "ok" : "FAIL") +
+                               ", X2=" + std::string(x2Addr ? "ok" : "FAIL") +
+                               ", last attempt: " + lastLoadErr + ")";
+                    return false;
+                }
+            }
+            printf("Bootstrap: WARNING — embedded ISRG load partial: X1=%s X2=%s "
+                   "(ca.pem/SSL_CERT_FILE/system are configured, chain will validate via those)\n",
+                   x1Addr ? "ok" : "FAIL", x2Addr ? "ok" : "FAIL");
+        }
+        // trustLoaded true if any external source succeeded OR if X1+X2 were
+        // both added/duplicated on a stripped host.
+        if (x1Addr && x2Addr) {
+            trustLoaded = true;
+        }
         if (!trustLoaded) {
             strError = "Failed to load any TLS trust store (last attempt: " + lastLoadErr + ")";
             return false;

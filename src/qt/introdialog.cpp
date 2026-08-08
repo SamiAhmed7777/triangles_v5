@@ -453,9 +453,16 @@ bool IntroDialog::pickDataDirectory()
         // dir for a staged utxo-snapshot.bin above; if that didn't find one,
         // DownloadUtxoSnapshot is the canonical HTTPS path to the bootstrap
         // server. TLS validation is now handled in bootstrap.cpp's StartTLS
-        // via a layered trust store (exedir cacert.pem → system → embedded
-        // ISRG roots), so this should succeed on Windows GUI builds where the
-        // Qt-bundled libssl-3-x64.dll ships without a default cert path.
+        // via a layered trust store (exedir cacert.pem → SSL_CERT_FILE →
+        // system default paths → embedded ISRG X1 + X2 as belt-and-suspenders),
+        // so this should succeed on Windows GUI builds where the Qt-bundled
+        // libssl-3-x64.dll ships without a default cert path. The system-path
+        // call is trusted on its return value (OpenSSL's hashed-directory
+        // lookups are lazy and would otherwise show 0 eagerly loaded store
+        // objects even on a valid install); the embedded fallbacks are
+        // always attempted as cross-sign resilience and become load-bearing
+        // on a stripped Windows GUI with no cacert.pem and no usable system
+        // CA directory.
         std::string utxoError;
         bool success = Bootstrap::DownloadUtxoSnapshot(host, dataDirPath, progressFn, utxoError);
         if (!success) {

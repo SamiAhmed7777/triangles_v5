@@ -911,10 +911,21 @@ void CI2PEmbedded::DiscoverServerTunnelDestination()
     // Step 2: only publish if a LIVE registered server tunnel matches
     // the keys-file hash. Registry membership confirms the tunnel is
     // active; LeaseSet publication is i2pd's responsibility after that.
+    //
+    // Thread-safety: GetServerTunnels() returns a const reference to
+    // i2pd's internal m_ServerTunnels map, which has NO internal lock.
+    // VisitTunnels(true) (called from ReloadConfig / Stop) can erase
+    // entries concurrently. We make a VALUE COPY of the map (not a
+    // reference) so that iterator invalidation during the copy is a
+    // narrow read-only window, and all string comparisons run on the
+    // local snapshot with no live-map access. The copy constructor of
+    // std::map is exception-safe; if it throws (bad_alloc), the catch
+    // below handles it.
     if (!keysFileIdentB32.empty()) {
         try {
-            for (const auto& kv : i2p::client::context.GetServerTunnels()) {
-                const i2p::data::IdentHash& dest = kv.first.first;
+            auto tunnels = i2p::client::context.GetServerTunnels(); // value copy
+            for (const auto& kv : tunnels) {
+                const auto& dest = kv.first.first;
                 if (dest.ToBase32() == keysFileIdentB32) {
                     if (i2pHostname != keysFileIdentB32 + ".b32.i2p") {
                         i2pHostname = keysFileIdentB32 + ".b32.i2p";
