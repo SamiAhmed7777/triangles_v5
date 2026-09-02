@@ -99,7 +99,7 @@ namespace Checkpoints
         // checkpoint rebase and would make GetBestSnapshotHeight() select a
         // stale state. Replace the placeholder below with the SHA256 of the
         // utxo-snapshot-2200899.utx produced by dumputxoset at the new tip.
-        { 2200899, uint256("0x__SNAPSHOT_SHA256_2200899__")}, // canonical
+        { 2200899, uint256("0x5374ea23725d151d52915395c5aaf1e60c9a3f057c7bd8f331bb41f79f0b3c7a")}, // canonical
     };
 
     static std::map<int, uint256> mapSnapshotHashesTestnet = {
