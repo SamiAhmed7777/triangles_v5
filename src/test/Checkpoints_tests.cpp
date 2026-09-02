@@ -14,8 +14,9 @@ BOOST_AUTO_TEST_CASE(hardened_checkpoints_match_current_chain)
     // After the operator rollback to 2,172,037 (cycle-32, 2026-08-06), the
     // 2205000/2206004 pins are no longer in the map (those block heights are
     // above the new canonical tip and reference non-existent blocks). The new
-    // highest entry is 2172037.
+    // highest entry is 2200899.
     BOOST_CHECK(Checkpoints::CheckHardened(2172037, uint256("0x52b12f0970191505d9982449875822b78f075d7d76307abed45e7132f5fa2f16")));
+    BOOST_CHECK(Checkpoints::CheckHardened(2200899, uint256("0x28e57e03c7f48df8ef0dedba2b93fd5176500729c955f86546c381be66952e55")));
 }
 
 BOOST_AUTO_TEST_CASE(hardened_checkpoints_reject_wrong_hashes_and_allow_unknown_heights)
@@ -25,6 +26,7 @@ BOOST_AUTO_TEST_CASE(hardened_checkpoints_reject_wrong_hashes_and_allow_unknown_
     BOOST_CHECK(!Checkpoints::CheckHardened(9000, wrongHash));
     BOOST_CHECK(!Checkpoints::CheckHardened(9001, wrongHash));
     BOOST_CHECK(!Checkpoints::CheckHardened(2172037, wrongHash));
+    BOOST_CHECK(!Checkpoints::CheckHardened(2200899, wrongHash));
 
     // 2186940/2186941 are no longer pinned (superseded by the 2205000+
     // pins), and after the cycle-32 operator rollback the 2205000+ pins
@@ -40,7 +42,7 @@ BOOST_AUTO_TEST_CASE(total_blocks_estimate_tracks_latest_hardened_checkpoint)
 {
     // After operator rollback to 2,172,037, GetTotalBlocksEstimate() returns
     // 2,172,037 (the new highest compiled checkpoint).
-    BOOST_CHECK_EQUAL(Checkpoints::GetTotalBlocksEstimate(), 2172037);
+    BOOST_CHECK_EQUAL(Checkpoints::GetTotalBlocksEstimate(), 2200899);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

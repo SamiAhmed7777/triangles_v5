@@ -56,7 +56,24 @@ namespace Checkpoints
                 // 2,172,037. Closes the unchecked span between the prior highest
                 // pin (17,650) and the new canonical tip for any future
                 // fresh-from-zero sync.
-                { 2172037, uint256("0x52b12f0970191505d9982449875822b78f075d7d76307abed45e7132f5fa2f16")}, // new canonical tip
+                { 2172037, uint256("0x52b12f0970191505d9982449875822b78f075d7d76307abed45e7132f5fa2f16")}, // cycle-33 rollback pin
+                // Checkpoint rebase to 2,200,899 (2026-09-02). A strict UTXO
+                // replay of the full on-disk history (genesis..2,224,763) shows
+                // that heights 2,172,038..2,200,899 validate cleanly, while the
+                // canonical chain from height 2,200,900 (2026-04-07) onward
+                // contains 805 coinstake inputs (in 603 blocks) that re-spend
+                // outputs already spent by earlier blocks — accepted at the time
+                // only because of the v5.8.x vSpent tracking bug. No correct
+                // node can ever validate that span, so 2,200,899 is the last
+                // block that can be canonical. Pins below restore 10k-block
+                // spacing across the recovered span. Hashes computed directly
+                // from blk0001.dat headers (X13) and cross-checked against the
+                // chain that all live-network pins (2,222,900..2,224,763) sat on.
+                { 2180000, uint256("0xe3d2780d838314cb759784757e7e84cd0f18a46d333d3e6aaa4f79d5060104a0")},
+                { 2190000, uint256("0x682baf783581468ba18f9967254a7f3944e8b8c4cc7101e7d99b68f4f9dd5271")},
+                { 2200000, uint256("0x0a8d0442f031f1258120f713f34e45f4f9a625fb753558e27b89b32ad5a9a740")},
+                { 2200500, uint256("0x68fd5eedbefe80431fba92ee4ea37993f3e5f22f88b38a564e582a5c4aa15db2")},
+                { 2200899, uint256("0x28e57e03c7f48df8ef0dedba2b93fd5176500729c955f86546c381be66952e55")}, // canonical tip (last clean block)
             };
 
     // Published UTXO snapshot file SHA256, keyed by snapshot height.
@@ -78,7 +95,11 @@ namespace Checkpoints
         // The compiled map below must contain only the canonical snapshot so
         // GetBestSnapshotHeight() returns 2,172,037 and DownloadUtxoSnapshot
         // selects the canonical file from bootstrap.cryptographic-triangles.org.
-        { 2172037, uint256("0xfc3b2035525564156f2489e8929e132b75e9be285d9129ad21bc89ecdc4c7977")}, // canonical
+        // 2172037 snapshot (fc3b2035...977) retired 2026-09-02: it predates the
+        // checkpoint rebase and would make GetBestSnapshotHeight() select a
+        // stale state. Replace the placeholder below with the SHA256 of the
+        // utxo-snapshot-2200899.utx produced by dumputxoset at the new tip.
+        { 2200899, uint256("0x__SNAPSHOT_SHA256_2200899__")}, // canonical
     };
 
     static std::map<int, uint256> mapSnapshotHashesTestnet = {
