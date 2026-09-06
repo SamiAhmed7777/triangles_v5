@@ -699,11 +699,24 @@ bool LoadSnapshot(const fs::path& snapshotPath,
                     CBlock block;
                     blkdat >> block;
                     // For each tx in the block, record the disk position.
-                    // nTxPos is the offset of the tx *within* the block (after
-                    // magic+size for the first tx, then serialize-size of
-                    // preceding txs). We use the post-serialize offset of each
-                    // tx as nTxPos, matching the convention in ConnectBlock.
-                    unsigned int nTxPos = sizeof(pchMessageStart) + sizeof(unsigned int); // offset of first tx in block
+                    // ConnectBlock (main.cpp) computes the first tx as
+                    // nBlockPos + GetSerializeSize(CBlock())
+                    //   - 2*GetSizeOfCompactSize(0)
+                    //   + GetSizeOfCompactSize(vtx.size())
+                    // where nBlockPos points just AFTER the magic+size prefix
+                    // (i.e. at the 80-byte header). Here nBlockStart points
+                    // AT the magic, so add the 8-byte prefix first:
+                    //   first tx = nBlockStart + 8 + 80 + compactsize(vtx)
+                    // The old code forgot the 80-byte header (started txs at
+                    // +8), shifting every txindex entry 81 bytes low and
+                    // making ReadFromDisk desync — "read txPrev failed" —
+                    // which rejected all post-snapshot PoS blocks and froze
+                    // snapshot-loaded nodes at the snapshot tip.
+                    unsigned int nTxPos = nBlockStart
+                        + sizeof(pchMessageStart) + sizeof(unsigned int)
+                        + ::GetSerializeSize(CBlock(), SER_DISK, CLIENT_VERSION)
+                        - (2 * GetSizeOfCompactSize(0))
+                        + GetSizeOfCompactSize(block.vtx.size());
                     for (const CTransaction& tx : block.vtx) {
                         CDiskTxPos posThisTx(1, nBlockStart, nTxPos);
                         txdb.UpdateTxIndex(tx.GetHash(), CTxIndex(posThisTx, tx.vout.size()));
