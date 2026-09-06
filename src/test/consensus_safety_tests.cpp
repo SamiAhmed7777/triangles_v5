@@ -738,10 +738,11 @@ BOOST_AUTO_TEST_CASE(reorg_guard_offbyone_hardening)
     //      checkpoint height on mainnet. Verified against the actual binary.
     int nCompiled = Checkpoints::GetLastCheckpointHeight();
     BOOST_CHECK(nCompiled > 0);  // sanity: compiled map populated
-    // Must equal the highest key in the compiled map (2200899 as of the 2026-09-02 rebase;
-    // this assertion locks the value at the time the binary was built, so
-    // a regression that drops a checkpoint would also fail here).
-    BOOST_CHECK_EQUAL(nCompiled, 2200899);
+    // Must equal the highest key in the compiled map (2201018 since the
+    // 2026-09-06 rebase snapshot anchor; was 2200899 from the 2026-09-02
+    // rebase; this assertion locks the value at the time the binary was
+    // built, so a regression that drops a checkpoint would also fail here).
+    BOOST_CHECK_EQUAL(nCompiled, 2201018);
 }
 
 // ─── Duplicate-guard detection: variable referenced only in allowed files ─
