@@ -39,6 +39,16 @@ static fs::path qstringToPath(const QString& s)
 #endif
 }
 
+// Convert fs::path to a UTF-8 std::string. fs::path::u8string() returns
+// std::u8string in C++20, which has no implicit conversion to std::string
+// (clang/gcc reject the functional cast). Reinterpret the char8_t payload:
+// UTF-8 byte values are preserved exactly.
+static std::string pathToUtf8String(const fs::path& p)
+{
+    const std::u8string u8 = p.u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+
 IntroDialog::IntroDialog(QWidget *parent) :
     QDialog(parent)
 {
@@ -233,12 +243,12 @@ bool IntroDialog::pickDataDirectory()
 
     // If the saved path is the default, don't set -datadir (let normal defaults work)
     QString defaultDir = QString::fromStdString(
-        std::string(GetDefaultDataDir().u8string()));
+        pathToUtf8String(GetDefaultDataDir()));
     if (dataDir != defaultDir) {
         // Pass the data dir to the daemon as UTF-8 bytes so a non-ASCII path
         // on Windows isn't mangled by the ANSI code page (path::string() does
         // that). The daemon side uses fs::u8path() to convert back.
-        mapArgs["-datadir"] = std::string(qstringToPath(dataDir).u8string());
+        mapArgs["-datadir"] = pathToUtf8String(qstringToPath(dataDir));
     }
 
     // Ensure the directory exists
