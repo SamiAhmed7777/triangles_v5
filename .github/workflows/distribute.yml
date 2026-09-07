@@ -87,6 +87,7 @@ jobs:
         run: |
           if [ -z "$DOCKERHUB_TOKEN" ]; then exit 0; fi
           docker buildx build \
+            --build-arg VERSION=${VERSION} \
             --push \
             --tag samiahmed7777/trianglesd:$VERSION \
             --tag samiahmed7777/trianglesd:latest \
