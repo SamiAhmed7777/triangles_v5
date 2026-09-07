@@ -718,7 +718,19 @@ bool LoadSnapshot(const fs::path& snapshotPath,
                         - (2 * GetSizeOfCompactSize(0))
                         + GetSizeOfCompactSize(block.vtx.size());
                     for (const CTransaction& tx : block.vtx) {
-                        CDiskTxPos posThisTx(1, nBlockStart, nTxPos);
+                        // nBlockPos must point at the HEADER (post
+                        // magic+size), the codebase-wide convention:
+                        // CBlock::ReadFromDisk(nFile, nBlockPos) seeks to
+                        // nBlockPos and deserializes the header directly.
+                        // Storing the magic position (8 bytes early) makes
+                        // CheckProofOfStake read a garbage header whose hash
+                        // is absent from mapBlockIndex — the
+                        // "GetKernelStakeModifier() : block not indexed" +
+                        // "check kernel failed" rejection of every
+                        // post-snapshot PoS block.
+                        CDiskTxPos posThisTx(1,
+                            nBlockStart + sizeof(pchMessageStart) + sizeof(unsigned int),
+                            nTxPos);
                         txdb.UpdateTxIndex(tx.GetHash(), CTxIndex(posThisTx, tx.vout.size()));
                         nTxPos += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
                         nTxsIndexed++;
