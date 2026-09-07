@@ -41,22 +41,40 @@ namespace Checkpoints
                 // All pins from 2,205,000..2,224,763 have been REMOVED from the map
                 // (NOT preserved). Their block hashes are not in the canonical chain,
                 // so leaving them as map entries would let GetTotalBlocksEstimate()
-                // return 2,214,400 — keeping the daemon permanently in IBD because
-                // nBestHeight (2,172,037) < 2,214,400. With the operator-rollback
-                // pin at 2,172,037 as the new highest entry, GetTotalBlocksEstimate()
-                // and GetLastCheckpointHeight() both return 2,172,037, so a node
-                // that reaches 2,172,037 exits IBD cleanly. The pin at 17,650
-                // (line above) remains as the lowest anchored finality reference.
-                // Operator-rollback finality pin (cycle-33, 2026-08-06): the new
+                // return a pre-rollback height — keeping the daemon permanently in
+                // IBD because nBestHeight < GetTotalBlocksEstimate(). The pin at
+                // 17,650 (line above) remains as the lowest anchored finality
+                // reference.
+                // Operator-rollback finality pin (cycle-33, 2026-08-06): the
                 // canonical tip after the operator rollback to 2,172,037. Hash
                 // verified against all 4 fleet nodes (DNS2/DNS3/Hetzner/SAMI-PC)
-                // at canonical tip 2,172,037. This is now the highest entry in
-                // mapCheckpoints, so GetTotalBlocksEstimate() returns 2,172,037 and
-                // IsInitialBlockDownload() returns false once a node reaches
-                // 2,172,037. Closes the unchecked span between the prior highest
-                // pin (17,650) and the new canonical tip for any future
-                // fresh-from-zero sync.
-                { 2172037, uint256("0x52b12f0970191505d9982449875822b78f075d7d76307abed45e7132f5fa2f16")}, // new canonical tip
+                // at canonical tip 2,172,037. Was the highest entry from
+                // 2026-08-06 until the 2026-09-02 checkpoint rebase added the
+                // pins below; retained as a hardened anchor of the rollback span.
+                { 2172037, uint256("0x52b12f0970191505d9982449875822b78f075d7d76307abed45e7132f5fa2f16")}, // cycle-33 rollback pin
+                // Checkpoint rebase to 2,200,899 (2026-09-02). A strict UTXO
+                // replay of the full on-disk history (genesis..2,224,763) shows
+                // that heights 2,172,038..2,200,899 validate cleanly, while the
+                // canonical chain from height 2,200,900 (2026-04-07) onward
+                // contains 805 coinstake inputs (in 603 blocks) that re-spend
+                // outputs already spent by earlier blocks — accepted at the time
+                // only because of the v5.8.x vSpent tracking bug. No correct
+                // node can ever validate that span, so 2,200,899 is the last
+                // block that can be canonical. Pins below restore 10k-block
+                // spacing across the recovered span. Hashes computed directly
+                // from blk0001.dat headers (X13) and cross-checked against the
+                // chain that all live-network pins (2,222,900..2,224,763) sat on.
+                { 2180000, uint256("0xe3d2780d838314cb759784757e7e84cd0f18a46d333d3e6aaa4f79d5060104a0")},
+                { 2190000, uint256("0x682baf783581468ba18f9967254a7f3944e8b8c4cc7101e7d99b68f4f9dd5271")},
+                { 2200000, uint256("0x0a8d0442f031f1258120f713f34e45f4f9a625fb753558e27b89b32ad5a9a740")},
+                { 2200500, uint256("0x68fd5eedbefe80431fba92ee4ea37993f3e5f22f88b38a564e582a5c4aa15db2")},
+                { 2200899, uint256("0x28e57e03c7f48df8ef0dedba2b93fd5176500729c955f86546c381be66952e55")}, // rebase base (last clean block)
+                // Rebase snapshot anchor (2026-09-06): the published canonical
+                // snapshot tip. Hash verified live via sami-pc getblockhash and
+                // byte-reversed against utxo-snapshot-2201018.utx's internal
+                // header blockhash. Highest pin: GetTotalBlocksEstimate()
+                // returns 2,201,018.
+                { 2201018, uint256("0x2a1894007595acaa5d303554253b3c328ebc870f248ffebf83e09a4c8156a78f")}, // canonical tip (rebase snapshot anchor)
             };
 
     // Published UTXO snapshot file SHA256, keyed by snapshot height.
@@ -68,17 +86,23 @@ namespace Checkpoints
     // here. The corresponding (height, blockhash) must already exist in
     // mapCheckpoints / mapCheckpointsTestnet.
     static std::map<int, uint256> mapSnapshotHashes = {
-        // Historical snapshots preserved as documentation only. The canonical
-        // chain is now at 2,172,037 (operator rollback 2026-08-06). Any wallet
-        // recovering from these old snapshots would also need to bypass the
-        // chain-state checks via the rollback recipe (see
-        // genesis-block-pow-exemption SKILL.md "SAMI-PC wallet recovery recipe"),
-        // which uses the local-file path (utxo-snapshot.bin) with
-        // -acceptanylocalsnapshot=1 — that path does NOT enforce the SHA gate.
-        // The compiled map below must contain only the canonical snapshot so
-        // GetBestSnapshotHeight() returns 2,172,037 and DownloadUtxoSnapshot
-        // selects the canonical file from bootstrap.cryptographic-triangles.org.
-        { 2172037, uint256("0xfc3b2035525564156f2489e8929e132b75e9be285d9129ad21bc89ecdc4c7977")}, // canonical
+        // ONLY the canonical entry may live here. GetBestSnapshotHeight()
+        // returns this map's highest key and DownloadUtxoSnapshot trusts the
+        // bootstrap manifest's advertised height when the (height, sha) pair
+        // is present, so a retired entry would let a stale or replayed
+        // manifest hand a fresh wallet an unloadable file. History: the
+        // 2172037 rollback-era snapshot (fc3b2035...) was superseded
+        // 2026-09-02 by the checkpoint rebase; the 2200899 Sep-1 dump
+        // (5374ea23...7a) was retired 2026-09-06 — its writer serialization
+        // is unreadable by the deployed binaries (CDataStream end-of-data).
+        // Do NOT re-add retired entries; full history is in git, not in the
+        // live trust-anchor map.
+        // Canonical rebase snapshot (2026-09-06): dumped live from the
+        // staking node (sami-pc, deployed binary v6.2.6.4), published at
+        // bootstrap.cryptographic-triangles.org/utxo-snapshot.bin with
+        // manifest v3.0. Load-verified end-to-end on DNS2 (all 2,201,019
+        // headers + 17,720 UTXOs + txindex rebuild).
+        { 2201018, uint256("0xed3fe84ee2388a7083873462af298bd4ba345ceb84e5ac65e3d2906419c0efab")}, // canonical (only entry)
     };
 
     static std::map<int, uint256> mapSnapshotHashesTestnet = {
