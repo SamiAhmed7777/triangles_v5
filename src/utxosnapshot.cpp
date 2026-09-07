@@ -671,6 +671,7 @@ bool LoadSnapshot(const fs::path& snapshotPath,
                 unsigned int nPos = 0;
                 unsigned int nBlocksIndexed = 0;
                 unsigned int nTxsIndexed = 0;
+                unsigned int nVerified = 0;
                 unsigned int nBatchTxs = 0;
                 int64_t nLastReport = GetTimeMillis();
                 while (success && blkdat.good()) {
@@ -698,6 +699,12 @@ bool LoadSnapshot(const fs::path& snapshotPath,
                     }
                     CBlock block;
                     blkdat >> block;
+                    // Stored block position: header start (post magic+size),
+                    // the reader convention. Declared here so both the tx
+                    // loop (CDiskTxPos) and the post-loop readback use the
+                    // SAME stored constant.
+                    const unsigned int nBlockPosStored =
+                        nBlockStart + sizeof(pchMessageStart) + sizeof(unsigned int);
                     // For each tx in the block, record the disk position.
                     // ConnectBlock (main.cpp) computes the first tx as
                     // nBlockPos + GetSerializeSize(CBlock())
@@ -728,15 +735,72 @@ bool LoadSnapshot(const fs::path& snapshotPath,
                         // "GetKernelStakeModifier() : block not indexed" +
                         // "check kernel failed" rejection of every
                         // post-snapshot PoS block.
-                        CDiskTxPos posThisTx(1,
-                            nBlockStart + sizeof(pchMessageStart) + sizeof(unsigned int),
-                            nTxPos);
+                        CDiskTxPos posThisTx(1, nBlockPosStored, nTxPos);
                         txdb.UpdateTxIndex(tx.GetHash(), CTxIndex(posThisTx, tx.vout.size()));
+                        // Fail-closed readback (added after the 2026-09-06
+                        // txpos incidents): for every 4096th tx, immediately
+                        // re-read it at the position we just wrote and prove
+                        // the round-trip. A wrong offset convention here
+                        // previously produced a "successfully loaded" node
+                        // that silently rejected every post-snapshot PoS
+                        // block. Only the in-memory tx is consulted for the
+                        // comparison — a mismatch means our position math or
+                        // blk0001.dat extraction is wrong, and the load fails.
+                        if ((nTxsIndexed % 4096) == 0) {
+                            fseek(blkdat, nTxPos, SEEK_SET);
+                            CTransaction txReadback;
+                            bool fReadOK = true;
+                            try {
+                                blkdat >> txReadback;
+                            } catch (const std::exception&) {
+                                fReadOK = false;
+                            }
+                            if (!fReadOK || txReadback.GetHash() != tx.GetHash()) {
+                                success = false;
+                                strError = "txindex readback verification failed at block "
+                                    + block.GetHash().ToString().substr(0, 16)
+                                    + " tx " + tx.GetHash().ToString().substr(0, 16)
+                                    + " — loader offset bug or corrupt blk0001.dat; "
+                                      "NOT announcing a verified load";
+                                break;
+                            }
+                            nVerified++;
+                        }
                         nTxPos += ::GetSerializeSize(tx, SER_DISK, CLIENT_VERSION);
                         nTxsIndexed++;
                         nBatchTxs++;
                     }
                     nBlocksIndexed++;
+                    // Fail-closed block-level readback (added after the
+                    // 2026-09-06 txpos incidents): starting with the very
+                    // first block, then every 512th, prove the STORED
+                    // position convention by reading through the ACTUAL
+                    // reader path with the position exactly as written into
+                    // the txindex — CBlock::ReadFromDisk(nBlockPosStored,
+                    // false) seeks to that position and deserializes the
+                    // header directly, exactly as CheckProofOfStake does for
+                    // stake inputs. A wrong nBlockPos convention (magic vs
+                    // header) previously produced a "successfully loaded"
+                    // node whose kernel checks all failed; reading an
+                    // independently recomputed position instead of the
+                    // stored one would miss that class of bug, so the stored
+                    // constant itself is the source here.
+                    if (nBlocksIndexed == 1 || (nBlocksIndexed % 512) == 0) {
+                        CBlock blockReadback;
+                        if (!blockReadback.ReadFromDisk(1,
+                                nBlockPosStored,
+                                false)
+                            || blockReadback.GetHash() != block.GetHash()) {
+                            success = false;
+                            strError = "txindex block readback verification failed at "
+                                + block.GetHash().ToString().substr(0, 16)
+                                + " — stored nBlockPos does not honor the "
+                                  "header-at-pos reader convention; NOT "
+                                  "announcing a verified load";
+                            break;
+                        }
+                        nVerified++;
+                    }
                     // Advance past this block to scan the next one
                     nPos = nBlockStart + sizeof(pchMessageStart) + sizeof(unsigned int) + nSize;
                     // Commit batch periodically to avoid unbounded memory
@@ -764,8 +828,9 @@ bool LoadSnapshot(const fs::path& snapshotPath,
                     strError = "Final txindex commit failed";
                 }
                 if (success) {
-                    printf("UtxoSnapshot: built txindex for %u blocks / %u transactions\n",
-                           nBlocksIndexed, nTxsIndexed);
+                    printf("UtxoSnapshot: built txindex for %u blocks / %u transactions "
+                           "(%u readback-verified)\n",
+                           nBlocksIndexed, nTxsIndexed, nVerified);
                 }
             }
         }
