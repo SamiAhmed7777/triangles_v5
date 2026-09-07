@@ -3543,6 +3543,14 @@ bool CBlockIndex::IsSuperMajority(int minVersion, const CBlockIndex* pstart, uns
 
 bool ProcessBlock(CNode* pfrom, CBlock* pblock)
 {
+    // Peer attribution for rejection diagnostics. Every rejection path below
+    // names the source peer, so a rejection flood can be attributed to specific
+    // peers instead of inferred from version skew. Held as a std::string rather
+    // than a cached c_str(): CService::ToString() returns by value, so caching
+    // the pointer would dangle. "local" covers self-generated / import paths
+    // where pfrom is null.
+    const std::string strFrom = pfrom ? pfrom->addr.ToString() : std::string("local");
+
     // Check for duplicate
     uint256 hash = pblock->GetHash();
     if (mapBlockIndex.count(hash))
@@ -3554,7 +3562,7 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     // Limited duplicity on stake: prevents block flood attack
     // Duplicate stake allowed only when there is orphan child block
     if (pblock->IsProofOfStake() && !GetBoolArg("-ignoredupstake", false) && setStakeSeen.count(pblock->GetProofOfStake()) && !mapOrphanBlocksByPrev.count(hash))
-        return error("ProcessBlock() : duplicate proof-of-stake (%s, %d) for block %s", pblock->GetProofOfStake().first.ToString().c_str(), pblock->GetProofOfStake().second, hash.ToString().c_str());
+        return error("ProcessBlock() : duplicate proof-of-stake (%s, %d) for block %s from %s", pblock->GetProofOfStake().first.ToString().c_str(), pblock->GetProofOfStake().second, hash.ToString().c_str(), strFrom.c_str());
 
     // Operational IBD state is never permission to skip a live proof-of-stake
     // block signature. Only a candidate height committed by the latest
@@ -3567,9 +3575,9 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
     }
     if (!pblock->CheckBlock(true, true, checkBlockSignature))
     {
-        printf("IBD-DIAG: CheckBlock FAILED for %s (PoS=%d, IBD=%d)\n",
-            hash.ToString().substr(0,20).c_str(), pblock->IsProofOfStake(), IsInitialBlockDownload());
-        return error("ProcessBlock() : CheckBlock FAILED");
+        printf("IBD-DIAG: CheckBlock FAILED for %s (PoS=%d, IBD=%d) from %s\n",
+            hash.ToString().substr(0,20).c_str(), pblock->IsProofOfStake(), IsInitialBlockDownload(), strFrom.c_str());
+        return error("ProcessBlock() : CheckBlock FAILED from %s", strFrom.c_str());
     }
 
     // Anti-spam: reject blocks with insufficient difficulty to prevent memory flooding.
@@ -3620,7 +3628,7 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
             // FIRST block, instantly banning every honest peer feeding us fork blocks).
             if (pfrom)
                 pfrom->Misbehaving(5);
-            return error("ProcessBlock() : block with too little %s", pblock->IsProofOfStake()? "proof-of-stake" : "proof-of-work");
+            return error("ProcessBlock() : block with too little %s from %s", pblock->IsProofOfStake()? "proof-of-stake" : "proof-of-work", strFrom.c_str());
         }
     }
 
@@ -3636,7 +3644,7 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
             // Limited duplicity on stake: prevents block flood attack
             // Duplicate stake allowed only when there is orphan child block
             if (!GetBoolArg("-ignoredupstake", false) && setStakeSeenOrphan.count(pblock2->GetProofOfStake()) && !mapOrphanBlocksByPrev.count(hash))
-                return error("ProcessBlock() : duplicate proof-of-stake (%s, %d) for orphan block %s", pblock2->GetProofOfStake().first.ToString().c_str(), pblock2->GetProofOfStake().second, hash.ToString().c_str());
+                return error("ProcessBlock() : duplicate proof-of-stake (%s, %d) for orphan block %s from %s", pblock2->GetProofOfStake().first.ToString().c_str(), pblock2->GetProofOfStake().second, hash.ToString().c_str(), strFrom.c_str());
             else
                 setStakeSeenOrphan.insert(pblock2->GetProofOfStake());
         }
@@ -3666,7 +3674,7 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
 
     // Store to disk
     if (!pblock->AcceptBlock())
-        return error("ProcessBlock() : AcceptBlock FAILED");
+        return error("ProcessBlock() : AcceptBlock FAILED from %s", strFrom.c_str());
 
     g_syncManager.BlockAccepted(hash);
 
