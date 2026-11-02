@@ -40,8 +40,8 @@ constexpr unsigned int MAX_BLOCK_SIZE = 1000000;
 constexpr unsigned int MAX_BLOCK_SIZE_GEN = MAX_BLOCK_SIZE/2;
 constexpr unsigned int MAX_BLOCK_SIGOPS = MAX_BLOCK_SIZE/50;
 constexpr unsigned int MAX_ORPHAN_TRANSACTIONS = MAX_BLOCK_SIZE/100;
-constexpr unsigned int MAX_ORPHAN_BLOCKS = 750;
-constexpr unsigned int MAX_ORPHAN_BLOCKS_IBD = 1500;
+constexpr unsigned int MAX_ORPHAN_BLOCKS = 20000;
+constexpr unsigned int MAX_ORPHAN_BLOCKS_IBD = 50000;
 // MAX_REORG_DEPTH is retained as a compile-time constant for tests and
 // legacy callers but no longer gates reorgs above the hardened checkpoint.
 // See Reorganize() in main.cpp for the new convergence rule.
@@ -95,6 +95,7 @@ extern unsigned int nNodeLifespan;
 extern int nCoinbaseMaturity;
 extern int nBestHeight;
 extern bool fLoadedFromSnapshot; // true after successful UtxoSnapshot::LoadSnapshot
+void ProcessOrphansFor(const uint256& hashPrev); // promote orphans connecting at hashPrev (snapshot-load fix)
 extern uint256 nBestChainTrust;
 extern uint256 nBestInvalidTrust;
 extern uint256 hashBestChain;

@@ -47,6 +47,7 @@ set(CORE_SOURCES
     crypto_ecdh.cpp
     crypto_ecdsa.cpp
     db.cpp
+    feeestimator.cpp
     key.cpp
     keystore.cpp
     main.cpp

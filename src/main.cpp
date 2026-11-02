@@ -589,6 +589,40 @@ void static SetBestChain(const CBlockLocator& loc)
         pwallet->SetBestChain(loc);
 }
 
+// Recursively accept any orphan blocks whose parent chain now connects at
+// hashPrev. This mirrors the post-AcceptBlock orphan promotion inside
+// ProcessBlock, but is callable OUTSIDE ProcessBlock — required after a
+// UTXO-snapshot load: the snapshot installs the tip directly (no
+// ProcessBlock call), so orphans already received for the snapshot tip's
+// height would otherwise never be promoted and the node would stall at the
+// snapshot height with "already have block (orphan)" forever.
+void ProcessOrphansFor(const uint256& hashPrev)
+{
+    vector<uint256> vWorkQueue;
+    vWorkQueue.push_back(hashPrev);
+    for (unsigned int i = 0; i < vWorkQueue.size(); i++)
+    {
+        uint256 hash = vWorkQueue[i];
+        for (auto mi = mapOrphanBlocksByPrev.lower_bound(hash);
+             mi != mapOrphanBlocksByPrev.upper_bound(hash);
+             ++mi)
+        {
+            CBlock* pblockOrphan = mi->second;
+            uint256 orphanHash = pblockOrphan->GetHash();
+            if (pblockOrphan->AcceptBlock())
+            {
+                printf("ProcessOrphansFor(): accepted orphan %s after snapshot load\n",
+                       orphanHash.ToString().substr(0, 20).c_str());
+                vWorkQueue.push_back(orphanHash);
+                g_syncManager.BlockAccepted(orphanHash);
+            }
+            mapOrphanBlocks.erase(orphanHash);
+            setStakeSeenOrphan.erase(pblockOrphan->GetProofOfStake());
+        }
+        mapOrphanBlocksByPrev.erase(hash);
+    }
+}
+
 static bool UpdateAddressIndexSyncState(CTxDBBase& txdb, const CBlockIndex* pindexNew)
 {
     if (!fAddressIndex || pindexNew == nullptr)
@@ -3619,7 +3653,12 @@ bool ProcessBlock(CNode* pfrom, CBlock* pblock)
         // DNS3 stalling at snapshot height 2,214,547 because every canonical post-snapshot
         // block was being rejected as "too little proof-of-stake". This restores the
         // correct comparison and keeps the soft Misbehaving(5) score from cbb189a.
-        if (bnRequired != 0 && bnNewBlock > bnRequired)
+        // -noantispam: operator escape hatch. During recovery syncs the node's
+        // dynamic checkpoint map can anchor to a RECENT timestamp, collapsing
+        // deltaTime and making this check reject the real chain (2026-09-20
+        // DNS2 incident: honest DNS3 peer accumulated Misbehaving(100) from
+        // canonical blocks). Flag skips the check entirely.
+        if (bnRequired != 0 && bnNewBlock > bnRequired && !GetBoolArg("-noantispam", false))
         {
             // Anti-spam is a soft scoring signal, NOT a hard ban trigger. A single
             // violation should log + score modestly, not 24-hour-ban honest peers

@@ -75,6 +75,11 @@ namespace Checkpoints
                 // header blockhash. Highest pin: GetTotalBlocksEstimate()
                 // returns 2,201,018.
                 { 2201018, uint256("0x2a1894007595acaa5d303554253b3c328ebc870f248ffebf83e09a4c8156a78f")}, // canonical tip (rebase snapshot anchor)
+                // Canonical snapshot rebase (2026-09-20): dumped live from the
+                // fully-synced DNS2 via dumputxoset with the money-supply
+                // completeness gate active (17,748 UTXOs sum exactly to the
+                // tip's money supply). Tip verified via getblockhash.
+                { 2203924, uint256("0xa838e60da0e5259ff87380d961b9bb5ca8d0d875775f5c54a95425b69e753a14")}, // canonical tip (snapshot anchor)
             };
 
     // Published UTXO snapshot file SHA256, keyed by snapshot height.
@@ -102,7 +107,17 @@ namespace Checkpoints
         // bootstrap.cryptographic-triangles.org/utxo-snapshot.bin with
         // manifest v3.0. Load-verified end-to-end on DNS2 (all 2,201,019
         // headers + 17,720 UTXOs + txindex rebuild).
-        { 2201018, uint256("0xed3fe84ee2388a7083873462af298bd4ba345ceb84e5ac65e3d2906419c0efab")}, // canonical (only entry)
+        // Canonical rebase snapshot (2026-09-06, ed3fe84e...) was superseded
+        // 2026-09-20 by the 2203924 rebase below; the old file remains in git
+        // history. Do NOT re-add retired entries; full history is in git, not
+        // in the live trust-anchor map.
+        // Canonical snapshot (2026-09-20): dumped live from the fully-synced
+        // DNS2 (v6.2.6.7-g51c307d, rocksdb10 build) via dumputxoset with the
+        // money-supply completeness gate active — 17,748 UTXOs sum exactly to
+        // the tip money supply 222,547,813,902. Full-file SHA256 measured
+        // post-write; tip blockhash RPC-verified. Deployed at
+        // /root/.triangles/utxo-snapshot.bin on DNS2 (NODE_SNAPSHOT serving).
+        { 2203924, uint256("0x677981dbdb47c5ce46cc2cc9c8c424a77533ca9a8597b6bb1ea2d7b4a0d908b9")}, // canonical (only entry)
     };
 
     static std::map<int, uint256> mapSnapshotHashesTestnet = {

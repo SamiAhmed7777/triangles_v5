@@ -11,6 +11,7 @@
 #include "addressindex.h"
 
 #include <variant>
+#include <sstream>
 
 // defined in main.cpp
 extern bool fAddressIndex;
@@ -71,14 +72,28 @@ bool DumpSnapshot(const fs::path& destPath,
     auto txdbHolder = MakeChainDB("r");
     CTxDBBase& txdbRead = *txdbHolder;
 
-    // Count UTXOs first
+    // Count UTXOs first. SumUtxoValues returns the SUM of all UTXO values —
+    // cross-check it against the tip's money supply. This is the definitive
+    // completeness gate: a snapshot whose UTXO set doesn't sum to the chain's
+    // money supply is lossy by definition (spent/partial entries), and serving
+    // it to peers would bootstrap them into a broken state.
     int nUtxoCount = 0;
-    txdbRead.SumUtxoValues(nUtxoCount);
+    int64_t nUtxoSum = txdbRead.SumUtxoValues(nUtxoCount);
 
     if (nUtxoCount == 0) {
         strError = "No UTXOs found in database";
         return false;
     }
+    if (pindexBest->nMoneySupply != 0 && nUtxoSum != pindexBest->nMoneySupply) {
+        std::ostringstream ossErr;
+        ossErr << "UTXO set incomplete: summed " << nUtxoSum
+               << " vs money supply " << pindexBest->nMoneySupply
+               << " (" << nUtxoCount << " UTXOs) — refusing to dump a lossy snapshot";
+        strError = ossErr.str();
+        return false;
+    }
+    printf("UtxoSnapshot: supply check OK (%d UTXOs sum to %s == money supply)\n",
+           nUtxoCount, FormatMoney(nUtxoSum).c_str());
 
     printf("UtxoSnapshot: dumping %d headers + %d UTXOs at height %d\n",
            (int)vHeaders.size(), nUtxoCount, nBestHeight);
@@ -510,6 +525,7 @@ bool LoadSnapshot(const fs::path& snapshotPath,
     // Read and write UTXOs
     if (success) {
         printf("UtxoSnapshot: loading %d UTXOs...\n", numUtxos);
+        int64_t nLoadedUtxoSum = 0; // completeness check vs header moneySupply
 
         for (unsigned int i = 0; i < numUtxos; i++) {
             unsigned int recordSize;
@@ -537,9 +553,10 @@ bool LoadSnapshot(const fs::path& snapshotPath,
             ssRecord >> txhash;
             ssRecord >> nIndex;
             ssRecord >> entry;
+            nLoadedUtxoSum += entry.nValue;
 
             if (!txdb.WriteUtxo(txhash, nIndex, entry)) {
-                success = false;
+                 success = false;
                 strError = "WriteUtxo failed at index " + std::to_string(i);
                 break;
             }
@@ -572,6 +589,22 @@ bool LoadSnapshot(const fs::path& snapshotPath,
 
         if (success && !flushBatch())
             success = false;
+
+        // Completeness gate: the UTXO set we just loaded must sum exactly to
+        // the money supply recorded in the snapshot header. A mismatch means
+        // the snapshot file itself is lossy/corrupt — the resulting node would
+        // reject real blocks for missing outputs. Fail closed and wipe.
+        if (success && moneySupply != 0 && nLoadedUtxoSum != moneySupply) {
+            std::ostringstream ossSumErr;
+            ossSumErr << "snapshot UTXO sum " << nLoadedUtxoSum
+                      << " != header moneySupply " << moneySupply
+                      << " — lossy or corrupt snapshot";
+            strError = ossSumErr.str();
+            success = false;
+        } else if (success) {
+            printf("UtxoSnapshot: UTXO sum check OK (%s == header moneySupply)\n",
+                   FormatMoney(nLoadedUtxoSum).c_str());
+        }
     }
 
     // v3: After UTXOs (before the embedded blocks), read the setStakeSeen

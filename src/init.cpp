@@ -423,6 +423,18 @@ void Shutdown(void* parg)
         }
 
 //        MakeChainDB()->Close();
+        // Persist the wallet's best-block marker at shutdown. During IBD the
+        // per-block marker write is intentionally skipped (restored-wallet
+        // detection), but that means a node that synced (or restarted) inside
+        // IBD re-ran a full wallet rescan on EVERY boot. Writing the locator
+        // once here makes the next startup resume from the shutdown tip. If
+        // the marker references a block no longer in the best chain (reorg),
+        // the locator walk at load naturally falls back to a partial rescan.
+        if (pwalletMain && pindexBest != nullptr)
+        {
+            printf("Shutdown: persisting wallet best-block marker at height %d\n", pindexBest->nHeight);
+            pwalletMain->SetBestChain(CBlockLocator(pindexBest));
+        }
         bitdb.Flush(false);
         bitdb.Flush(true);
         std::error_code pidFileError;
@@ -1458,6 +1470,18 @@ bool AppInit2()
     else if (!LoadBlockIndex())
     {
         return InitError(_("Error loading blkindex.dat"));
+    }
+
+    // Snapshot-load orphan promotion: a UTXO-snapshot bootstrap installs the
+    // tip without ProcessBlock, so orphan promotion inside ProcessBlock never
+    // fires for the tip's children. Any orphan blocks received (race between
+    // P2P fetch and load completion) would leave the node stalled at the
+    // snapshot height. Promote them now that the chain is fully initialized.
+    if (fLoadedFromSnapshot && pindexBest != nullptr)
+    {
+        printf("Init: promoting orphans connecting at snapshot tip %s (height %d)\n",
+               hashBestChain.ToString().substr(0, 20).c_str(), nBestHeight);
+        ProcessOrphansFor(hashBestChain);
     }
 
     // pindexLastHardenedCheckpoint is initialized from the hardened checkpoint
