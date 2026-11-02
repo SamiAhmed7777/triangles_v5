@@ -47,8 +47,9 @@ BOOST_AUTO_TEST_CASE(total_blocks_estimate_tracks_latest_hardened_checkpoint)
 {
     // After operator rollback to 2,172,037, GetTotalBlocksEstimate() returned
     // 2,172,037. Since the rebase snapshot anchor (2026-09-06), the highest
-    // compiled checkpoint is 2,201,018.
-    BOOST_CHECK_EQUAL(Checkpoints::GetTotalBlocksEstimate(), 2201018);
+    // compiled checkpoint is 2,201,018; since 2026-11-02 the canonical
+    // snapshot anchor is 2,203,924.
+    BOOST_CHECK_EQUAL(Checkpoints::GetTotalBlocksEstimate(), 2203924);
 }
 
 BOOST_AUTO_TEST_CASE(best_snapshot_is_canonical_rebase_snapshot)
@@ -58,20 +59,26 @@ BOOST_AUTO_TEST_CASE(best_snapshot_is_canonical_rebase_snapshot)
     // pair from mapSnapshotHashes. Lock both to the canonical rebase snapshot
     // (2026-09-06) so a retired entry can never be re-selected and a stale or
     // replayed bootstrap manifest cannot satisfy the gate with an old file.
-    BOOST_CHECK_EQUAL(Checkpoints::GetBestSnapshotHeight(), 2201018);
+    BOOST_CHECK_EQUAL(Checkpoints::GetBestSnapshotHeight(), 2203924);
     uint256 fileHash;
-    BOOST_CHECK(Checkpoints::GetSnapshotHash(2201018, fileHash));
+    BOOST_CHECK(Checkpoints::GetSnapshotHash(2203924, fileHash));
     BOOST_CHECK_EQUAL(fileHash.GetHex(),
-                      "ed3fe84ee2388a7083873462af298bd4ba345ceb84e5ac65e3d2906419c0efab");
+                      "677981dbdb47c5ce46cc2cc9c8c424a77533ca9a8597b6bb1ea2d7b4a0d908b9");
     // The retired snapshots must NOT be selectable: the 2172037 rollback-era
-    // snapshot (removed 2026-09-06) and the 2200899 Sep-1 dump (writer/reader
-    // serialization mismatch — unloadable on deployed binaries).
+    // snapshot (removed 2026-09-06), the 2200899 Sep-1 dump (writer/reader
+    // serialization mismatch — unloadable on deployed binaries), and the
+    // 2201018 rebase snapshot (superseded 2026-11-02 by the 2203924 anchor).
     BOOST_CHECK(!Checkpoints::GetSnapshotHash(2172037, fileHash));
     BOOST_CHECK(!Checkpoints::GetSnapshotHash(2200899, fileHash));
+    BOOST_CHECK(!Checkpoints::GetSnapshotHash(2201018, fileHash));
     // Cross-map invariant: the best snapshot height must sit on a hardened
     // checkpoint whose block hash matches the published snapshot's tip. This
     // prevents future snapshot/checkpoint drift — the two maps are written
     // together, and DownloadUtxoSnapshot requires BOTH gates to pass.
+    BOOST_CHECK(Checkpoints::CheckHardened(
+        2203924, uint256("0xa838e60da0e5259ff87380d961b9bb5ca8d0d875775f5c54a95425b69e753a14")));
+    // The 2201018 checkpoint remains valid as a cumulative history pin even
+    // though its snapshot entry was superseded.
     BOOST_CHECK(Checkpoints::CheckHardened(
         2201018, uint256("0x2a1894007595acaa5d303554253b3c328ebc870f248ffebf83e09a4c8156a78f")));
 }
