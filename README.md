@@ -47,7 +47,7 @@ Triangles is a privacy-focused cryptocurrency featuring Proof-of-Stake consensus
 
 ## Network Status
 
-The Triangles network operates exclusively over Tor for privacy:
+The Triangles network operates over **Tor and I2P** for privacy (tri7d supports both natively; this legacy client is Tor-based):
 
 **Tor v3 Seeds:**
 - `jbpfhe7zw3qm67wy3j2ayysp3mnrjobopthnko3b3sgahqtecblwqmid.onion:24112`
@@ -55,6 +55,9 @@ The Triangles network operates exclusively over Tor for privacy:
 - `el5sirhhleecuctpeeprelzubpqmoqivvra3rzlwbjttinxa4fq3wnid.onion:24112`
 - `sj5dhybnlp3v4y5niyc5unrnd6s43lyx5ibup7rolyosjbi2u2hsbvyd.onion:24112`
 - `i3kr5meha7se4ns3wss3h7v46m6uksfzv4wrohdqxpj6n35wyo2bvlid.onion:24112`
+
+**I2P endpoint (tri7d, live):**
+- `ztj5lcg4tgcn7lh7wlrgvmfhf42itoetwgh42doogu7w3gdhxtbq.b32.i2p:24113`
 
 **HTTP Seed List:**
 - `seeds.cryptographic-triangles.org/seeds.txt` - Dynamically updated list of active onion peers
@@ -243,7 +246,7 @@ Messages are encrypted end-to-end using AES and distributed through the peer net
 
 ### Tor Support
 
-Triangles is designed as a Tor-only network. Install the Tor daemon and configure your proxy:
+Triangles is a privacy network: **Tor for the legacy client, Tor + I2P for tri7d.** Install the Tor daemon and configure your proxy:
 ```
 # triangles.conf
 proxy=127.0.0.1:9050
@@ -335,3 +338,28 @@ Distributed under the MIT/X11 software license. See `COPYING` for details.
 
 - Website: [cryptographic-triangles.org](https://cryptographic-triangles.org)
 - Explorer: [blocks.cryptographic-triangles.org](https://blocks.cryptographic-triangles.org)
+
+### I2P Support (tri7d)
+
+tri7d dials `.b32.i2p` peers through the i2p SOCKS proxy and can serve an
+inbound server tunnel:
+
+```
+# triangles.conf (tri7d)
+i2psocks=127.0.0.1:4447
+# add i2p targets to the peer list, e.g. host.b32.i2p:24113
+```
+
+Server tunnel via i2pd `tunnels.conf`:
+```
+[tri7d-p2p]
+type = server
+host = 127.0.0.1
+port = 24113
+keys = tri7d-p2p.dat
+```
+
+Note the port: tri7d's P2P listener is **24113** (the legacy client used
+24112); I2P tunnels point at whichever port your tri7d binds. i2pd 2.56+
+is recommended (2.49 crash-loops on a corrupted netDb — clear the netDb
+directory if you see repeated ABRT/SEGV).
