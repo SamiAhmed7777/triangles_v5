@@ -1,3 +1,26 @@
+# ⚠️ TRI7 ERA — MAINTENANCE MODE
+
+> **The actively developed Triangles client is now [tri7](https://github.com/SamiAhmed7777/tri7)** —
+> a modern Rust full-node client + GUI wallet that replays this chain byte-exactly
+> (bit-exact legacy consensus), with native JSON-RPC, P2P over clearnet/Tor/I2P,
+> live staking, encrypted smsg messaging, and a rebuilt GUI wallet
+> carrying the original Triangles identity.
+>
+> - **New node deployments → use tri7d** (10 MB RAM vs ~1.5 GB; Docker image: [tridock](https://github.com/SamiAhmed7777/tridock), Raspberry Pi: [tri-pi](https://github.com/SamiAhmed7777/tri-pi))
+> - **Networks: Tor AND I2P** — tri7d dials .onion via tor SOCKS and .b32.i2p via i2p SOCKS
+>   (127.0.0.1:4447); a live I2P server tunnel already serves DNS2's P2P at
+>   `ztj5lcg4tgcn7lh7wlrgvmfhf42itoetwgh42doogu7w3gdhxtbq.b32.i2p:24113`. The legacy
+>   client's I2P transport is carried over completely.
+> - **Desktop wallets → tri7 GUI** (Windows/macOS/Linux, CI-built)
+> - **This repository** (the original C++ client, v6.2.6.7 lineage) is in maintenance mode:
+>   consensus-critical fixes only. Its test suite is green and its release pipeline
+>   (Build All Platforms / Distribute / TRI-PI / TRIdock) still functions, but new
+>   features land in tri7.
+>
+> Canonical chain state as of the TRI7 cutover: checkpoint 2203924 (`a838e60d…`),
+> snapshot `677981db…`. The tri7 follower has been producing blocks since 2026-11-02.
+
+---
 # Cryptographic Triangles (TRI)
 
 Triangles is a privacy-focused cryptocurrency featuring Proof-of-Stake consensus, Tor v3 onion routing, and built-in encrypted messaging. Originally launched in July 2014, the chain was revived in March 2026 after being frozen since December 2022.
